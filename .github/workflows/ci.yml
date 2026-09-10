@@ -29,6 +29,11 @@ jobs:
           pip install pillow playwright
           playwright install --with-deps chromium
 
+      - name: Generate runtime-proof fixtures
+        run: |
+          python3 core/make_runtime_fixture.py
+          python3 core/make_artifact_001.py --draft || python3 core/make_artifact_001.py
+
       - name: Run Full Test Suite
         run: |
           python3 -m unittest discover -s tests

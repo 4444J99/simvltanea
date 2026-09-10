@@ -48,6 +48,78 @@ function frameProbe(node) {
     if (node.media.isConnected) frameProbe(node);
   });
 }
+function applySlice(node) {
+  if (!node.span || !node.span.slice_rect) {
+    Object.assign(node.media.style, {width:'100%', height:'100%', left:'0', top:'0', marginLeft:'0', marginTop:'0', position:'', transform:''});
+    return;
+  }
+  const [sx, sy, sw, sh] = node.span.slice_rect.map(number);
+  // Deterministic source crop: show only slice region stretched to fill placement via overflow:hidden
+  // Loop box is overflow:hidden; media is scaled 1/w,1/h and offset -x/w, -y/h
+  Object.assign(node.media.style, {
+    position:'absolute', left:'0', top:'0',
+    width:`${100/sw}%`, height:`${100/sh}%`,
+    marginLeft:`${-100*sx/sw}%`, marginTop:`${-100*sy/sh}%`,
+    objectFit:'fill'
+  });
+}
+function renderSeams() {
+  // Clear old seam overlays
+  [...stage.querySelectorAll('.seam')].forEach(el=>el.remove());
+  const seam = runtime.plan && runtime.plan.seam;
+  if (!seam || !seam.enabled) return;
+  const {width, height} = stage.getBoundingClientRect();
+  if (width<=0||height<=0) return;
+  const seamW = Math.max(4, Math.round(number(seam.width) * width));
+  const seamH = Math.max(4, Math.round(number(seam.width) * height));
+  const sigma = seam.sigma ? number(seam.sigma) * Math.min(width,height) : 6;
+  const layout = runtime.plan.layout_keyframes[runtime.layoutIndex].layouts[runtime.orientation];
+  if (!layout) return;
+  const cells = layout.cells.map(c=>({loop:c.loop, rect:c.rect.map(number)}));
+  for (let i=0;i<cells.length;i++) for(let j=i+1;j<cells.length;j++){
+    const a=cells[i], b=cells[j];
+    const [ax,ay,aw,ah]=a.rect, [bx,by,bw,bh]=b.rect;
+    const axpx=ax*width, aypx=ay*height, awpx=aw*width, ahpx=ah*height;
+    const bxpx=bx*width, bypx=by*height, bwpx=bw*width, bhpx=bh*height;
+    const vertOverlap = Math.min(aypx+ahpx, bypx+bhpx) - Math.max(aypx, bypx);
+    const horizOverlap = Math.min(axpx+awpx, bxpx+bwpx) - Math.max(axpx, bxpx);
+    let el=null;
+    if (vertOverlap>0 && Math.abs((axpx+awpx)-bxpx)<=seamW*2) {
+      const x=(axpx+awpx+bxpx)/2;
+      el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${x-seamW/2}px`, top:`${Math.max(aypx,bypx)}px`, width:`${seamW}px`, height:`${vertOverlap}px`, position:'absolute', background:'rgba(0,0,0,0)', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, WebkitBackdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter: seam.mode==='morph'?`blur(${Math.max(2,sigma/3)}px) contrast(1.05)`:`blur(${Math.max(2,sigma/2)}px)`, pointerEvents:'none', zIndex:'10', mixBlendMode: seam.mode==='morph'?'screen':'normal', opacity: seam.mode==='feather'?'0.95':'0.85'});
+    } else if (vertOverlap>0 && Math.abs((bxpx+bwpx)-axpx)<=seamW*2) {
+      const x=(bxpx+bwpx+axpx)/2;
+      el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${x-seamW/2}px`, top:`${Math.max(aypx,bypx)}px`, width:`${seamW}px`, height:`${vertOverlap}px`, position:'absolute', background:'rgba(0,0,0,0)', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, WebkitBackdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter:`blur(${Math.max(2,sigma/2)}px)`, pointerEvents:'none', zIndex:'10'});
+    } else if (horizOverlap>0 && Math.abs((aypx+ahpx)-bypx)<=seamH*2) {
+      const y=(aypx+ahpx+bypx)/2;
+      el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${Math.max(axpx,bxpx)}px`, top:`${y-seamH/2}px`, width:`${horizOverlap}px`, height:`${seamH}px`, position:'absolute', background:'rgba(0,0,0,0)', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, WebkitBackdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter:`blur(${Math.max(2,sigma/2)}px)`, pointerEvents:'none', zIndex:'10'});
+    } else if (horizOverlap>0 && Math.abs((bypx+bhpx)-aypx)<=seamH*2) {
+      const y=(bypx+bhpx+aypx)/2;
+      el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${Math.max(axpx,bxpx)}px`, top:`${y-seamH/2}px`, width:`${horizOverlap}px`, height:`${seamH}px`, position:'absolute', background:'rgba(0,0,0,0)', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, WebkitBackdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter:`blur(${Math.max(2,sigma/2)}px)`, pointerEvents:'none', zIndex:'10'});
+    }
+    if (el) stage.append(el);
+  }
+  // Fallback N=2 gap case
+  if (stage.querySelectorAll('.seam').length===0 && cells.length===2) {
+    const a=cells[0], b=cells[1];
+    const ax=ax=>ax*width, ay=ay=>ay*height; // dummy to avoid lint
+    if (Math.abs(a.rect[0]-b.rect[0])<0.01 && a.rect[1]!==b.rect[1]) {
+      const y=(a.rect[1]+a.rect[3]+b.rect[1])/2*height;
+      const el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${Math.max(a.rect[0],b.rect[0])*width}px`, top:`${y-seamH/2}px`, width:`${Math.min(a.rect[2],b.rect[2])*width}px`, height:`${seamH}px`, position:'absolute', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter:`blur(${Math.max(2,sigma/2)}px)`, zIndex:'10', pointerEvents:'none'});
+      stage.append(el);
+    } else if (Math.abs(a.rect[1]-b.rect[1])<0.01 && a.rect[0]!==b.rect[0]) {
+      const x=(a.rect[0]+a.rect[2]+b.rect[0])/2*width;
+      const el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${x-seamW/2}px`, top:`${a.rect[1]*height}px`, width:`${seamW}px`, height:`${a.rect[3]*height}px`, position:'absolute', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter:`blur(${Math.max(2,sigma/2)}px)`, zIndex:'10', pointerEvents:'none'});
+      stage.append(el);
+    }
+  }
+}
 function applyLayout() {
   if (!runtime.plan || runtime.nodes.size !== runtime.plan.tracks.length) return;
   const {width, height} = stage.getBoundingClientRect();
@@ -59,10 +131,16 @@ function applyLayout() {
     const node = runtime.nodes.get(cell.loop);
     const [x,y,w,h] = cell.rect.map(number);
     Object.assign(node.box.style, {left:`${x*100}%`, top:`${y*100}%`,
-      width:`${w*100}%`, height:`${h*100}%`, zIndex:String(z)});
-    node.media.style.objectFit = cell.fit;
-    node.media.style.objectPosition = cell.focal.map(v => `${number(v)*100}%`).join(' ');
+      width:`${w*100}%`, height:`${h*100}%`, zIndex:String(z), overflow:'hidden'});
+    // Default focal/cover; slice overrides via applySlice per span
+    if (!node.span || !node.span.slice_rect) {
+      node.media.style.objectFit = cell.fit;
+      node.media.style.objectPosition = cell.focal.map(v => `${number(v)*100}%`).join(' ');
+    }
   });
+  // Apply per-loop slice if active
+  for (const node of runtime.nodes.values()) applySlice(node);
+  renderSeams();
   record('layout', null, {orientation, width, height});
 }
 new ResizeObserver(applyLayout).observe(stage);
@@ -87,7 +165,7 @@ async function activate(node, span, frame, initial = false) {
     }
   }
   const sourceChanged = node.source !== span.source || kindChange;
-  node.span = span; node.source = span.source;
+  node.span = span; node.source = span.source; node.slice_rect = span.slice_rect;
   if (sourceChanged) {
     record('source', node.id, {source: span.source});
     if (span.kind === 'video') await waitFor(node.media, 'loadeddata', () => { node.media.src = source.url; });

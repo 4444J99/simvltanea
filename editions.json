@@ -21,7 +21,8 @@
     "simultaneous_field": {
       "role": "Configurable simultaneous multi-stream field with independent local rational clocks and paired portrait/landscape layouts.",
       "members": [
-        "simvltanea-inaugural"
+        "simvltanea-inaugural",
+        "simvltanea-slice"
       ]
     }
   },
@@ -69,6 +70,64 @@
           "width": 1080,
           "height": 1920,
           "fps": 24
+        }
+      }
+    },
+    {
+      "name": "simvltanea-slice",
+      "slug": "simvltanea-slice",
+      "status": "video-ready",
+      "work_title": "SIMVLTANEA Seamed Slice Field",
+      "family": "simultaneous_field",
+      "note": "Minimum-2 slice field: each source never reveals its full frame — every panel shows a deterministic random crop of a larger video; opposing videos' connecting sides blur/merge/morph via seam.",
+      "composition": {
+        "work_title": "SIMVLTANEA Seamed Slice Field",
+        "family": "simultaneous_field",
+        "arrangement_model_role": "Each N=2..6 panel crops a larger source via deterministic sha256-counter slice (width 1/2, height 2/3) per selection period; full-frame reveal is forbidden.",
+        "panel_arrangement_role": "Panels are arranged via authored N=2..6 pairs with a blur/feather/morph seam bridging connecting sides — every added slice repeats the same slice+seam rule.",
+        "language": [
+          "seamed slice",
+          "never full frame",
+          "random crop",
+          "opposing source",
+          "blur merge morph",
+          "independent loops"
+        ]
+      },
+      "source": {
+        "type": "folder",
+        "folder": "samples/inaugural",
+        "source_dir": "samples/inaugural",
+        "order": "name",
+        "motion": "forward",
+        "width": 1080,
+        "height": 1920,
+        "fps": 24,
+        "crf": 18,
+        "preset": "medium"
+      },
+      "settings": {
+        "title": "SIMVLTANEA Seamed Slice",
+        "subtitle": "Every source is a random cropped slice; seams blur/merge at the join.",
+        "audio": {
+          "mode": "none",
+          "gain": 0.0
+        },
+        "canvas": {
+          "width": 1080,
+          "height": 1920,
+          "fps": 24
+        },
+        "slice": {
+          "enabled": true,
+          "width": 0.5,
+          "height": 0.66
+        },
+        "seam": {
+          "enabled": true,
+          "width": 0.035,
+          "mode": "feather",
+          "sigma": 0.008
         }
       }
     },

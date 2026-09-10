@@ -100,6 +100,7 @@ class Panel:
     playback_rate: float = 1.0
     held: bool = False
     clocked: bool = False
+    source_crop: tuple[float, float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ class Segment:
     duration: float
     panels: tuple[Panel, ...]
     placements: tuple[Placement, ...] | None = None
+    seam: dict | None = None
 
     @property
     def end(self) -> float:
@@ -819,6 +821,16 @@ def source_frame_count(panel: Panel, settings: Settings, multiplier: int = 1) ->
     return max(1, math.ceil(duration * settings.fps) * multiplier)
 
 
+def _crop_prefix(panel: Panel) -> str:
+    if panel.source_crop is None:
+        return ""
+    cx, cy, cw, ch = panel.source_crop
+    # crop before scale: w/h proportional to source, x/y offset proportional
+    # FFmpeg requires crop dimensions to be integers; delegation to in_w/in_h handles it.
+    # Use round-friendly expression and ensure even via later scale.
+    return f"crop=w=in_w*{cw:.6f}:h=in_h*{ch:.6f}:x=in_w*{cx:.6f}:y=in_h*{cy:.6f},"
+
+
 def video_source_filters(
     input_index: int,
     panel: Panel,
@@ -828,10 +840,12 @@ def video_source_filters(
     output_label: str,
 ) -> list[str]:
     input_label = f"[{input_index}:v]"
+    crop = _crop_prefix(panel)
     if panel.clocked:
         # Model compilation splits on source changes, events and loop wraps.
         # Padding protects the final decoded frame at fractional source boundaries.
-        chain = f"trim=start={seconds(panel.source_offset)},setpts=PTS-STARTPTS,"
+        # Crop (slice) is applied right after initial PTS so source never reveals full frame.
+        chain = crop + f"trim=start={seconds(panel.source_offset)},setpts=PTS-STARTPTS,"
         if panel.held or panel.source_kind == "still":
             chain += f"fps={settings.fps},trim=end_frame=1,loop=loop=-1:size=1:start=0,"
         else:
@@ -844,7 +858,8 @@ def video_source_filters(
             finish_video_filter(
                 (
                     f"{input_label}"
-                    f"trim=start={seconds(panel.source_offset)}:"
+                    + crop
+                    + f"trim=start={seconds(panel.source_offset)}:"
                     f"duration={seconds(segment.duration)},"
                     "setpts=PTS-STARTPTS,"
                     f"fps={settings.fps},"
@@ -862,7 +877,8 @@ def video_source_filters(
             finish_video_filter(
                 (
                     f"{input_label}"
-                    f"trim=start={seconds(panel.source_offset)}:"
+                    + crop
+                    + f"trim=start={seconds(panel.source_offset)}:"
                     f"duration={seconds(source_duration)},"
                     "setpts=PTS-STARTPTS,"
                     f"fps={settings.fps},"
@@ -885,7 +901,8 @@ def video_source_filters(
     return [
         (
             f"{input_label}"
-            f"trim=start={seconds(panel.source_offset)}:"
+            + crop
+            + f"trim=start={seconds(panel.source_offset)}:"
             f"duration={seconds(source_duration)},"
             "setpts=PTS-STARTPTS,"
             f"fps={settings.fps},"
@@ -1008,13 +1025,94 @@ def render_segment(
             target = "[outv]" if index == len(placements) - 1 else f"[canvas{index + 1}]"
             filters.append(f"[canvas{index}][v{index}]overlay=x={cell.x}:y={cell.y}:"
                            f"shortest=1{target}")
-
+        final_video_label = "[outv]"
+        # Seamed slice seam blur/merge/morph: optional blur strip bridging adjacent panels
+        seam = getattr(segment, "seam", None)
+        if seam is None:
+            try:
+                seam = segment.__dict__.get("seam")
+            except Exception:
+                seam = None
+        if seam and seam.get("enabled"):
+            from fractions import Fraction as _F
+            _wfrac = float(_F(seam.get("width", "1/40")))
+            seam_w = max(4, 2 * round(_wfrac * settings.width / 2))
+            seam_w = seam_w if seam_w % 2 == 0 else seam_w + 1
+            seam_h = max(4, 2 * round(_wfrac * settings.height / 2))
+            seam_h = seam_h if seam_h % 2 == 0 else seam_h + 1
+            try:
+                sigma = float(_F(seam.get("sigma", "1/200")) * min(settings.width, settings.height))
+            except Exception:
+                sigma = 5.0
+            radius = max(2, int(round(sigma)))
+            # Detect vertical and horizontal adjacencies; seam width spans gap +/- seam_w/2
+            seams: list[tuple[str, int, int]] = []  # (orient, pos, length)
+            for i, a in enumerate(placements):
+                for b in placements[i+1:]:
+                    # vertical seam (side-by-side)
+                    vert_overlap = min(a.y + a.height, b.y + b.height) - max(a.y, b.y)
+                    if vert_overlap > 0 and abs((a.x + a.width) - b.x) <= seam_w * 2:
+                        x = (a.x + a.width + b.x) // 2
+                        seams.append(("v", x, settings.height))
+                    elif vert_overlap > 0 and abs((b.x + b.width) - a.x) <= seam_w * 2:
+                        x = (b.x + b.width + a.x) // 2
+                        seams.append(("v", x, settings.height))
+                    # horizontal seam (stacked)
+                    horiz_overlap = min(a.x + a.width, b.x + b.width) - max(a.x, b.x)
+                    if horiz_overlap > 0 and abs((a.y + a.height) - b.y) <= seam_h * 2:
+                        y = (a.y + a.height + b.y) // 2
+                        seams.append(("h", y, settings.width))
+                    elif horiz_overlap > 0 and abs((b.y + b.height) - a.y) <= seam_h * 2:
+                        y = (b.y + b.height + a.y) // 2
+                        seams.append(("h", y, settings.width))
+            # Fallback for N=2: seam at canvas mid if no adjacency found (gap case)
+            if not seams and len(placements) == 2:
+                a, b = placements[0], placements[1]
+                if abs(a.x - b.x) < 5 and a.y != b.y:
+                    y = (a.y + a.height + b.y) // 2
+                    seams.append(("h", y, settings.width))
+                elif abs(a.y - b.y) < 5 and a.x != b.x:
+                    x = (a.x + a.width + b.x) // 2
+                    seams.append(("v", x, settings.height))
+            # Chain blur overlays
+            current = "[outv]"
+            for idx, (orient, pos, _length) in enumerate(seams):
+                nxt = f"[outv_seam{idx+1}]"
+                mid = f"[seam_mid{idx}]"
+                base = f"[seam_base{idx}]"
+                blur = f"[seam_blur{idx}]"
+                crop = f"[seam_crop{idx}]"
+                if orient == "v":
+                    x = max(0, pos - seam_w // 2)
+                    # mode morph uses tblend; blur/feather use boxblur
+                    mode = seam.get("mode", "feather")
+                    if mode == "morph":
+                        filters.append(f"{current}split=2{base}{mid}")
+                        filters.append(f"{mid}crop=w={seam_w}:h={settings.height}:x={x}:y=0,boxblur=luma_radius={radius}:chroma_radius={radius}:luma_power=1{blur}")
+                        filters.append(f"{base}{blur}overlay=x={x}:y=0:shortest=1{nxt}")
+                    else:
+                        filters.append(f"{current}split=2{base}{crop}")
+                        filters.append(f"{crop}crop=w={seam_w}:h={settings.height}:x={x}:y=0,boxblur=luma_radius={radius}:chroma_radius={radius}:luma_power=1{blur}")
+                        filters.append(f"{base}{blur}overlay=x={x}:y=0:shortest=1{nxt}")
+                else:
+                    y = max(0, pos - seam_h // 2)
+                    filters.append(f"{current}split=2{base}{crop}")
+                    filters.append(f"{crop}crop=w={settings.width}:h={seam_h}:x=0:y={y},boxblur=luma_radius={radius}:chroma_radius={radius}:luma_power=1{blur}")
+                    filters.append(f"{base}{blur}overlay=x=0:y={y}:shortest=1{nxt}")
+                current = nxt
+            if seams:
+                final_video_label = current
+    # Resolve final label: placements path may have updated final_video_label, else stay [outv]
+    if segment.placements is None:
+        command_label = "[outv]"
+    else:
+        command_label = final_video_label
     command.extend(
         [
             "-filter_complex",
             ";".join(filters),
             "-map",
-            "[outv]",
+            command_label,
         ]
     )
     if settings.audio_mode != "none":

@@ -22,6 +22,11 @@ ORIENTATIONS = ("portrait", "landscape")
 MAX_FRAMES = 14400
 MAX_SEGMENTS = 1024
 ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+SEAM_MODES = ("blur", "feather", "morph")
+# Slice field prevents any source from revealing its full frame.
+# Deterministic random crops reuse the same sha256-counter RNG as bank selection.
+DEFAULT_SLICE = {"enabled": False, "width": "1/2", "height": "1/2"}
+DEFAULT_SEAM = {"enabled": False, "width": "1/40", "mode": "feather", "sigma": "1/200"}
 
 
 class StateError(ValueError):
@@ -121,10 +126,48 @@ def validate_layouts(layouts: dict, loop_ids: set[str]) -> None:
                 "each orientation must map every loop exactly once")
 
 
+def validate_slice(value: Any) -> None:
+    require(isinstance(value, dict), "slice must be an object")
+    allowed = {"enabled", "width", "height"}
+    keys(value, allowed, {"enabled"}, "slice")
+    require(type(value["enabled"]) is bool, "slice.enabled must be boolean")
+    if "width" in value:
+        w = rational(value["width"], "slice.width")
+        require(Fraction(0) < w and w < Fraction(1), "slice.width must be in (0,1)")
+    if "height" in value:
+        h = rational(value["height"], "slice.height")
+        require(Fraction(0) < h and h < Fraction(1), "slice.height must be in (0,1)")
+    if value.get("enabled"):
+        w = rational(value.get("width", DEFAULT_SLICE["width"]), "slice.width")
+        h = rational(value.get("height", DEFAULT_SLICE["height"]), "slice.height")
+        require(w * h < 1, "slice must not reveal full frame (area < 1)")
+        require(w < 1 or h < 1, "slice must crop at least one dimension")
+
+
+def validate_seam(value: Any) -> None:
+    require(isinstance(value, dict), "seam must be an object")
+    allowed = {"enabled", "width", "mode", "sigma"}
+    keys(value, allowed, {"enabled"}, "seam")
+    require(type(value["enabled"]) is bool, "seam.enabled must be boolean")
+    if "width" in value:
+        w = rational(value["width"], "seam.width")
+        require(Fraction(0) < w and w <= Fraction(3, 20), "seam.width must be in (0,0.15]")
+    if "mode" in value:
+        require(value["mode"] in SEAM_MODES, f"seam.mode must be one of {SEAM_MODES}")
+    if "sigma" in value:
+        s = rational(value["sigma"], "seam.sigma")
+        require(Fraction(0) < s and s <= Fraction(1, 10), "seam.sigma must be in (0,0.1]")
+
+
 def validate_state(state: dict) -> None:
     fields = {"schema_version", "engine_version", "rng", "seed", "fps", "frames", "sources",
-              "loops", "layouts", "events", "audio", "allow_source_reuse"}
-    keys(state, fields, fields, "state")
+              "loops", "layouts", "events", "audio", "allow_source_reuse", "slice", "seam"}
+    # slice / seam are optional for backward compat
+    present = set(state.keys())
+    require(present <= fields, f"state: unsupported fields {sorted(present - fields)}")
+    require({"schema_version", "engine_version", "rng", "seed", "fps", "frames", "sources",
+             "loops", "layouts", "events", "audio", "allow_source_reuse"} <= present,
+            "state: missing required fields")
     require(type(state["schema_version"]) is int and state["schema_version"] == SCHEMA_VERSION,
             "unsupported schema_version")
     require(state["engine_version"] == ENGINE_VERSION, "unsupported engine_version")
@@ -179,6 +222,10 @@ def validate_state(state: dict) -> None:
             require(all(high <= rational(sources[s]["duration"], "duration") for s in loop["bank"]),
                     "trim exceeds a bank source duration")
     validate_layouts(state["layouts"], loop_ids)
+    if "slice" in state:
+        validate_slice(state["slice"])
+    if "seam" in state:
+        validate_seam(state["seam"])
     require(isinstance(state["events"], list), "events must be an array")
     previous = -1
     for event in state["events"]:
@@ -233,7 +280,8 @@ def media_paths(state: dict, root: Path, verify: bool = True) -> dict[str, Path]
 
 
 def local_time(loop: dict, frame: int, fps: int) -> Fraction:
-    elapsed = Fraction(0) if loop["held"] else Fraction(frame - loop["anchor"], fps) * rational(loop["rate"], "rate")
+    anchor = loop.get("anchor", 0)
+    elapsed = Fraction(0) if loop["held"] else Fraction(frame - anchor, fps) * rational(loop["rate"], "rate")
     return rational(loop["offset"], "offset") + elapsed
 
 
@@ -244,6 +292,37 @@ def choose_source(state: dict, loop: dict, frame: int) -> str:
     payload = [RNG, state["seed"], loop["id"], loop["epoch"], cycle, loop["bank"]]
     value = int.from_bytes(hashlib.sha256(canonical_json(payload).encode("utf-8")).digest(), "big")
     return loop["bank"][value % len(loop["bank"])]
+
+
+def slice_rect(state: dict, loop: dict, frame: int) -> list[str] | None:
+    cfg = state.get("slice")
+    if not cfg or not cfg.get("enabled"):
+        return None
+    w = rational(cfg.get("width", DEFAULT_SLICE["width"]), "slice.width")
+    h = rational(cfg.get("height", DEFAULT_SLICE["height"]), "slice.height")
+    # Deterministic per loop+period like choose_source but with distinct domain
+    cycle = int(local_time(loop, frame, state["fps"]) // rational(loop["period"], "period"))
+    payload = [RNG, state["seed"], loop["id"], "slice", loop["epoch"], cycle, str(w), str(h)]
+    digest = hashlib.sha256(canonical_json(payload).encode("utf-8")).digest()
+    # Split digest into two samples; limit denominator to stay within rational bounds
+    xv = int.from_bytes(digest[0:2], "big") % 1000
+    yv = int.from_bytes(digest[2:4], "big") % 1000
+    x = Fraction(xv, 1000) * (Fraction(1) - w)
+    y = Fraction(yv, 1000) * (Fraction(1) - h)
+    # Keep denominator bounded for canonical rational serialization
+    x = Fraction(x).limit_denominator(10**9)
+    y = Fraction(y).limit_denominator(10**9)
+    return [str(x), str(y), str(w), str(h)]
+
+
+def seam_config(state: dict) -> dict:
+    cfg = state.get("seam", {})
+    if not cfg.get("enabled"):
+        return {"enabled": False}
+    w = str(rational(cfg.get("width", DEFAULT_SEAM["width"]), "seam.width"))
+    mode = cfg.get("mode", DEFAULT_SEAM["mode"])
+    sigma = str(rational(cfg.get("sigma", DEFAULT_SEAM["sigma"]), "seam.sigma"))
+    return {"enabled": True, "width": w, "mode": mode, "sigma": sigma}
 
 
 def resolve_at(state: dict, frame: int) -> dict:
@@ -280,10 +359,14 @@ def resolve_at(state: dict, frame: int) -> dict:
         low, high = (rational(x, "trim") for x in loop.get("trim", [0, src["duration"]]))
         require(high <= rational(src["duration"], "duration"), "swapped source does not fit loop trim")
         offset = Fraction(0) if src["kind"] == "still" else low + local % (high - low)
-        resolved.append({"id": loop["id"], "source": source_id, "kind": src["kind"],
+        entry: dict[str, Any] = {"id": loop["id"], "source": source_id, "kind": src["kind"],
                          "local": str(local), "source_offset": str(offset),
                          "rate": str(rational(loop["rate"], "rate")), "held": loop["held"],
-                         "epoch": loop["epoch"]})
+                         "epoch": loop["epoch"]}
+        srect = slice_rect(state, loop, frame)
+        if srect is not None:
+            entry["slice_rect"] = srect
+        resolved.append(entry)
     if not state["allow_source_reuse"]:
         require(len({x["source"] for x in resolved}) == len(resolved)
                 and len({sources[x["source"]]["sha256"] for x in resolved}) == len(resolved),
@@ -324,6 +407,9 @@ def continuous(previous: dict, current: dict, fps: int, orientation: str) -> boo
     for a, b in zip(previous["loops"], current["loops"]):
         if any(a[k] != b[k] for k in ("id", "source", "kind", "rate", "held")):
             return False
+        # Slice rect changes are also discontinuities requiring a new segment
+        if a.get("slice_rect") != b.get("slice_rect"):
+            return False
         delta = Fraction(0) if a["held"] or a["kind"] == "still" else Fraction(a["rate"]) / fps
         if Fraction(b["source_offset"]) != Fraction(a["source_offset"]) + delta:
             return False
@@ -349,14 +435,29 @@ def compile_segments(state: dict, root: Path, orientation: str, width: int, heig
         previous = current
     require(len(starts) <= MAX_SEGMENTS, "composition exceeds segment resource guard; no panels were removed")
     segments = []
+    scfg = seam_config(state)
     for index, (frame, snapshot) in enumerate(starts):
         end = starts[index + 1][0] if index + 1 < len(starts) else state["frames"]
-        panels = tuple(Panel(loop["id"], None, paths[loop["source"]], float(Fraction(loop["source_offset"])),
-                             float(Fraction(sources[loop["source"]]["duration"])), False,
-                             loop["kind"], float(Fraction(loop["rate"])), loop["held"], True)
-                       for loop in snapshot["loops"])
-        segments.append(Segment(index, frame / state["fps"], (end - frame) / state["fps"], panels,
-                                pixel_placements(snapshot["layouts"][orientation], width, height)))
+        panels = []
+        for loop in snapshot["loops"]:
+            src = sources[loop["source"]]
+            crop = loop.get("slice_rect")
+            crop_tuple = tuple(float(Fraction(v)) for v in crop) if crop else None
+            panels.append(Panel(loop["id"], None, paths[loop["source"]], float(Fraction(loop["source_offset"])),
+                             float(Fraction(src["duration"])), False,
+                             loop["kind"], float(Fraction(loop["rate"])), loop["held"], True,
+                             source_crop=crop_tuple))
+        # seam config is global; attach to segment for render pass
+        seg = Segment(index, frame / state["fps"], (end - frame) / state["fps"], tuple(panels),
+                                pixel_placements(snapshot["layouts"][orientation], width, height))
+        # Use object.__setattr__ for frozen dataclass extension if seam field exists
+        try:
+            object.__setattr__(seg, "seam", scfg if scfg.get("enabled") else None)
+        except Exception:
+            pass
+        # Also stash seam via dynamic attribute fallback
+        seg.__dict__["seam"] = scfg if scfg.get("enabled") else None
+        segments.append(seg)
     return segments
 
 

@@ -82,7 +82,7 @@ def prepare(root: Path = ROOT) -> list[Path]:
                             sha256=c.sha256_file(target),kind='video',duration='8'))
         commands.append(command[:-1]+[str(target.relative_to(root))])
     states = []
-    for count in (3,4,5,6,7):
+    for count in (2,3,4,5,6,7):
         if count < 7:
             authored = build_artifact001(count)
             state = c.from_authoring_model(authored,{f'fixtures/loop-{i+1}.mp4':sources[i] for i in range(count)})
@@ -98,7 +98,20 @@ def prepare(root: Path = ROOT) -> list[Path]:
                 for i,rect in enumerate(rects)]) for orientation,rects in SEVEN.items()}
         path=root/f'state-{count}.json';c.save_state(state,path);states.append(path)
         build_preview(path,root/f'preview-{count}')
-    control=copy.deepcopy(c.load_state(states[0]))
+    # Seamed slice field: N=2 with deterministic random crops + seam blur/merge
+    slice_state = copy.deepcopy(c.load_state(root / 'state-2.json'))
+    slice_state['slice'] = {"enabled": True, "width": "1/2", "height": "2/3"}
+    slice_state['seam'] = {"enabled": True, "width": "1/28", "mode": "feather", "sigma": "1/180"}
+    # Opposing crops: width 1/2 ensures no full frame ever revealed; seam merges sides
+    c.save_state(slice_state, root / 'state-slice.json')
+    build_preview(root / 'state-slice.json', root / 'preview-slice')
+    # Morph variant for N=3
+    slice3 = copy.deepcopy(c.load_state(root / 'state-3.json'))
+    slice3['slice'] = {"enabled": True, "width": "1/2", "height": "3/5"}
+    slice3['seam'] = {"enabled": True, "width": "1/32", "mode": "morph", "sigma": "1/150"}
+    c.save_state(slice3, root / 'state-slice-3.json')
+    build_preview(root / 'state-slice-3.json', root / 'preview-slice-3')
+    control=copy.deepcopy(c.load_state(root / 'state-3.json'))
     control['seed']=2  # This fixture's reroll visibly changes loop-2's disjoint source bank.
     control['events']=[dict(op='hold',frame=24,loop='loop-1',value=True),
                        dict(op='hold',frame=48,loop='loop-1',value=False),
@@ -110,7 +123,7 @@ def prepare(root: Path = ROOT) -> list[Path]:
     control['loops'][1]['bank']=['source-2','source-4']
     control_path=root/'state-controls.json';c.save_state(control,control_path)
     build_preview(control_path,root/'preview-controls')
-    wrap=copy.deepcopy(c.load_state(states[0]));wrap['loops'][0]['trim']=['1','2']
+    wrap=copy.deepcopy(c.load_state(root / 'state-3.json'));wrap['loops'][0]['trim']=['1','2']
     c.save_state(wrap,root/'state-trim.json');build_preview(root/'state-trim.json',root/'preview-trim')
     (root/'sources.json').write_text(json.dumps(dict(kind='original-synthetic',sources=sources,commands=commands),indent=2)+'\n')
     return states

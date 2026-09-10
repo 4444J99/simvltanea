@@ -42,6 +42,8 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
 def _continues(a: dict, b: dict, fps: int) -> bool:
     if any(a[k] != b[k] for k in ('id', 'source', 'kind', 'rate', 'held')):
         return False
+    if a.get('slice_rect') != b.get('slice_rect'):
+        return False
     delta = Fraction(0) if a['held'] or a['kind'] == 'still' else Fraction(a['rate']) / fps
     return Fraction(b['source_offset']) == Fraction(a['source_offset']) + delta
 
@@ -76,12 +78,25 @@ def compile_plan(state: dict) -> dict:
     sources = copy.deepcopy(state['sources'])
     for source in sources:
         source['duration'] = str(c.rational(source['duration'], 'duration'))
+    # Canonicalize slice rects
+    for spans in tracks.values():
+        for span in spans:
+            if 'slice_rect' in span and span['slice_rect'] is not None:
+                span['slice_rect'] = [str(c.rational(v, 'slice_rect')) for v in span['slice_rect']]
+    seam = copy.deepcopy(state.get('seam', {"enabled": False}))
+    if seam and seam.get('enabled'):
+        seam['width'] = str(c.rational(seam.get('width', '1/40'), 'seam.width'))
+        seam['sigma'] = str(c.rational(seam.get('sigma', '1/200'), 'seam.sigma'))
+    slice_cfg = copy.deepcopy(state.get('slice', {"enabled": False}))
+    if slice_cfg and slice_cfg.get('enabled'):
+        slice_cfg['width'] = str(c.rational(slice_cfg.get('width', '1/2'), 'slice.width'))
+        slice_cfg['height'] = str(c.rational(slice_cfg.get('height', '1/2'), 'slice.height'))
     # CSS and FFmpeg independently rasterize normalized layout values.
     return dict(plan_version=PLAN_VERSION, engine_version=c.ENGINE_VERSION,
                 state_sha256=hashlib.sha256(c.canonical_json(state).encode()).hexdigest(),
                 fps=state['fps'], frames=state['frames'], audio='none',
                 tracks=[dict(id=ident, spans=spans) for ident, spans in tracks.items()],
-                layout_keyframes=layouts, sources=sources)
+                layout_keyframes=layouts, sources=sources, seam=seam, slice=slice_cfg)
 
 
 def build_preview(state_path: Path, output: Path) -> dict:

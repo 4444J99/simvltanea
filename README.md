@@ -54,10 +54,11 @@ not a tiled repeat of one feed.
 
 ## Supported configurations
 
-Authored engineering pairs currently exist for **3, 4, 5, and 6** loops:
+Authored engineering pairs currently exist for **2, 3, 4, 5, and 6** loops:
 
 | N | Portrait | Landscape |
 | --- | --- | --- |
+| 2 | authored | authored |
 | 3 | authored | authored |
 | 4 | authored | authored |
 | 5 | authored | authored |

@@ -51,7 +51,7 @@ def prepare(root: Path) -> list[Path]:
     write_json(root/'sources.json',dict(kind='synthetic-engineering-media',sources=sources+[still_src]))
     from artifact001_layouts import build_artifact001
     paths = []
-    for count in (3,4,5,6):
+    for count in (2,3,4,5,6):
         authoring = build_artifact001(count)
         source_map = {f'fixtures/loop-{i+1}.mp4': sources[i] for i in range(count)}
         state = from_authoring_model(authoring, source_map)
@@ -60,7 +60,12 @@ def prepare(root: Path) -> list[Path]:
         save_state(state,path)
         paths.append(path)
     # A separate compatibility/control proof: still duration and all four controls.
-    state = json.loads(paths[0].read_text())
+    # Use the 3-loop state for controls (requires loop-3 for swap)
+    try:
+        ctrl_src = next(p for p in paths if p.stem == "state-3")
+    except StopIteration:
+        ctrl_src = paths[0]
+    state = json.loads(ctrl_src.read_text())
     state['sources'] = sources[:3]+[still_src]
     state['allow_source_reuse'] = True  # explicit bank overlap in this control fixture only
     state['loops'][0]['bank'] = ['still']
