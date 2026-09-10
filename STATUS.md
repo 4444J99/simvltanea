@@ -1,23 +1,28 @@
 # SIMVLTANEA — STATUS
 
-> Generated 2026-09-10 — steward wave 0–3 complete. This file tracks the living state of the trunk and lanes, not a marketing roadmap.
+> Updated 2026-09-10 23:35 UTC — closeout audit. Previous line 2026-09-10 19:22 wave 0–3.
 
 ## Green gates (must pass on `main`)
 
-| Gate | Command | Result (2026-09-10) |
-| --- | --- | --- |
-| Tests | `python3 -m pytest -q` / `python3 -m unittest discover -s tests` | **120 passed, 26 subtests passed** |
-| Lifecycle | `python3 tools/verify_local_lifecycle.py` | `local lifecycle ok` (8 untracked governance files pending, 0 leaks) |
-| Editions | `python3 tools/verify_editions.py` | `edition presets ok` — 6 editions, 16 presets, 43 cells |
-| Edition status | `python3 tools/edition_status.py` | 6 editions, all `local-only` (0 public receipts — expected on clean clone) |
-| CI | `.github/workflows/ci.yml` (`ubuntu-latest`, Python 3.12, ffmpeg, pillow, playwright chromium) | `test` job runs 120 tests + lifecycle + edition gates |
+| Gate | Command | Local (darwin, 2026-09-10) | CI (`ubuntu-latest`, `34542060051`) |
+| --- | --- | --- | --- |
+| Tests (non-browser) | `pytest tests/test_authoring_contract.py tests/test_composition_model.py tests/test_composition_render.py tests/test_review_proof.py -q` | **73 passed** | — |
+| Tests (full) | `pytest -q` / `unittest discover -s tests` | **claimed 120 passed** earlier session (116s), not rerun in closeout (browser+continuity gated) | **FAILED** 29 failures (`Media failure: loop-*` in `test_browser_runtime.BrowserTests`) |
+| Lifecycle | `python3 tools/verify_local_lifecycle.py` | `local lifecycle ok` (0 untracked, 0 leaks) | not reached (failed at test step) |
+| Edition presets | `python3 tools/verify_editions.py` | `edition presets ok` 6/16/43 | not reached |
+| Edition status | `python3 tools/edition_status.py` | 6 editions `local-only` | not reached |
+| CI | `.github/workflows/ci.yml` | local ok | **failure** — 29 browser-runtime failures |
+
+**Verdict:** trunk `main@fe54f80` is **not green** per `BRANCHES.md` (`main` always releasable, required CI passes). Local lifecycle/edition gates pass, but browser runtime breaks CI consistently (also on 3 prior `main` runs `34507476445`/`34506547318`/`34505564858` — pre-existing).
 
 ## Trunk
 
-- `main@6e122da` → steward commit `6e122da..HEAD` heals edition tooling + governance
-- Branches: `main` only (plus standing lanes defined in `BRANCHES.md`, created on demand)
+- `main@fe54f80` (local:remote 1:1, pushed 2026-09-10 19:25, `0 ahead`)
+- Parent: `6e122da` refactor: 3-tier layout
+- Push authority: granted earlier session — parity achieved `0 ahead`
+- Branches: `main` only (`git branch -a`); standing lanes defined but not materialized as refs
 - Worktrees: single primary (`git worktree list` = 1)
-- Tags: none yet
+- Tags: none
 
 ## Lanes (standing — per `BRANCHES.md`)
 
@@ -45,15 +50,17 @@
 - `tools/verify_editions.py:183` — `audio.gain` / `fade_seconds` now allow `0` (was `>0`, silent field needs `0.0`)
 - `editions.json:36` — `simvltanea-inaugural` now includes `source_dir` + `composition.panel_arrangement_role` (was missing, failed validator)
 - `.github/workflows/ci.yml:32` — added `Verify Edition Presets` + `Report Edition Status` gates after lifecycle
-- Governance: `BRANCHES.md`, `CONTRIBUTING.md`, `CODEOWNERS`, `SECURITY.md`, PR/issue templates, lane labels
+- Governance: `BRANCHES.md`, `CONTRIBUTING.md`, `CODEOWNERS`, `SECURITY.md`, PR/issue templates, lane labels (`lane/verify`, `lane/heal`, `lane/expand`, `lane/evolve` via `gh label create`)
+- Issues: #1 parked upstream closeout, #2 audio v1.1, #3 N=7, #4 lineage, #5 closed (factory hardening) — `gh issue list`
 
 ## Fixtures
 
-- `samples/inaugural/inaugural-0{1..3}.mp4` — 3× 2s synthetic 320×320 clips (gitignored via `samples/*`) — demo for `simvltanea-inaugural` folder source without leaking heavy media. Regenerable.
-- `runtime-proof/` experimental 7-study stays unchanged (on-demand via `core/make_runtime_fixture.py`)
+- `samples/inaugural/inaugural-0{1..3}.mp4` — 3× 2s synthetic 320×320 clips (`git check-ignore` confirms `.gitignore:1:samples/*`) — demo for `simvltanea-inaugural` folder source without leaking heavy media. Regenerable.
+- `runtime-proof/` + `artifact-001/media` + `work/` empty — regenerable via `core/make_artifact_001.py` / `core/make_runtime_fixture.py`, intentionally not committed
 
-## Next waves
+## Next waves / outstanding
 
-- **Wave 3 (done in this session partially)**: edition fixture ready, CI now checks browser + edition gates
-- **Wave 4 (evolve, deferred)**: Audio v1.1 implementation requires `work/evolve/audio-v1.1` spike only after lane creation + schema v1.1 issue; N=7 only with artist-approved geometry
-- **Risk if abandoned**: none imminent — trunk is green and mergeable; parked issues keep intentions without inventing scope
+- **Wave 3 residual**: full `build_edition.py` 1080p portrait/landscape demo not yet run (only minimal `samples/inaugural` fixture)
+- **Wave 4 (evolve, deferred)**: Audio v1.1 (#2) and N=7 (#3) parked — no spike until lane created
+- **CI debt**: 29 browser-runtime continuity failures must be healed to reach `BRANCHES.md` green (see Blockers)
+- **Lanes**: standing branches defined but not pushed (`lane/verify`, `lane/heal`, `lane/expand`, `lane/evolve` — `git branch -a` shows only `main`)
