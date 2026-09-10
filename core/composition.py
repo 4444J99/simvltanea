@@ -425,7 +425,8 @@ def render_from_args(args: Any) -> int:
         defaults.width, defaults.height = 1080, 1920
         settings = engine.build_settings(defaults)
         output = args.output.resolve() if args.output else state_path.parent / f"{state_path.stem}-{args.orientation}.mp4"
-        require(engine.path_inside(output, engine.SCRIPT_DIR), "output must remain inside the incubator")
+        root_dir = getattr(engine, "REPO_ROOT", engine.SCRIPT_DIR)
+        require(engine.path_inside(output, root_dir), "output must remain inside the incubator")
         settings = replace(settings, width=width, height=height, fps=state["fps"], output_file=output)
         segments = compile_segments(state, state_path.parent, args.orientation, width, height)
         if args.dry_run:

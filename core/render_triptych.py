@@ -37,6 +37,7 @@ AUDIO_MODES = {"none", "panel", "mix"}
 VIDEO_DIRECTIONS = {"forward", "reverse", "pingpong"}
 TONE_MODES = {"none", "normalize", "histeq"}
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name == "core" else SCRIPT_DIR
 
 
 @dataclass(frozen=True)
@@ -218,7 +219,7 @@ def parse_args() -> argparse.Namespace:
 
 def load_manifest(path: Path | None) -> tuple[dict[str, Any], Path]:
     if path is None:
-        return {}, SCRIPT_DIR
+        return {}, REPO_ROOT
 
     manifest_path = path.resolve()
     with manifest_path.open("r", encoding="utf-8") as handle:
@@ -330,11 +331,11 @@ def build_settings(args: argparse.Namespace) -> Settings:
     if timing_mode is None:
         timing_mode = "fixed" if args.phrase is not None else "clip"
 
-    output_default = SCRIPT_DIR / "renders" / "triptych-canon.mp4"
-    work_default = SCRIPT_DIR / "work"
+    output_default = REPO_ROOT / "renders" / "triptych-canon.mp4"
+    work_default = REPO_ROOT / "work"
 
     settings = Settings(
-        input_dir=resolve_path(input_value, input_base, SCRIPT_DIR / "samples"),
+        input_dir=resolve_path(input_value, input_base, REPO_ROOT / "samples"),
         output_file=resolve_path(output_value, output_base, output_default),
         work_dir=resolve_path(work_value, work_base, work_default),
         timing_mode=str(timing_mode),
@@ -424,9 +425,9 @@ def validate_settings(settings: Settings) -> None:
         raise SystemExit("max_videos must be positive when provided.")
     if settings.max_clip_seconds is not None and float(settings.max_clip_seconds) <= 0:
         raise SystemExit("max_clip_seconds must be positive when provided.")
-    if not path_inside(settings.output_file, SCRIPT_DIR):
+    if not path_inside(settings.output_file, REPO_ROOT):
         raise SystemExit("output_file must stay inside the SIMVLTANEA repository root.")
-    if not path_inside(settings.work_dir, SCRIPT_DIR):
+    if not path_inside(settings.work_dir, REPO_ROOT):
         raise SystemExit("work_dir must stay inside the SIMVLTANEA repository root.")
 
 

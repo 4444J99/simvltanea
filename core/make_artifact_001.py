@@ -14,11 +14,13 @@ from pathlib import Path
 from composition import ENGINE_VERSION, RNG, SCHEMA_VERSION, save_state, sha256_file, from_authoring_model
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parent
 
 def write_json(path: Path, obj: object) -> None:
     path.write_text(json.dumps(obj, indent=2) + '\n', encoding='utf-8')
 
 def prepare(root: Path) -> list[Path]:
+    root = root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     for child in ('media', 'evidence', 'renders'):
         (root / child).mkdir(exist_ok=True)
@@ -31,10 +33,10 @@ def prepare(root: Path) -> list[Path]:
                    '-f','lavfi','-i',f'sine=frequency={220+i*110}:sample_rate=48000:duration=3',
                    '-vf',f'hue=h={i*57},'+('hflip' if i%2 else 'vflip'),
                    '-c:v','libx264','-preset','ultrafast','-crf','20','-threads','1','-pix_fmt','yuv420p',
-                   '-c:a','aac','-shortest',str(file.relative_to(HERE))]
+                   '-c:a','aac','-shortest',str(file)]
         # Reuse the evidenced source bytes when present, then hash them afresh.
         if not file.exists():
-            subprocess.run(command, cwd=HERE, check=True)
+            subprocess.run(command, check=True)
         commands.append(command)
         sources.append(dict(id=f'media-{i+1}', path=f'media/loop-{i+1}.mp4',
                             sha256=sha256_file(file),kind='video',duration='3'))
@@ -42,7 +44,7 @@ def prepare(root: Path) -> list[Path]:
     command = ['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(root/'media/loop-1.mp4'),
                '-frames:v','1',str(still)]
     if not still.exists():
-        subprocess.run(command, cwd=HERE, check=True)
+        subprocess.run(command, check=True)
     commands.append(command)
     still_src = dict(id='still',path='media/still.png',sha256=sha256_file(still),kind='still',duration='2')
     write_json(root/'evidence/source-commands.json',commands)
@@ -83,25 +85,26 @@ def main() -> None:
     parser.add_argument('--prepare-only',action='store_true')
     parser.add_argument('--draft',action='store_true',help='360x640/640x360, not the full reference matrix')
     args=parser.parse_args()
-    root=HERE/'artifact-001'
-    states=prepare(root)
+    root = REPO_ROOT / 'artifact-001'
+    states = prepare(root)
     if args.prepare_only:
         return
-    receipts=[]
+    receipts = []
+    render_script = HERE / 'render_triptych.py'
     for state in states:
-        orientations=('portrait',) if 'still-controls' in state.stem else ('portrait','landscape')
+        orientations = ('portrait',) if 'still-controls' in state.stem else ('portrait', 'landscape')
         for orientation in orientations:
-            name=f'{state.stem}-{orientation}'+('-draft' if args.draft else '')
-            target=root/'renders'/f'{name}.mp4'
-            command=[sys.executable,'render_triptych.py','--state',str(state.relative_to(HERE)),
-                     '--orientation',orientation,'--output',str(target.relative_to(HERE)),
-                     '--preset','ultrafast','--crf','20']
+            name = f'{state.stem}-{orientation}' + ('-draft' if args.draft else '')
+            target = root / 'renders' / f'{name}.mp4'
+            command = [sys.executable, str(render_script), '--state', str(state),
+                       '--orientation', orientation, '--output', str(target),
+                       '--preset', 'ultrafast', '--crf', '20']
             if args.draft:
-                size=(360,640) if orientation=='portrait' else (640,360)
-                command+=['--width',str(size[0]),'--height',str(size[1])]
-            log=root/'evidence'/f'{name}.log'
+                size = (360, 640) if orientation == 'portrait' else (640, 360)
+                command += ['--width', str(size[0]), '--height', str(size[1])]
+            log = root / 'evidence' / f'{name}.log'
             with log.open('w') as stream:
-                result=subprocess.run(command,cwd=HERE,stdout=stream,stderr=subprocess.STDOUT)
+                result = subprocess.run(command, cwd=REPO_ROOT, stdout=stream, stderr=subprocess.STDOUT)
             if result.returncode:
                 raise SystemExit(f'Render failed ({result.returncode}); inspect {log}')
             still=target.with_suffix('.png')

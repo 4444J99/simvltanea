@@ -20,6 +20,7 @@ from pathlib import Path
 import composition as c
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parent
 PLAN_VERSION = 1
 MAX_MEDIA_BYTES = 256 * 1024 * 1024
 # Explicit native-preview capability, not a restriction on the offline model.
@@ -86,7 +87,7 @@ def compile_plan(state: dict) -> dict:
 def build_preview(state_path: Path, output: Path) -> dict:
     """Copy verified media to an incubator-local preview; no public upload occurs."""
     state_path, output = state_path.resolve(), output.resolve()
-    c.require(output.is_relative_to(HERE), 'preview must remain inside the incubator')
+    c.require(output.is_relative_to(REPO_ROOT), 'preview must remain inside the incubator')
     c.require(output != state_path.parent and not state_path.is_relative_to(output),
               'preview output must not contain or replace the source state')
     state = c.load_state(state_path)

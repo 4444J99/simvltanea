@@ -35,4 +35,4 @@ jobs:
 
       - name: Verify Local Lifecycle Cleanliness
         run: |
-          python3 verify_local_lifecycle.py
+          python3 tools/verify_local_lifecycle.py

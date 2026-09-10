@@ -18,13 +18,16 @@ from fractions import Fraction
 from pathlib import Path
 from unittest.mock import patch
 
+HERE = Path(__file__).resolve().parent.parent
+ROOT = HERE / 'artifact-001'
+for _p in (HERE, HERE / 'core', HERE / 'tools'):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
 import composition as c
 import render_triptych as r
 from artifact001_layouts import build_artifact001
 from make_artifact_001 import prepare, probe
-
-HERE = Path(__file__).resolve().parent.parent
-ROOT = HERE / 'artifact-001'
 
 def get_state(n=3):
     return c.load_state(ROOT/f'state-{n}.json')
@@ -235,7 +238,7 @@ class StateTests(unittest.TestCase):
             settings=r.build_settings(r.parse_args())
         self.assertEqual((settings.width,settings.height,settings.fps),(1080,1920,30))
         self.assertEqual(settings.audio_mode,'none');self.assertEqual(settings.timing_mode,'clip')
-        result=subprocess.run([sys.executable,str(HERE/'render_triptych.py'),'--state',str(ROOT/'state-3.json')],capture_output=True,text=True)
+        result=subprocess.run([sys.executable,str(HERE/'core'/'render_triptych.py'),'--state',str(ROOT/'state-3.json')],capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0); self.assertIn('explicit --orientation',result.stderr)
 
     def test_original_command_graph_compatibility(self):
@@ -270,7 +273,7 @@ class RenderTests(unittest.TestCase):
         s['frames']=72;s['events']=[x for x in s['events'] if x['frame']<72]
         path=ROOT/'test-integration-state.json';c.save_state(s,path)
         output=ROOT/'renders/test-integration.mp4'
-        command=[sys.executable,'render_triptych.py','--state',str(path),'--orientation','portrait',
+        command=[sys.executable,str(HERE/'core'/'render_triptych.py'),'--state',str(path),'--orientation','portrait',
                  '--width','360','--height','640','--preset','ultrafast','--output',str(output)]
         done=subprocess.run(command,cwd=HERE,capture_output=True,text=True)
         (ROOT/'evidence/integration.log').write_text(done.stdout+done.stderr)

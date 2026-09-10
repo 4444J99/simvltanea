@@ -19,7 +19,8 @@ from artifact001_layouts import build_artifact001
 from browser_runtime import build_preview
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE / 'runtime-proof'
+REPO_ROOT = HERE.parent
+ROOT = REPO_ROOT / 'runtime-proof'
 # Two deliberately specified compositions, not a generated generic grid.
 SEVEN = {
     'portrait': [('4/100','3/100','92/100','30/100'),
@@ -45,7 +46,7 @@ def _get_font(name: str, size: int):
 
 def prepare(root: Path = ROOT) -> list[Path]:
     root = root.resolve()
-    c.require(root.is_relative_to(HERE), 'fixture output must remain inside repository')
+    c.require(root.is_relative_to(REPO_ROOT), 'fixture output must remain inside repository')
     (root / 'media').mkdir(parents=True, exist_ok=True)
     (root / 'evidence').mkdir(exist_ok=True)
     (root / 'renders').mkdir(exist_ok=True)

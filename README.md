@@ -67,16 +67,30 @@ Seven-loop exports exist only as a named experimental family in the Portvs
 proof receipts. `artifact001_layouts.py` still rejects 7 as an unsupported
 reviewed pair. Do not advertise 7 as a supported configuration.
 
-Layouts live in `artifact001_layouts.py`. They are synthetic engineering
+Layouts live in [`core/artifact001_layouts.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/artifact001_layouts.py). They are synthetic engineering
 geometries, not artist-approved designs.
 
-## Rendering model
+## Repository Layout
+
+```text
+SIMVLTANEA/
+├── core/         # Composition compiler, authoring model, layouts, browser engine, FFmpeg renderer
+├── tools/        # CLI tools, media importers, site builders, edition tools, audit scripts
+├── examples/     # Example edition and project configuration files
+├── tests/        # Comprehensive 120-test verification suite
+├── docs/         # Canonical documentation (and historical incubation receipts in docs/historical/)
+├── archive/      # ChatGPT transcripts, research notes, and master project manifest
+├── editions.json # Production multi-edition registry
+└── pytest.ini    # Test runner configuration
+```
+
+## Rendering Model
 
 - Schema: `visual-form-composition/v1`
-- Authoring model: `composition_model.py`
-- Compiler / state: `composition.py`
-- FFmpeg renderer: `render_triptych.py` (legacy three-panel path plus compiled N-loop placements)
-- Browser preview: `browser_runtime.py` / `browser_runtime.js` (bounded, silent)
+- Authoring model: [`core/composition_model.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/composition_model.py)
+- Compiler / state: [`core/composition.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/composition.py)
+- FFmpeg renderer: [`core/render_triptych.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/render_triptych.py) (legacy three-panel path plus compiled N-loop placements)
+- Browser preview: [`core/browser_runtime.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/browser_runtime.py) / [`core/browser_runtime.js`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/browser_runtime.js) (bounded, silent)
 
 New schema-1 loop exports are silent. Legacy `none` / `panel` / `mix` audio
 routing is preserved on the historical three-panel path.
@@ -91,13 +105,13 @@ python3 -m unittest discover -s tests
 pytest
 
 # Verify worktree cleanliness
-python3 verify_local_lifecycle.py
+python3 tools/verify_local_lifecycle.py
 ```
 
 Generate the synthetic Artifact 001 family:
 
 ```bash
-python3 make_artifact_001.py
+python3 core/make_artifact_001.py
 ```
 
 ## Relationship

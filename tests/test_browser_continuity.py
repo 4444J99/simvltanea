@@ -8,8 +8,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import unittest
 from fractions import Fraction
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent
+for _p in (_ROOT, _ROOT / "core", _ROOT / "tools"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 import composition as c
 from browser_runtime import build_preview

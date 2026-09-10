@@ -20,6 +20,7 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parent if HERE.name == "tools" else HERE
 GROUPS = {
     'model': ['test_review_proof', 'test_composition_model', 'test_authoring_contract',
               'test_composition_render', 'test_browser_runtime.PlanTests',
@@ -99,7 +100,8 @@ def run(output: Path, transport: str, groups: list[str], timeout: float) -> int:
     if not 1 <= timeout <= 600:
         raise ValueError('timeout must be in 1..600')
     output = output.resolve()
-    if not output.is_relative_to(HERE / 'runtime-proof') or output == HERE / 'runtime-proof':
+    base_dir = HERE if HERE != Path(__file__).resolve().parent else REPO_ROOT
+    if not output.is_relative_to(base_dir / 'runtime-proof') or output == base_dir / 'runtime-proof':
         raise ValueError('Evidence output must be a child of runtime-proof inside the incubator')
     output.mkdir(parents=True, exist_ok=False)
     report = dict(schema_version=1, transport=transport, python=platform.python_version(),
@@ -115,7 +117,7 @@ def run(output: Path, transport: str, groups: list[str], timeout: float) -> int:
         started = time.monotonic()
         with (output/f'{group}.log').open('w') as log:
             try:
-                process = subprocess.run(command, cwd=HERE, env=env, stdout=log,
+                process = subprocess.run(command, cwd=base_dir, env=env, stdout=log,
                                          stderr=subprocess.STDOUT, timeout=timeout)
                 try:
                     facts = read_child_receipt(path)
@@ -140,9 +142,10 @@ def run(output: Path, transport: str, groups: list[str], timeout: float) -> int:
     report['complete_group_set'] = complete
     report['demonstrated']['local_narrow_tests'] = passed and complete
     report['demonstrated']['served_http'] = passed and complete and transport=='http'
+    source_dir = base_dir / 'core' if (base_dir / 'core').exists() else base_dir
     report['source_sha256'] = {
         path.name:hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted(HERE.glob('*')) if path.suffix in ('.py','.js')
+        for path in sorted(source_dir.glob('*')) if path.suffix in ('.py','.js')
     }
     report_path.write_text(json.dumps(report, indent=2)+'\n')
     print(json.dumps(dict(status=report['status'], totals=report['totals'], transport=transport)), flush=True)
