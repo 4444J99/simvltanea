@@ -33,15 +33,25 @@ SEVEN = {
 }
 
 
+def _get_font(name: str, size: int):
+    candidates = [name, 'DejaVuSans-Bold.ttf', 'DejaVuSans.ttf', '/System/Library/Fonts/Supplemental/Arial.ttf', '/System/Library/Fonts/Helvetica.ttc', 'Arial.ttf']
+    for cand in candidates:
+        try:
+            return ImageFont.truetype(cand, size)
+        except OSError:
+            pass
+    return ImageFont.load_default()
+
+
 def prepare(root: Path = ROOT) -> list[Path]:
     root = root.resolve()
-    c.require(root.is_relative_to(HERE), 'fixture output must remain inside incubator')
+    c.require(root.is_relative_to(HERE), 'fixture output must remain inside repository')
     (root / 'media').mkdir(parents=True, exist_ok=True)
     (root / 'evidence').mkdir(exist_ok=True)
     (root / 'renders').mkdir(exist_ok=True)
     sources, commands = [], []
-    font = ImageFont.truetype('DejaVuSans-Bold.ttf', 32)
-    small = ImageFont.truetype('DejaVuSans.ttf', 22)
+    font = _get_font('DejaVuSans-Bold.ttf', 32)
+    small = _get_font('DejaVuSans.ttf', 22)
     colors = [(170,45,45),(32,125,70),(35,80,170),(120,50,155),
               (170,110,25),(25,130,145),(145,45,100)]
     for i, color in enumerate(colors, 1):

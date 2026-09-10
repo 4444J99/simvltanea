@@ -42,6 +42,10 @@ def browser_executable() -> str:
         executable = shutil.which(name)
         if executable:
             return executable
+    for app_path in ('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                     '/Applications/Chromium.app/Contents/MacOS/Chromium'):
+        if Path(app_path).is_file() and os.access(app_path, os.X_OK):
+            return app_path
     raise RuntimeError(
         'Installed Chromium/Chrome is required; set PORTVS_BROWSER_EXECUTABLE '
         'to an absolute executable path (no download or skip substituted)')
