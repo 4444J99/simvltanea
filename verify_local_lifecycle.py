@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-REPO = ROOT.parents[1]
+REPO = ROOT if (ROOT / ".git").exists() else ROOT.parents[1]
 
 GENERATED_LANES = {
     "packages",
@@ -44,6 +44,8 @@ def run_git(*args: str) -> str:
 
 
 def incubator_relative(repo_path: str) -> str | None:
+    if ROOT == REPO:
+        return repo_path
     prefix = f"{ROOT.relative_to(REPO)}/"
     if not repo_path.startswith(prefix):
         return None
@@ -51,27 +53,31 @@ def incubator_relative(repo_path: str) -> str | None:
 
 
 def visible_untracked_paths() -> list[str]:
-    output = run_git("ls-files", "--others", "--exclude-standard", str(ROOT.relative_to(REPO)))
+    target = "." if ROOT == REPO else str(ROOT.relative_to(REPO))
+    output = run_git("ls-files", "--others", "--exclude-standard", target)
     return [line for line in output.splitlines() if line]
 
 
 def visible_modified_paths() -> list[str]:
-    output = run_git("diff", "--name-only", "--", str(ROOT.relative_to(REPO)))
+    target = "." if ROOT == REPO else str(ROOT.relative_to(REPO))
+    output = run_git("diff", "--name-only", "--", target)
     return [line for line in output.splitlines() if line]
 
 
 def visible_staged_paths() -> list[str]:
-    output = run_git("diff", "--cached", "--name-only", "--", str(ROOT.relative_to(REPO)))
+    target = "." if ROOT == REPO else str(ROOT.relative_to(REPO))
+    output = run_git("diff", "--cached", "--name-only", "--", target)
     return [line for line in output.splitlines() if line]
 
 
 def visible_status_entries() -> list[str]:
+    target = "." if ROOT == REPO else str(ROOT.relative_to(REPO))
     output = run_git(
         "status",
         "--porcelain=v1",
         "-uall",
         "--",
-        str(ROOT.relative_to(REPO)),
+        target,
     )
     return [line for line in output.splitlines() if line]
 
