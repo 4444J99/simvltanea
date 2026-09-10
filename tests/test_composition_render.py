@@ -23,8 +23,8 @@ import render_triptych as r
 from artifact001_layouts import build_artifact001
 from make_artifact_001 import prepare, probe
 
-HERE=Path(__file__).resolve().parent
-ROOT=HERE/'artifact-001'
+HERE = Path(__file__).resolve().parent.parent
+ROOT = HERE / 'artifact-001'
 
 def get_state(n=3):
     return c.load_state(ROOT/f'state-{n}.json')

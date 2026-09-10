@@ -84,13 +84,15 @@ routing is preserved on the historical three-panel path.
 ## Verify
 
 ```bash
-python3 test_composition_model.py
-python3 test_authoring_contract.py
-python3 test_composition_render.py
-```
+# Run full suite (120 tests across unit, ffmpeg render, browser runtime, and continuity)
+python3 -m unittest discover -s tests
 
-Those three files are the recovered executable core. Browser and HTTP proofs
-remain environment-gated; see `docs/RECOVERY.md`.
+# Or run with pytest
+pytest
+
+# Verify worktree cleanliness
+python3 verify_local_lifecycle.py
+```
 
 Generate the synthetic Artifact 001 family:
 

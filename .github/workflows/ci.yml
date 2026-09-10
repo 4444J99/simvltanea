@@ -29,21 +29,9 @@ jobs:
           pip install pillow playwright
           playwright install --with-deps chromium
 
-      - name: Run Core Composition Model & Authoring Tests
+      - name: Run Full Test Suite
         run: |
-          python3 test_composition_model.py
-          python3 test_authoring_contract.py
-
-      - name: Run FFmpeg Composition Render & Proof Tests
-        run: |
-          python3 test_composition_render.py
-          python3 test_review_proof.py
-
-      - name: Run Browser Boundary & Native Continuity Tests
-        run: |
-          python3 test_browser_boundaries.py
-          python3 test_browser_runtime.py
-          python3 test_browser_continuity.py
+          python3 -m unittest discover -s tests
 
       - name: Verify Local Lifecycle Cleanliness
         run: |
