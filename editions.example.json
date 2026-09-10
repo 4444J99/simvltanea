@@ -1,0 +1,664 @@
+{
+  "schema": "triptych.editions.v1",
+  "default_source_project": "project.example.json",
+  "note": "Named editions are small text configurations over the same triptych canon engine.",
+  "edition_families": {
+    "structural_recomposition": {
+      "role": "A still or still-series sketch defines how raw album material should be reconfigured across the triptych panels.",
+      "members": ["ballerina", "noonlight", "accidents"]
+    },
+    "signal_damage": {
+      "role": "Compression, reversal, feedback color, glare, and mediation are treated as the material surface.",
+      "members": ["glitche", "porn"]
+    }
+  },
+  "editions": [
+    {
+      "name": "accidents",
+      "slug": "accidents",
+      "status": "visual-album",
+      "work_title": "Accidents Fracture",
+      "family": "structural_recomposition",
+      "note": "Accidents Fracture is a more complicated structural-recomposition edition: rupture, aftermath, and repetition need a fracture map rather than a simple triptych slice.",
+      "composition": {
+        "work_title": "Accidents Fracture",
+        "family": "structural_recomposition",
+        "material_album": "etcetera/accidents",
+        "arrangement_model_role": "Treat the still set as a collision/rupture sketch whose grid can break, slip, and repeat across panels.",
+        "arrangement_model_observation": "Accidents reads as fragments of consequence rather than one whole figure: collision, aftermath, obstruction, repeated evidence, and unstable scale.",
+        "panel_arrangement_role": "Panel rearrangement should eventually support broken grids and delayed consequences, not only left/middle/right permutations.",
+        "language": [
+          "fracture",
+          "aftermath",
+          "collision grid",
+          "delayed consequence",
+          "rupture map"
+        ]
+      },
+      "source": {
+        "type": "photos_visual_album",
+        "album": "etcetera/accidents",
+        "album_match": "exact",
+        "order": "oldest",
+        "limit": 36,
+        "duration_pattern": [2.6, 3.4, 4.1, 3.0, 5.2],
+        "motion": "alternate",
+        "width": 720,
+        "height": 1280,
+        "fps": 12,
+        "crf": 40,
+        "preset": "veryfast"
+      },
+      "settings": {
+        "title": "Accidents Fracture",
+        "subtitle": "A triptych fracture map for collision, aftermath, repetition, and delayed consequence.",
+        "audio": {
+          "mode": "mix",
+          "gain": 0.42,
+          "panel_gains": {
+            "left": 1.0,
+            "middle": 0.72,
+            "right": 0.52
+          },
+          "fade_seconds": 0.08
+        },
+        "effects": {
+          "direction": "pingpong",
+          "tone": {
+            "mode": "normalize",
+            "strength": 0.35,
+            "smoothing": 50
+          }
+        },
+        "web_media": {
+          "video_height": 540,
+          "fps": 15,
+          "crf": 38,
+          "audio_bitrate": "48k",
+          "audio_channels": 1
+        }
+      },
+      "control_presets": [
+        {
+          "id": "fracture-sketch",
+          "label": "Fracture Sketch",
+          "default": true,
+          "surface": "sketch",
+          "direction": "pingpong",
+          "panel_order": ["middle", "left", "right"],
+          "start": "oldest",
+          "labels": false,
+          "audio": false,
+          "volume": 0.28,
+          "panel_volumes": {"left": 1.0, "middle": 0.72, "right": 0.52}
+        },
+        {
+          "id": "delayed-consequence",
+          "label": "Delayed Consequence",
+          "surface": "canon",
+          "direction": "pingpong",
+          "panel_order": ["right", "left", "middle"],
+          "start": "oldest",
+          "labels": false,
+          "audio": true,
+          "volume": 0.32,
+          "panel_volumes": {"left": 1.0, "middle": 0.64, "right": 0.42}
+        },
+        {
+          "id": "evidence-random",
+          "label": "Evidence Random",
+          "surface": "canon",
+          "direction": "reverse",
+          "panel_order": ["left", "middle", "right"],
+          "start": "random",
+          "labels": false,
+          "audio": false,
+          "volume": 0.22
+        }
+      ],
+      "visual_sketch": {
+        "output_file": "renders/editions/accidents/draft-visual-sketch.mp4",
+        "style": "fracture",
+        "width": 540,
+        "height": 960,
+        "fps": 10,
+        "duration": 7,
+        "slices": 10,
+        "source_count": 9,
+        "fracture_cells": [
+          {"x": 0.00, "y": 0.00, "width": 0.42, "height": 0.28, "alpha": 0.92, "source": 0},
+          {"x": 0.36, "y": 0.00, "width": 0.24, "height": 0.37, "alpha": 0.78, "source": 1},
+          {"x": 0.62, "y": 0.04, "width": 0.36, "height": 0.26, "alpha": 0.86, "source": 2},
+          {"x": 0.06, "y": 0.24, "width": 0.30, "height": 0.36, "alpha": 0.62, "source": 3},
+          {"x": 0.34, "y": 0.30, "width": 0.32, "height": 0.31, "alpha": 0.88, "source": 4},
+          {"x": 0.67, "y": 0.28, "width": 0.30, "height": 0.41, "alpha": 0.58, "source": 5},
+          {"x": 0.00, "y": 0.58, "width": 0.27, "height": 0.34, "alpha": 0.82, "source": 6},
+          {"x": 0.25, "y": 0.62, "width": 0.44, "height": 0.30, "alpha": 0.68, "source": 7},
+          {"x": 0.68, "y": 0.56, "width": 0.30, "height": 0.38, "alpha": 0.88, "source": 8},
+          {"x": 0.46, "y": 0.12, "width": 0.12, "height": 0.80, "alpha": 0.42, "source": 2}
+        ],
+        "crf": 41,
+        "preset": "veryfast"
+      },
+      "prompts": [
+        "Treat accidents as a canon of ruptures: clips cross panels like delayed consequences."
+      ]
+    },
+    {
+      "name": "ballerina",
+      "slug": "ballerina",
+      "status": "visual-album",
+      "work_title": "Ballerina Danse Recomposition",
+      "family": "structural_recomposition",
+      "note": "Ballerina Danse Recomposition uses ballerina danse as raw material and ballerina whole as the panel-reconfiguration score for the cubist/structural composition.",
+      "composition": {
+        "work_title": "Ballerina Danse Recomposition",
+        "family": "structural_recomposition",
+        "material_album": "etcetera/ballerina danse",
+        "arrangement_model_album": "etcetera/ballerina whole",
+        "arrangement_model_role": "Use the one-item ballerina whole album as the structural target and panel-reconfiguration score for arranging the raw ballerina danse material.",
+        "arrangement_model_observation": "The model image is a wide sliced collage: repeated figure fragments, vertical body columns, translucent overlays, hard rectangular bands, poster/floor anchors, and a whole made from partial poses.",
+        "arrangement_model_instruction": "Treat ballerina whole as the first structural sketch for how the triptych panels can be reconfigured: misregister body fragments, preserve horizontal bands, and let ballerina danse move through that map.",
+        "panel_arrangement_role": "Panel rearrangement is part of the piece: visible triptych columns can permute while the Ballerina Whole score keeps the whole-body reconstruction legible.",
+        "language": [
+          "Picasso structuralism",
+          "cubism",
+          "figure fragments",
+          "vertical slices",
+          "transparent overlays",
+          "whole-form reconstruction"
+        ]
+      },
+      "source": {
+        "type": "photos_visual_album",
+        "album": "etcetera/ballerina danse",
+        "album_match": "exact",
+        "order": "oldest",
+        "limit": 36,
+        "model_limit": 1,
+        "duration_pattern": [2.4, 3.2, 4.0, 2.8, 4.8, 3.6],
+        "motion": "alternate",
+        "width": 720,
+        "height": 1280,
+        "fps": 12,
+        "crf": 38,
+        "preset": "veryfast"
+      },
+      "settings": {
+        "title": "Ballerina Danse Recomposition",
+        "subtitle": "Ballerina Whole reconfigures Ballerina Danse into a moving cubist body across panels.",
+        "audio": {
+          "mode": "panel",
+          "panel": "left",
+          "gain": 0.6,
+          "fade_seconds": 0.12
+        },
+        "effects": {
+          "direction": "forward",
+          "tone": {
+            "mode": "normalize",
+            "strength": 0.25,
+            "smoothing": 70
+          }
+        },
+        "web_media": {
+          "video_height": 540,
+          "fps": 12,
+          "crf": 37
+        }
+      },
+      "control_presets": [
+        {
+          "id": "whole-score",
+          "label": "Whole Score",
+          "default": true,
+          "surface": "sketch",
+          "direction": "forward",
+          "panel_order": ["left", "middle", "right"],
+          "start": "oldest",
+          "labels": false,
+          "audio": false,
+          "volume": 0.24
+        },
+        {
+          "id": "recomposed-columns",
+          "label": "Recomposed Columns",
+          "surface": "canon",
+          "direction": "forward",
+          "panel_order": ["middle", "left", "right"],
+          "start": "oldest",
+          "labels": false,
+          "audio": false,
+          "volume": 0.24
+        },
+        {
+          "id": "reverse-body",
+          "label": "Reverse Body",
+          "surface": "canon",
+          "direction": "reverse",
+          "panel_order": ["right", "middle", "left"],
+          "start": "oldest",
+          "labels": false,
+          "audio": false,
+          "volume": 0.18
+        }
+      ],
+      "visual_sketch": {
+        "output_file": "renders/editions/ballerina/draft-visual-sketch.mp4",
+        "style": "score",
+        "width": 540,
+        "height": 960,
+        "fps": 8,
+        "duration": 6,
+        "slices": 15,
+        "source_count": 9,
+        "model_opacity": 0.46,
+        "model_fit": "triptych",
+        "score_cells": [
+          {"x": 0.03, "y": 0.00, "width": 0.17, "height": 0.50, "alpha": 0.58, "source": 0},
+          {"x": 0.17, "y": 0.00, "width": 0.12, "height": 0.45, "alpha": 0.80, "source": 1},
+          {"x": 0.35, "y": 0.00, "width": 0.13, "height": 0.46, "alpha": 0.70, "source": 2},
+          {"x": 0.48, "y": 0.03, "width": 0.16, "height": 0.43, "alpha": 0.48, "source": 3},
+          {"x": 0.69, "y": 0.00, "width": 0.12, "height": 0.52, "alpha": 0.78, "source": 4},
+          {"x": 0.82, "y": 0.00, "width": 0.14, "height": 0.58, "alpha": 0.62, "source": 5},
+          {"x": 0.07, "y": 0.36, "width": 0.20, "height": 0.32, "alpha": 0.44, "source": 6},
+          {"x": 0.30, "y": 0.26, "width": 0.18, "height": 0.38, "alpha": 0.66, "source": 7},
+          {"x": 0.52, "y": 0.28, "width": 0.17, "height": 0.39, "alpha": 0.72, "source": 8},
+          {"x": 0.72, "y": 0.32, "width": 0.20, "height": 0.36, "alpha": 0.50, "source": 0},
+          {"x": 0.03, "y": 0.55, "width": 0.15, "height": 0.37, "alpha": 0.70, "source": 1},
+          {"x": 0.21, "y": 0.56, "width": 0.13, "height": 0.38, "alpha": 0.52, "source": 2},
+          {"x": 0.38, "y": 0.54, "width": 0.19, "height": 0.42, "alpha": 0.76, "source": 3},
+          {"x": 0.58, "y": 0.55, "width": 0.13, "height": 0.41, "alpha": 0.62, "source": 4},
+          {"x": 0.76, "y": 0.53, "width": 0.18, "height": 0.39, "alpha": 0.78, "source": 5}
+        ],
+        "crf": 39,
+        "preset": "veryfast"
+      },
+      "prompts": [
+        "Treat ballerina danse as raw material and ballerina whole as the arrangement model: a cubist reconstruction of figure fragments across panels."
+      ]
+    },
+    {
+      "name": "noonlight",
+      "slug": "noonlight",
+      "status": "visual-album",
+      "work_title": "Noonlight Recomposition",
+      "family": "structural_recomposition",
+      "note": "Noonlight Recomposition follows the same structural-recomposition rule, but its model is serial portrait light rather than a separate whole-image album.",
+      "composition": {
+        "work_title": "Noonlight Recomposition",
+        "family": "structural_recomposition",
+        "material_album": "etcetera/noonlight",
+        "arrangement_model_role": "Treat the still set as both material and serial portrait sketch for gaze, face orientation, window glare, and subtle expression changes.",
+        "arrangement_model_observation": "Noonlight reads as a close portrait sequence with blown-out window light, repeated face framing, small gaze shifts, and a held vertical portrait field.",
+        "panel_arrangement_role": "Panel rearrangement should recompose gaze and light across the three columns rather than merely slicing one face evenly.",
+        "language": [
+          "serial portrait",
+          "gaze study",
+          "window glare",
+          "held light",
+          "small expression shifts"
+        ]
+      },
+      "source": {
+        "type": "photos_visual_album",
+        "album": "etcetera/noonlight",
+        "album_match": "exact",
+        "order": "oldest",
+        "limit": 18,
+        "duration_pattern": [4.8, 5.6, 6.4, 7.2],
+        "motion": "zoom-in",
+        "width": 720,
+        "height": 1280,
+        "fps": 10,
+        "crf": 40,
+        "preset": "veryfast"
+      },
+      "settings": {
+        "title": "Noonlight Recomposition",
+        "subtitle": "A serial portrait recomposed through gaze, window light, and held vertical panels.",
+        "audio": {
+          "mode": "mix",
+          "gain": 0.28,
+          "panel_gains": {
+            "left": 0.7,
+            "middle": 0.5,
+            "right": 0.35
+          },
+          "fade_seconds": 0.18
+        },
+        "effects": {
+          "direction": "forward",
+          "tone": {
+            "mode": "normalize",
+            "strength": 0.18,
+            "smoothing": 90
+          }
+        },
+        "web_media": {
+          "video_height": 540,
+          "fps": 10,
+          "crf": 39
+        }
+      },
+      "control_presets": [
+        {
+          "id": "serial-sketch",
+          "label": "Serial Sketch",
+          "default": true,
+          "surface": "sketch",
+          "direction": "forward",
+          "panel_order": ["left", "middle", "right"],
+          "start": "oldest",
+          "labels": false,
+          "audio": false,
+          "volume": 0.18
+        },
+        {
+          "id": "gaze-shift",
+          "label": "Gaze Shift",
+          "surface": "canon",
+          "direction": "forward",
+          "panel_order": ["middle", "right", "left"],
+          "start": "oldest",
+          "labels": false,
+          "audio": false,
+          "volume": 0.18
+        },
+        {
+          "id": "window-random",
+          "label": "Window Random",
+          "surface": "canon",
+          "direction": "pingpong",
+          "panel_order": ["left", "middle", "right"],
+          "start": "random",
+          "labels": false,
+          "audio": false,
+          "volume": 0.18
+        }
+      ],
+      "visual_sketch": {
+        "output_file": "renders/editions/noonlight/draft-visual-sketch.mp4",
+        "style": "serial",
+        "width": 540,
+        "height": 960,
+        "fps": 8,
+        "duration": 8,
+        "slices": 3,
+        "source_count": 6,
+        "crf": 40,
+        "preset": "veryfast"
+      },
+      "prompts": [
+        "Treat noonlight as a slow visual breath: fewer clips, more patience, less percussive motion."
+      ]
+    },
+    {
+      "name": "porn",
+      "slug": "porn",
+      "status": "visual-album",
+      "work_title": "Porn Signal Damage",
+      "family": "signal_damage",
+      "note": "A distortion/compression edition concept from the named album; keep explicit review before public export.",
+      "composition": {
+        "work_title": "Porn Signal Damage",
+        "family": "signal_damage",
+        "material_album": "etcetera/porn",
+        "arrangement_model_role": "Share the Glitche branch: overexposure, compression, reversal, mediated looking, and signal damage drive the surface.",
+        "panel_arrangement_role": "Panel rearrangement should emphasize damage, glare, and repeated mediation rather than whole-body reconstruction.",
+        "language": [
+          "signal damage",
+          "compression",
+          "mediated looking",
+          "reverse motion",
+          "overexposure"
+        ]
+      },
+      "source": {
+        "type": "photos_visual_album",
+        "album": "etcetera/porn",
+        "album_match": "exact",
+        "order": "oldest",
+        "limit": 36,
+        "duration_pattern": [1.8, 2.2, 3.7, 2.9, 4.4],
+        "motion": "alternate",
+        "width": 720,
+        "height": 1280,
+        "fps": 12,
+        "crf": 43,
+        "preset": "veryfast"
+      },
+      "settings": {
+        "title": "Porn Signal Damage",
+        "subtitle": "A gated signal-damage edition for overexposure, artifact, glare, and mediated looking.",
+        "audio": {
+          "mode": "mix",
+          "gain": 0.32,
+          "panel_gains": {
+            "left": 1.0,
+            "middle": 0.6,
+            "right": 0.25
+          },
+          "fade_seconds": 0.05
+        },
+        "effects": {
+          "direction": "reverse",
+          "tone": {
+            "mode": "histeq",
+            "strength": 0.35,
+            "smoothing": 50
+          }
+        },
+        "web_media": {
+          "video_height": 480,
+          "fps": 12,
+          "crf": 42,
+          "audio_bitrate": "40k"
+        }
+      },
+      "control_presets": [
+        {
+          "id": "gated-signal",
+          "label": "Gated Signal",
+          "default": true,
+          "note": "Private review mode; do not publish without explicit approval.",
+          "surface": "canon",
+          "direction": "reverse",
+          "panel_order": ["left", "middle", "right"],
+          "start": "oldest",
+          "labels": false,
+          "audio": false,
+          "volume": 0.16,
+          "panel_volumes": {"left": 1.0, "middle": 0.56, "right": 0.24}
+        },
+        {
+          "id": "artifact-glare",
+          "label": "Artifact Glare",
+          "note": "A signal-damage draft preset for private local experiments only.",
+          "surface": "canon",
+          "direction": "pingpong",
+          "panel_order": ["right", "left", "middle"],
+          "start": "random",
+          "labels": false,
+          "audio": false,
+          "volume": 0.14
+        },
+        {
+          "id": "private-signal-sketch",
+          "label": "Private Signal Sketch",
+          "note": "Private visual-sketch preset; keep gated until explicit review.",
+          "surface": "sketch",
+          "direction": "reverse",
+          "panel_order": ["left", "middle", "right"],
+          "start": "oldest",
+          "labels": false,
+          "audio": false,
+          "volume": 0.12
+        }
+      ],
+      "visual_sketch": {
+        "output_file": "renders/editions/porn/draft-visual-sketch.mp4",
+        "style": "signal",
+        "width": 540,
+        "height": 960,
+        "fps": 8,
+        "duration": 5,
+        "source_count": 9,
+        "signal_cells": [
+          {"x": 0.00, "y": 0.00, "width": 0.35, "height": 0.22, "alpha": 0.84, "source": 0},
+          {"x": 0.31, "y": 0.05, "width": 0.33, "height": 0.18, "alpha": 0.58, "source": 1},
+          {"x": 0.63, "y": 0.00, "width": 0.35, "height": 0.30, "alpha": 0.80, "source": 2},
+          {"x": 0.07, "y": 0.24, "width": 0.30, "height": 0.42, "alpha": 0.50, "source": 3},
+          {"x": 0.36, "y": 0.27, "width": 0.31, "height": 0.34, "alpha": 0.78, "source": 4},
+          {"x": 0.62, "y": 0.26, "width": 0.34, "height": 0.47, "alpha": 0.42, "source": 5},
+          {"x": 0.00, "y": 0.66, "width": 0.41, "height": 0.26, "alpha": 0.66, "source": 6},
+          {"x": 0.39, "y": 0.62, "width": 0.29, "height": 0.32, "alpha": 0.46, "source": 7},
+          {"x": 0.68, "y": 0.70, "width": 0.30, "height": 0.24, "alpha": 0.74, "source": 8}
+        ],
+        "crf": 43,
+        "preset": "veryfast"
+      },
+      "prompts": [
+        "Treat porn as signal damage and mediated looking: let compression and reverse motion become the material."
+      ]
+    },
+    {
+      "name": "glitche",
+      "slug": "glitche",
+      "aliases": [
+        "glitch"
+      ],
+      "status": "video-ready",
+      "work_title": "Glitche Signal Damage",
+      "family": "signal_damage",
+      "note": "Glitche Signal Damage is the runnable video-heavy branch for compression, loop artifacts, feedback color, and temporal misfires; it shares an aesthetic family with Porn Signal Damage.",
+      "composition": {
+        "work_title": "Glitche Signal Damage",
+        "family": "signal_damage",
+        "material_album": "glitch",
+        "arrangement_model_role": "Use the clips themselves as a signal-damage model: compression, loop seams, temporal misfires, and feedback color stay visible.",
+        "panel_arrangement_role": "Panel rearrangement should emphasize damaged motion and feedback loops instead of structural whole-image reconstruction.",
+        "language": [
+          "signal damage",
+          "compression",
+          "feedback color",
+          "loop seams",
+          "temporal misfire"
+        ]
+      },
+      "source": {
+        "type": "photos_album",
+        "album": "glitch",
+        "album_match": "contains",
+        "include_live_photos": true,
+        "order": "oldest",
+        "limit": 9,
+        "max_duration": 90,
+        "mode": "symlink"
+      },
+      "settings": {
+        "title": "Glitche Signal Damage",
+        "subtitle": "A compressed, unstable triptych for damaged motion, feedback color, and temporal misfire.",
+        "audio": {
+          "mode": "mix",
+          "gain": 0.4,
+          "panel_gains": {
+            "left": 1.0,
+            "middle": 0.7,
+            "right": 0.45
+          },
+          "fade_seconds": 0.05
+        },
+        "effects": {
+          "direction": "pingpong",
+          "tone": {
+            "mode": "histeq",
+            "strength": 0.35,
+            "smoothing": 50
+          }
+        },
+        "web_media": {
+          "video_height": 480,
+          "fps": 12,
+          "crf": 42,
+          "audio_bitrate": "40k",
+          "audio_channels": 1
+        }
+      },
+      "control_presets": [
+        {
+          "id": "damage-loop",
+          "label": "Damage Loop",
+          "default": true,
+          "surface": "canon",
+          "direction": "pingpong",
+          "panel_order": ["left", "middle", "right"],
+          "start": "oldest",
+          "labels": false,
+          "audio": true,
+          "volume": 0.28,
+          "panel_volumes": {"left": 1.0, "middle": 0.7, "right": 0.45}
+        },
+        {
+          "id": "reverse-feedback",
+          "label": "Reverse Feedback",
+          "surface": "canon",
+          "direction": "reverse",
+          "panel_order": ["right", "middle", "left"],
+          "start": "oldest",
+          "labels": false,
+          "audio": true,
+          "volume": 0.24,
+          "panel_volumes": {"left": 0.8, "middle": 0.7, "right": 1.0}
+        },
+        {
+          "id": "random-tear",
+          "label": "Random Tear",
+          "surface": "canon",
+          "direction": "pingpong",
+          "panel_order": ["middle", "left", "right"],
+          "start": "random",
+          "labels": false,
+          "audio": false,
+          "volume": 0.2
+        },
+        {
+          "id": "signal-sketch",
+          "label": "Signal Sketch",
+          "surface": "sketch",
+          "direction": "pingpong",
+          "panel_order": ["left", "middle", "right"],
+          "start": "oldest",
+          "labels": false,
+          "audio": false,
+          "volume": 0.18
+        }
+      ],
+      "visual_sketch": {
+        "output_file": "renders/editions/glitche/draft-visual-sketch.mp4",
+        "style": "signal",
+        "width": 540,
+        "height": 960,
+        "fps": 10,
+        "duration": 6,
+        "source_count": 9,
+        "signal_cells": [
+          {"x": 0.00, "y": 0.00, "width": 0.34, "height": 0.24, "alpha": 0.90, "source": 0},
+          {"x": 0.28, "y": 0.03, "width": 0.43, "height": 0.17, "alpha": 0.70, "source": 1},
+          {"x": 0.65, "y": 0.00, "width": 0.34, "height": 0.29, "alpha": 0.92, "source": 2},
+          {"x": 0.06, "y": 0.22, "width": 0.26, "height": 0.54, "alpha": 0.56, "source": 3},
+          {"x": 0.31, "y": 0.24, "width": 0.39, "height": 0.40, "alpha": 0.88, "source": 4},
+          {"x": 0.62, "y": 0.21, "width": 0.32, "height": 0.50, "alpha": 0.64, "source": 5},
+          {"x": 0.00, "y": 0.66, "width": 0.45, "height": 0.24, "alpha": 0.76, "source": 6},
+          {"x": 0.38, "y": 0.62, "width": 0.30, "height": 0.33, "alpha": 0.54, "source": 7},
+          {"x": 0.66, "y": 0.68, "width": 0.33, "height": 0.28, "alpha": 0.84, "source": 8}
+        ],
+        "crf": 42,
+        "preset": "veryfast"
+      },
+      "prompts": [
+        "Treat glitche as the engine revealing itself: compression, loop seams, and temporal misfires stay visible."
+      ]
+    }
+  ]
+}

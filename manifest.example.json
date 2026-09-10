@@ -1,0 +1,35 @@
+{
+  "input_dir": "samples",
+  "output_file": "renders/story-triptych.mp4",
+  "timing_mode": "clip",
+  "phrase_seconds": 4.0,
+  "layout": "story",
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30
+  },
+  "render": {
+    "crf": 18,
+    "preset": "medium"
+  },
+  "audio": {
+    "mode": "none",
+    "panel": "left",
+    "gain": 0.8,
+    "panel_gains": {
+      "left": 1.0,
+      "middle": 1.0,
+      "right": 1.0
+    },
+    "fade_seconds": 0.05
+  },
+  "effects": {
+    "direction": "forward",
+    "tone": {
+      "mode": "none",
+      "strength": 0.35,
+      "smoothing": 50
+    }
+  }
+}

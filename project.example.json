@@ -1,0 +1,226 @@
+{
+  "title": "Triptych Video Canon",
+  "subtitle": "A three-panel moving-image canon for Stories, Reels, YouTube, GitHub, and eventual product surfaces.",
+  "original_reference": "https://www.youtube.com/watch?v=PHP7mOJT60I",
+  "status": "incubating",
+  "final_owner": "unresolved",
+  "input_dir": "samples",
+  "timing_mode": "clip",
+  "phrase_seconds": 4.0,
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "panel_order": [
+      "left",
+      "middle",
+      "right"
+    ]
+  },
+  "render": {
+    "crf": 18,
+    "preset": "medium"
+  },
+  "audio": {
+    "mode": "none",
+    "panel": "left",
+    "gain": 0.8,
+    "panel_gains": {
+      "left": 1.0,
+      "middle": 1.0,
+      "right": 1.0
+    },
+    "fade_seconds": 0.05
+  },
+  "effects": {
+    "direction": "forward",
+    "tone": {
+      "mode": "none",
+      "strength": 0.35,
+      "smoothing": 50
+    }
+  },
+  "web_media": {
+    "enabled": true,
+    "output_dir": "site/media",
+    "proxy_limit": 72,
+    "video_height": 540,
+    "fps": 15,
+    "crf": 36,
+    "preset": "veryfast",
+    "audio_bitrate": "48k",
+    "audio_sample_rate": 48000,
+    "audio_channels": 1,
+    "note": "Generated landing-page proxies are intentionally lightweight and lossy; artifacts are part of the aesthetic."
+  },
+  "prompts": [
+    {
+      "date": "2026-06-28",
+      "text": "Build a triptych / three-video-panel Instagram Story-style creative device from manually exported Photos videos."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Use a Baroque/classical canon or round structure: clips enter on the left, move to the middle, move to the right, then leave."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Treat different clip lengths as useful imperfections instead of normalizing them away."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Support both cumulative text direction and editor-like movement/reordering."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "When explicitly authorized, support opt-in Photos library ingestion so the canon can keep living without manual video editing."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "For the first postable iteration, begin with the earliest video in Photos and let each clip's own length lead the canon cadence."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Keep the device light on its feet with fast draft exports, hide/show controls for specific clips, selected-folder imports, and explicit audio modes."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Make the public surface media-first: first load shows only the dynamic triptych videos, with prompts, clip order, hiding, audio, exports, and settings tucked behind a tap-open settings drawer; wide/fullscreen fills as three equal panels, narrow/minimized behaves like a vertical Story."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Once the triptych fills, keep it filled: each cadence step is a round held by the longest active clip, with shorter clips looping in place until the round resolves and clips shift left-to-right together."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Add MIDI-like video direction effects: all panels forward, all panels reverse, or all panels ping-pong forward then backward."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Scale to the full Photos video library by cataloging all videos as lightweight metadata, then staging and rendering only small selected editions."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Source choice matters: support a deliberate Finder folder or Photos album/collection for better selected editions instead of relying on the oldest automatic import."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Add per-panel audio control and export-time brightness/tone balancing so the canon can be mixed and normalized without manual editing."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Use lightweight lossy web proxies for the living landing page; artifacts and distortions from compression are acceptable material rather than errors."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Make the next full-steam layer a flash copy: a lightweight, manipulatable, remixable selected-edition sync surface between the private Photos library and the public/static triptych."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Treat Photos albums like accidents, ballerina, noonlight, porn, and glitche as edition configurations of the same canon engine: source selection, order, direction, audio, tone, proxy recipe, landing page, and export targets should live in text."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Correct the ballerina edition model: ballerina danse is raw material, while ballerina whole is the arrangement model, a Picasso/cubist structural target for reconstructing figure fragments across panels."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Make panel arrangement one of the device qualities: the canon voices stay left/middle/right internally, but the triptych surface can rearrange which voice appears in each visible column."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Treat Ballerina Whole as a sketch for reconfiguring the triptych panels: Ballerina Danse is raw material, the work title is Ballerina Danse Recomposition, Noonlight and Accidents follow the structural-recomposition family, and Glitche/Porn share a signal-damage family."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Move album-specific visual arrangements into text maps: Ballerina uses score_cells from Ballerina Whole, Accidents uses fracture_cells for rupture/delayed consequence, and the shared engine stays lightweight and reversible."
+    },
+    {
+      "date": "2026-06-28",
+      "text": "Make arrangement maps public-readable without exposing the source library: sync a sanitized arrangement_score into the landing page, flash-copy receipt, and index so the authored score is visible behind settings."
+    }
+  ],
+  "photos_catalog": {
+    "output_file": "work/photos-catalog.json",
+    "metadata_only": true,
+    "note": "Use catalog_photos.py for library-scale interaction without staging every source video."
+  },
+  "photos_import": {
+    "enabled": false,
+    "library": "~/Pictures/Photos Library.photoslibrary",
+    "mode": "symlink",
+    "output_dir": "samples/photos-import",
+    "local_project": "work/project.photos-local.json",
+    "include_live_photos": true,
+    "order": "oldest",
+    "photos_export_missing": false,
+    "limit": 12,
+    "offset": 0,
+    "random_seed": null,
+    "start_date": null,
+    "end_date": null,
+    "exclude_file": "work/photos-exclude-uuids.txt",
+    "max_duration": 45
+  },
+  "editor": {
+    "clip_order": "filename by default; add a clips array to pin a deliberate order",
+    "clips": [],
+    "moves": []
+  },
+  "exports": [
+    {
+      "name": "story-triptych",
+      "layout": "story",
+      "output_file": "renders/story-triptych.mp4",
+      "width": 1080,
+      "height": 1920,
+      "enabled": true
+    },
+    {
+      "name": "reel-left",
+      "layout": "left",
+      "output_file": "renders/reel-left.mp4",
+      "width": 1080,
+      "height": 1920,
+      "enabled": true
+    },
+    {
+      "name": "reel-middle",
+      "layout": "middle",
+      "output_file": "renders/reel-middle.mp4",
+      "width": 1080,
+      "height": 1920,
+      "enabled": true
+    },
+    {
+      "name": "reel-right",
+      "layout": "right",
+      "output_file": "renders/reel-right.mp4",
+      "width": 1080,
+      "height": 1920,
+      "enabled": true
+    },
+    {
+      "name": "draft-story",
+      "layout": "story",
+      "output_file": "renders/draft-story.mp4",
+      "width": 540,
+      "height": 960,
+      "fps": 15,
+      "crf": 30,
+      "preset": "ultrafast",
+      "max_videos": 5,
+      "enabled": false
+    }
+  ],
+  "landing_page": {
+    "output_file": "site/index.html",
+    "mode": "static-eternal-seed"
+  },
+  "promotion_candidates": [
+    "Media Ark",
+    "portfolio",
+    "a-mavs-olevm / etceter4",
+    "new repo",
+    "Portvs only"
+  ]
+}

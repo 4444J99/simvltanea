@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "scope": "PR9 proof-runner only; synthetic unit fixtures, not application/browser validation",
+  "starting_head": "beecfee905cb2685b7c71ede13a1955faed6c153",
+  "original_runner_git_blob": "1da9ce610c3524df9fe1f5d3e92cd5e5ed2798c4",
+  "source_retrieval": "GitHub connector UTF-8, original blob SHA verified locally; not a full checkout",
+  "python": "3.13.5",
+  "commands": [
+    {"command": "python -m unittest -v test_review_proof", "exit_code": 0, "tests_run": 27, "failures": 0, "errors": 0, "skipped": 0},
+    {"command": "python -m py_compile run_review_proof.py test_review_proof.py", "exit_code": 0}
+  ],
+  "baseline_control": {
+    "command": "python -m unittest -v test_review_proof against original runner",
+    "exit_code": 1,
+    "tests_run": 27,
+    "failures_including_subtests": 17,
+    "errors_including_subtests": 9,
+    "interpretation": "Regression controls on unpatched source; not a count of production incidents"
+  },
+  "source_sha256": {
+    "run_review_proof.py": "97ed213d06534005e9b9396e5aad02f7c701375ab17251968254fd7adf53dd8e",
+    "test_review_proof.py": "e687c8016c212615ba961341051537679f851ad7609c9822796f59c98d5517e2"
+  },
+  "log_sha256": {
+    "portvs-proof-runner-baseline.log": "b4c480b567d07bba83a64f1a6831743e9cc730d7264b0a3c2f471539df2416a0",
+    "portvs-proof-runner-patched.log": "d74278599f6dc3ecc2838ff31656776c8fc89607f30b8d3cceb5c3a8e374ccee"
+  },
+  "http_preflight": {
+    "scope": "environment-only preflight; no Portvs application tests executed",
+    "source_pr_head": "beecfee905cb2685b7c71ede13a1955faed6c153",
+    "transport": "http",
+    "python": "3.13.5",
+    "chromium_args": ["--no-sandbox", "--disable-dev-shm-usage"],
+    "policy_changed": false,
+    "fallback_used": false,
+    "status": "failed-environment-only",
+    "python_http_status": 200,
+    "chromium_version": "144.0.7559.96",
+    "error": "Page.goto: net::ERR_BLOCKED_BY_ADMINISTRATOR at http://127.0.0.1:38337/probe.html\nCall log:\n  - navigating to \"http://127.0.0.1:38337/probe.html\", waiting until \"load\"\n"
+  },
+  "demonstrated": {
+    "runner_fault_controls": true,
+    "served_http_application": false,
+    "whole_scoped_application_suite_rerun": false,
+    "hosted_ci": false,
+    "physical_device": false,
+    "historical_original": false,
+    "deployment": false,
+    "artist_approval": false
+  },
+  "disposition": "retain draft; execute normal HTTP proof in an authorized browser environment; rerun full scoped suite for changed runner"
+}

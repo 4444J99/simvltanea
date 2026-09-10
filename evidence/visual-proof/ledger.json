@@ -1,0 +1,82 @@
+[
+  {
+    "n": 3,
+    "orientation": "portrait",
+    "width": 720,
+    "height": 1280,
+    "loop_count": 3,
+    "unique_sources": 3,
+    "render": "renders/n3-portrait.mp4",
+    "frame": "frames/n3-portrait.png"
+  },
+  {
+    "n": 3,
+    "orientation": "landscape",
+    "width": 1280,
+    "height": 720,
+    "loop_count": 3,
+    "unique_sources": 3,
+    "render": "renders/n3-landscape.mp4",
+    "frame": "frames/n3-landscape.png"
+  },
+  {
+    "n": 4,
+    "orientation": "portrait",
+    "width": 720,
+    "height": 1280,
+    "loop_count": 4,
+    "unique_sources": 4,
+    "render": "renders/n4-portrait.mp4",
+    "frame": "frames/n4-portrait.png"
+  },
+  {
+    "n": 4,
+    "orientation": "landscape",
+    "width": 1280,
+    "height": 720,
+    "loop_count": 4,
+    "unique_sources": 4,
+    "render": "renders/n4-landscape.mp4",
+    "frame": "frames/n4-landscape.png"
+  },
+  {
+    "n": 5,
+    "orientation": "portrait",
+    "width": 720,
+    "height": 1280,
+    "loop_count": 5,
+    "unique_sources": 5,
+    "render": "renders/n5-portrait.mp4",
+    "frame": "frames/n5-portrait.png"
+  },
+  {
+    "n": 5,
+    "orientation": "landscape",
+    "width": 1280,
+    "height": 720,
+    "loop_count": 5,
+    "unique_sources": 5,
+    "render": "renders/n5-landscape.mp4",
+    "frame": "frames/n5-landscape.png"
+  },
+  {
+    "n": 6,
+    "orientation": "portrait",
+    "width": 720,
+    "height": 1280,
+    "loop_count": 6,
+    "unique_sources": 6,
+    "render": "renders/n6-portrait.mp4",
+    "frame": "frames/n6-portrait.png"
+  },
+  {
+    "n": 6,
+    "orientation": "landscape",
+    "width": 1280,
+    "height": 720,
+    "loop_count": 6,
+    "unique_sources": 6,
+    "render": "renders/n6-landscape.mp4",
+    "frame": "frames/n6-landscape.png"
+  }
+]

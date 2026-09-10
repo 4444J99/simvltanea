@@ -1,0 +1,4 @@
+# Optional, incubator-scoped test/generator dependencies; observed execution versions.
+# FFmpeg/ffprobe, system Chromium/Chrome and DejaVu fonts are separate prerequisites.
+Pillow==12.3.0
+playwright==1.57.0
