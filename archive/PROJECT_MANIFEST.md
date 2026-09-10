@@ -36,7 +36,7 @@ archive/
 | `THRD-` | Conversation Threads | Extracted dialogue units from multi-chat sessions | 8 |
 | `HNDF-` | Handoff Directives | Autonomous handoffs, scope briefs, and artist addenda | 3 |
 | `RCPT-` | Verification Receipts | Execution receipts, review readiness reports, continuity proofs | 3 |
-| `RSRCH-` | Research Packs | Cross-repository maps, registry tables, Copilot task definitions | 3 |
+| `RSRCH-` | Research & Technical Specs | Cross-repository maps, registry tables, mathematical deep-dives | 4 |
 | `EVD-` | Machine Evidence | JSON telemetry traces, metrics, and SHA256 checksum records | 4 |
 | `LOG-` | Execution Logs | Captured test output logs and compiler traces | 1 |
 | `MEDA-` | Visual Media | Rendered test matrix PNGs and experimental MP4 proofs | 3 |
@@ -220,6 +220,20 @@ archive/
 
 ---
 
+
+### [`RSRCH-004`](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/chatgpt/research/RSRCH-004_recovering-tripticks-to-configurable-video-panels.md): Technical Deep-Dive: Recovering TripTicks to Configurable Video Panels
+- **File**: [`archive/chatgpt/research/RSRCH-004_recovering-tripticks-to-configurable-video-panels.md`](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/chatgpt/research/RSRCH-004_recovering-tripticks-to-configurable-video-panels.md)
+- **Size**: 29,710 bytes | **SHA-256**: `a3a95e8dd188662383338b32082f8aa846e7b2e83beeb93e497d8ded2913ae3b`
+- **Date**: 2026-09-10
+- **Tags**: `#mathematical-model`, `#n-loop-mechanics`, `#temporal-offsets`, `#bank-selection`, `#local-time`, `#rational-clocks`, `#sha256-counter-v1`
+- **Annotation**:
+  An authoritative mathematical and structural analysis of the core engine mechanics in `composition.py` and `composition_model.py`. The document systematically resolves five critical technical subsystems:
+  1. **Temporal Offset Mechanics**: Explains how local loop clocks $t_{\text{local}}(f)$ maintain independent phase and rate without shared delay lines or stagger schedules, and how hold/release events dynamically rebase offsets without composition pauses.
+  2. **Source Bank Selection Logic**: Details the versioned `sha256-counter-v1` stateless hashing engine mapping `[rng, seed, loop_id, epoch, cycle, bank]` to deterministic pseudo-random source selections across local time cycles.
+  3. **Local Time vs. Media Time**: Distinguishes between unbounded local loop time $t_{\text{local}}(f)$ and wrapped source file seek positions $t_{\text{src}}(f)$ under trim constraints $[t_{\text{low}}, t_{\text{high}})$.
+  4. **Bank Selection Cycle Moduli**: Analyzes how $\operatorname{cycle}(f) = \lfloor t_{\text{local}}(f) / \text{period} \rfloor$ governs selection ticks independently of file wraps and global composition length.
+  5. **Continuity & Renderer Segment Cuts**: Formalizes how FFmpeg cuts and browser span activations are triggered strictly when source identity changes or when $t_{\text{src}}$ deviates from exact rational progression $r / \text{fps}$.
+
 ## 5. Telemetry, Manifests & Machine Evidence (`EVD-xxx`, `LOG-xxx`)
 
 ### [`EVD-001`](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/chatgpt/evidence/EVD-001_pr9-browser-continuity-evidence.json): PR #9 Browser Continuity Trace & Metrics Evidence
@@ -323,6 +337,7 @@ archive/
 - **Comment `5556494965`**: Published on Portvs Issue #8; documented in `THRD-008`, `RCPT-003`.
 
 ### By System Invariant & Tag
+- **`#mathematical-model`**: `RSRCH-004`.
 - **`#paired-layouts`**: `THRD-001`, `HNDF-003`, `MEDA-001`, `BNDL-005`.
 - **`#browser-continuity`**: `THRD-007`, `RCPT-001`, `EVD-001`, `BNDL-002`.
 - **`#historical-sources`**: `THRD-002`, `THRD-004`, `HNDF-002`, `RSRCH-002`.
