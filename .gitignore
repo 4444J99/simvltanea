@@ -29,3 +29,9 @@ runtime-proof/
 # Local proof media may be large; keep ledger and inspected frames.
 evidence/visual-proof/media/
 evidence/visual-proof/renders/
+
+# Raw intake dropzone for unorganized external drops (processed into archive/chatgpt/)
+archive/raw/*
+!archive/raw/README.md
+!archive/raw/.gitkeep
+
