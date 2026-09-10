@@ -1,0 +1,1394 @@
+{
+  "snapshots": [
+    {
+      "frame": 10,
+      "wall": 4738.300000000047,
+      "orientation": "portrait",
+      "running": true,
+      "finished": false,
+      "error": null,
+      "loops": [
+        {
+          "id": "loop-1",
+          "source": "source-1",
+          "kind": "video",
+          "currentTime": 0.459313,
+          "rate": 1,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 11,
+          "decoded": {
+            "wall": 4696.8,
+            "mediaTime": 0.416667,
+            "presentedFrames": 11
+          },
+          "rect": {
+            "x": 15.59375,
+            "y": 25.3125,
+            "width": 358.796875,
+            "height": 253.1875,
+            "top": 25.3125,
+            "right": 374.390625,
+            "bottom": 278.5,
+            "left": 15.59375
+          },
+          "quality": {
+            "totalVideoFrames": 15,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-2",
+          "source": "source-2",
+          "kind": "video",
+          "currentTime": 0.801254,
+          "rate": 1.07,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 13,
+          "decoded": {
+            "wall": 4730.1,
+            "mediaTime": 0.791667,
+            "presentedFrames": 14
+          },
+          "rect": {
+            "x": 15.59375,
+            "y": 312.265625,
+            "width": 171.59375,
+            "height": 151.90625,
+            "top": 312.265625,
+            "right": 187.1875,
+            "bottom": 464.171875,
+            "left": 15.59375
+          },
+          "quality": {
+            "totalVideoFrames": 27,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-3",
+          "source": "source-3",
+          "kind": "video",
+          "currentTime": 1.143096,
+          "rate": 1.14,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 14,
+          "decoded": {
+            "wall": 4730.1,
+            "mediaTime": 1.125,
+            "presentedFrames": 15
+          },
+          "rect": {
+            "x": 202.796875,
+            "y": 312.265625,
+            "width": 171.59375,
+            "height": 151.90625,
+            "top": 312.265625,
+            "right": 374.390625,
+            "bottom": 464.171875,
+            "left": 202.796875
+          },
+          "quality": {
+            "totalVideoFrames": 36,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-4",
+          "source": "source-4",
+          "kind": "video",
+          "currentTime": 1.485018,
+          "rate": 1.21,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 15,
+          "decoded": {
+            "wall": 4713.4,
+            "mediaTime": 1.458333,
+            "presentedFrames": 15
+          },
+          "rect": {
+            "x": 15.59375,
+            "y": 489.515625,
+            "width": 109.1875,
+            "height": 143.46875,
+            "top": 489.515625,
+            "right": 124.78125,
+            "bottom": 632.984375,
+            "left": 15.59375
+          },
+          "quality": {
+            "totalVideoFrames": 44,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-5",
+          "source": "source-5",
+          "kind": "video",
+          "currentTime": 1.826942,
+          "rate": 1.28,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 16,
+          "decoded": {
+            "wall": 4713.4,
+            "mediaTime": 1.791667,
+            "presentedFrames": 16
+          },
+          "rect": {
+            "x": 140.390625,
+            "y": 489.515625,
+            "width": 109.1875,
+            "height": 143.46875,
+            "top": 489.515625,
+            "right": 249.578125,
+            "bottom": 632.984375,
+            "left": 140.390625
+          },
+          "quality": {
+            "totalVideoFrames": 52,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-6",
+          "source": "source-6",
+          "kind": "video",
+          "currentTime": 2.168873,
+          "rate": 1.35,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 17,
+          "decoded": {
+            "wall": 4730.1,
+            "mediaTime": 2.166667,
+            "presentedFrames": 17
+          },
+          "rect": {
+            "x": 265.1875,
+            "y": 489.515625,
+            "width": 109.1875,
+            "height": 143.46875,
+            "top": 489.515625,
+            "right": 374.375,
+            "bottom": 632.984375,
+            "left": 265.1875
+          },
+          "quality": {
+            "totalVideoFrames": 60,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-7",
+          "source": "source-7",
+          "kind": "video",
+          "currentTime": 2.510521,
+          "rate": 1.42,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 18,
+          "decoded": {
+            "wall": 4730.1,
+            "mediaTime": 2.5,
+            "presentedFrames": 18
+          },
+          "rect": {
+            "x": 15.59375,
+            "y": 666.75,
+            "width": 358.796875,
+            "height": 151.90625,
+            "top": 666.75,
+            "right": 374.390625,
+            "bottom": 818.65625,
+            "left": 15.59375
+          },
+          "quality": {
+            "totalVideoFrames": 69,
+            "droppedVideoFrames": 0
+          }
+        }
+      ],
+      "eventCount": 34
+    },
+    {
+      "frame": 23,
+      "wall": 5267.100000000093,
+      "orientation": "landscape",
+      "running": true,
+      "finished": false,
+      "error": null,
+      "loops": [
+        {
+          "id": "loop-1",
+          "source": "source-1",
+          "kind": "video",
+          "currentTime": 0.988194,
+          "rate": 1,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 24,
+          "decoded": {
+            "wall": 5246.7,
+            "mediaTime": 0.958333,
+            "presentedFrames": 24
+          },
+          "rect": {
+            "x": 38.390625,
+            "y": 36,
+            "width": 486.390625,
+            "height": 648,
+            "top": 36,
+            "right": 524.78125,
+            "bottom": 684,
+            "left": 38.390625
+          },
+          "quality": {
+            "totalVideoFrames": 28,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-2",
+          "source": "source-2",
+          "kind": "video",
+          "currentTime": 1.367093,
+          "rate": 1.07,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 26,
+          "decoded": {
+            "wall": 5246.7,
+            "mediaTime": 1.333333,
+            "presentedFrames": 27
+          },
+          "rect": {
+            "x": 576,
+            "y": 36,
+            "width": 307.1875,
+            "height": 187.1875,
+            "top": 36,
+            "right": 883.1875,
+            "bottom": 223.1875,
+            "left": 576
+          },
+          "quality": {
+            "totalVideoFrames": 41,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-3",
+          "source": "source-3",
+          "kind": "video",
+          "currentTime": 1.745963,
+          "rate": 1.14,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 29,
+          "decoded": {
+            "wall": 5263.4,
+            "mediaTime": 1.75,
+            "presentedFrames": 30
+          },
+          "rect": {
+            "x": 934.390625,
+            "y": 36,
+            "width": 307.1875,
+            "height": 187.1875,
+            "top": 36,
+            "right": 1241.578125,
+            "bottom": 223.1875,
+            "left": 934.390625
+          },
+          "quality": {
+            "totalVideoFrames": 50,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-4",
+          "source": "source-4",
+          "kind": "video",
+          "currentTime": 2.12492,
+          "rate": 1.21,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 31,
+          "decoded": {
+            "wall": 5263.4,
+            "mediaTime": 2.125,
+            "presentedFrames": 31
+          },
+          "rect": {
+            "x": 576,
+            "y": 259.1875,
+            "width": 307.1875,
+            "height": 201.59375,
+            "top": 259.1875,
+            "right": 883.1875,
+            "bottom": 460.78125,
+            "left": 576
+          },
+          "quality": {
+            "totalVideoFrames": 59,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-5",
+          "source": "source-5",
+          "kind": "video",
+          "currentTime": 2.503863,
+          "rate": 1.28,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 33,
+          "decoded": {
+            "wall": 5263.4,
+            "mediaTime": 2.5,
+            "presentedFrames": 33
+          },
+          "rect": {
+            "x": 934.390625,
+            "y": 259.1875,
+            "width": 307.1875,
+            "height": 201.59375,
+            "top": 259.1875,
+            "right": 1241.578125,
+            "bottom": 460.78125,
+            "left": 934.390625
+          },
+          "quality": {
+            "totalVideoFrames": 68,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-6",
+          "source": "source-6",
+          "kind": "video",
+          "currentTime": 2.88281,
+          "rate": 1.35,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 34,
+          "decoded": {
+            "wall": 5263.4,
+            "mediaTime": 2.875,
+            "presentedFrames": 34
+          },
+          "rect": {
+            "x": 576,
+            "y": 496.796875,
+            "width": 307.1875,
+            "height": 187.1875,
+            "top": 496.796875,
+            "right": 883.1875,
+            "bottom": 683.984375,
+            "left": 576
+          },
+          "quality": {
+            "totalVideoFrames": 78,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-7",
+          "source": "source-7",
+          "kind": "video",
+          "currentTime": 3.261473,
+          "rate": 1.42,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 36,
+          "decoded": {
+            "wall": 5263.4,
+            "mediaTime": 3.25,
+            "presentedFrames": 36
+          },
+          "rect": {
+            "x": 934.390625,
+            "y": 496.796875,
+            "width": 307.1875,
+            "height": 187.1875,
+            "top": 496.796875,
+            "right": 1241.578125,
+            "bottom": 683.984375,
+            "left": 934.390625
+          },
+          "quality": {
+            "totalVideoFrames": 87,
+            "droppedVideoFrames": 0
+          }
+        }
+      ],
+      "eventCount": 35
+    },
+    {
+      "frame": 36,
+      "wall": 5795.700000000186,
+      "orientation": "portrait",
+      "running": true,
+      "finished": false,
+      "error": null,
+      "loops": [
+        {
+          "id": "loop-1",
+          "source": "source-1",
+          "kind": "video",
+          "currentTime": 1.516688,
+          "rate": 1,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 37,
+          "decoded": {
+            "wall": 5780.1,
+            "mediaTime": 1.5,
+            "presentedFrames": 37
+          },
+          "rect": {
+            "x": 36,
+            "y": 39,
+            "width": 828,
+            "height": 390,
+            "top": 39,
+            "right": 864,
+            "bottom": 429,
+            "left": 36
+          },
+          "quality": {
+            "totalVideoFrames": 40,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-2",
+          "source": "source-2",
+          "kind": "video",
+          "currentTime": 1.932576,
+          "rate": 1.07,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 40,
+          "decoded": {
+            "wall": 5780.1,
+            "mediaTime": 1.916667,
+            "presentedFrames": 41
+          },
+          "rect": {
+            "x": 36,
+            "y": 481,
+            "width": 396,
+            "height": 234,
+            "top": 481,
+            "right": 432,
+            "bottom": 715,
+            "left": 36
+          },
+          "quality": {
+            "totalVideoFrames": 54,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-3",
+          "source": "source-3",
+          "kind": "video",
+          "currentTime": 2.348421,
+          "rate": 1.14,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 43,
+          "decoded": {
+            "wall": 5780.1,
+            "mediaTime": 2.333333,
+            "presentedFrames": 44
+          },
+          "rect": {
+            "x": 468,
+            "y": 481,
+            "width": 396,
+            "height": 234,
+            "top": 481,
+            "right": 864,
+            "bottom": 715,
+            "left": 468
+          },
+          "quality": {
+            "totalVideoFrames": 64,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-4",
+          "source": "source-4",
+          "kind": "video",
+          "currentTime": 2.76435,
+          "rate": 1.21,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 46,
+          "decoded": {
+            "wall": 5780.1,
+            "mediaTime": 2.75,
+            "presentedFrames": 46
+          },
+          "rect": {
+            "x": 36,
+            "y": 754,
+            "width": 252,
+            "height": 221,
+            "top": 754,
+            "right": 288,
+            "bottom": 975,
+            "left": 36
+          },
+          "quality": {
+            "totalVideoFrames": 74,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-5",
+          "source": "source-5",
+          "kind": "video",
+          "currentTime": 3.18028,
+          "rate": 1.28,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 48,
+          "decoded": {
+            "wall": 5780.1,
+            "mediaTime": 3.166667,
+            "presentedFrames": 49
+          },
+          "rect": {
+            "x": 324,
+            "y": 754,
+            "width": 252,
+            "height": 221,
+            "top": 754,
+            "right": 576,
+            "bottom": 975,
+            "left": 324
+          },
+          "quality": {
+            "totalVideoFrames": 84,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-6",
+          "source": "source-6",
+          "kind": "video",
+          "currentTime": 3.596219,
+          "rate": 1.35,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 49,
+          "decoded": {
+            "wall": 5780.1,
+            "mediaTime": 3.583333,
+            "presentedFrames": 51
+          },
+          "rect": {
+            "x": 612,
+            "y": 754,
+            "width": 252,
+            "height": 221,
+            "top": 754,
+            "right": 864,
+            "bottom": 975,
+            "left": 612
+          },
+          "quality": {
+            "totalVideoFrames": 94,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-7",
+          "source": "source-7",
+          "kind": "video",
+          "currentTime": 4.01187,
+          "rate": 1.42,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 54,
+          "decoded": {
+            "wall": 5780.1,
+            "mediaTime": 4,
+            "presentedFrames": 54
+          },
+          "rect": {
+            "x": 36,
+            "y": 1027,
+            "width": 828,
+            "height": 234,
+            "top": 1027,
+            "right": 864,
+            "bottom": 1261,
+            "left": 36
+          },
+          "quality": {
+            "totalVideoFrames": 104,
+            "droppedVideoFrames": 0
+          }
+        }
+      ],
+      "eventCount": 36
+    },
+    {
+      "frame": 48,
+      "wall": 6315.40000000014,
+      "orientation": "landscape",
+      "running": true,
+      "finished": false,
+      "error": null,
+      "loops": [
+        {
+          "id": "loop-1",
+          "source": "source-1",
+          "kind": "video",
+          "currentTime": 2.036451,
+          "rate": 1,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 50,
+          "decoded": {
+            "wall": 6313.4,
+            "mediaTime": 2.041667,
+            "presentedFrames": 50
+          },
+          "rect": {
+            "x": 25.3125,
+            "y": 19.5,
+            "width": 320.71875,
+            "height": 351,
+            "top": 19.5,
+            "right": 346.03125,
+            "bottom": 370.5,
+            "left": 25.3125
+          },
+          "quality": {
+            "totalVideoFrames": 53,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-2",
+          "source": "source-2",
+          "kind": "video",
+          "currentTime": 2.48871,
+          "rate": 1.07,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 54,
+          "decoded": {
+            "wall": 6313.4,
+            "mediaTime": 2.5,
+            "presentedFrames": 55
+          },
+          "rect": {
+            "x": 379.796875,
+            "y": 19.5,
+            "width": 202.546875,
+            "height": 101.390625,
+            "top": 19.5,
+            "right": 582.34375,
+            "bottom": 120.890625,
+            "left": 379.796875
+          },
+          "quality": {
+            "totalVideoFrames": 68,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-3",
+          "source": "source-3",
+          "kind": "video",
+          "currentTime": 2.940938,
+          "rate": 1.14,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 58,
+          "decoded": {
+            "wall": 6313.4,
+            "mediaTime": 2.958333,
+            "presentedFrames": 59
+          },
+          "rect": {
+            "x": 616.109375,
+            "y": 19.5,
+            "width": 202.546875,
+            "height": 101.390625,
+            "top": 19.5,
+            "right": 818.65625,
+            "bottom": 120.890625,
+            "left": 616.109375
+          },
+          "quality": {
+            "totalVideoFrames": 79,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-4",
+          "source": "source-4",
+          "kind": "video",
+          "currentTime": 3.393247,
+          "rate": 1.21,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 62,
+          "decoded": {
+            "wall": 6313.4,
+            "mediaTime": 3.416667,
+            "presentedFrames": 62
+          },
+          "rect": {
+            "x": 379.796875,
+            "y": 140.390625,
+            "width": 202.546875,
+            "height": 109.1875,
+            "top": 140.390625,
+            "right": 582.34375,
+            "bottom": 249.578125,
+            "left": 379.796875
+          },
+          "quality": {
+            "totalVideoFrames": 90,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-5",
+          "source": "source-5",
+          "kind": "video",
+          "currentTime": 3.84556,
+          "rate": 1.28,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 64,
+          "decoded": {
+            "wall": 6313.4,
+            "mediaTime": 3.833333,
+            "presentedFrames": 65
+          },
+          "rect": {
+            "x": 616.109375,
+            "y": 140.390625,
+            "width": 202.546875,
+            "height": 109.1875,
+            "top": 140.390625,
+            "right": 818.65625,
+            "bottom": 249.578125,
+            "left": 616.109375
+          },
+          "quality": {
+            "totalVideoFrames": 101,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-6",
+          "source": "source-6",
+          "kind": "video",
+          "currentTime": 4.297879,
+          "rate": 1.35,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 66,
+          "decoded": {
+            "wall": 6313.4,
+            "mediaTime": 4.291667,
+            "presentedFrames": 68
+          },
+          "rect": {
+            "x": 379.796875,
+            "y": 269.09375,
+            "width": 202.546875,
+            "height": 101.390625,
+            "top": 269.09375,
+            "right": 582.34375,
+            "bottom": 370.484375,
+            "left": 379.796875
+          },
+          "quality": {
+            "totalVideoFrames": 112,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-7",
+          "source": "source-7",
+          "kind": "video",
+          "currentTime": 4.749917,
+          "rate": 1.42,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 72,
+          "decoded": {
+            "wall": 6313.4,
+            "mediaTime": 4.75,
+            "presentedFrames": 72
+          },
+          "rect": {
+            "x": 616.109375,
+            "y": 269.09375,
+            "width": 202.546875,
+            "height": 101.390625,
+            "top": 269.09375,
+            "right": 818.65625,
+            "bottom": 370.484375,
+            "left": 616.109375
+          },
+          "quality": {
+            "totalVideoFrames": 123,
+            "droppedVideoFrames": 0
+          }
+        }
+      ],
+      "eventCount": 37
+    },
+    {
+      "frame": 60,
+      "wall": 6807,
+      "orientation": "portrait",
+      "running": true,
+      "finished": false,
+      "error": null,
+      "loops": [
+        {
+          "id": "loop-1",
+          "source": "source-1",
+          "kind": "video",
+          "currentTime": 2.528028,
+          "rate": 1,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 61,
+          "decoded": {
+            "wall": 6780,
+            "mediaTime": 2.5,
+            "presentedFrames": 61
+          },
+          "rect": {
+            "x": 15.59375,
+            "y": 25.3125,
+            "width": 358.796875,
+            "height": 253.1875,
+            "top": 25.3125,
+            "right": 374.390625,
+            "bottom": 278.5,
+            "left": 15.59375
+          },
+          "quality": {
+            "totalVideoFrames": 65,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-2",
+          "source": "source-2",
+          "kind": "video",
+          "currentTime": 3.014718,
+          "rate": 1.07,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 66,
+          "decoded": {
+            "wall": 6796.7,
+            "mediaTime": 3,
+            "presentedFrames": 67
+          },
+          "rect": {
+            "x": 15.59375,
+            "y": 312.265625,
+            "width": 171.59375,
+            "height": 151.90625,
+            "top": 312.265625,
+            "right": 187.1875,
+            "bottom": 464.171875,
+            "left": 15.59375
+          },
+          "quality": {
+            "totalVideoFrames": 81,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-3",
+          "source": "source-3",
+          "kind": "video",
+          "currentTime": 3.50136,
+          "rate": 1.14,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 70,
+          "decoded": {
+            "wall": 6763.4,
+            "mediaTime": 3.458333,
+            "presentedFrames": 71
+          },
+          "rect": {
+            "x": 202.796875,
+            "y": 312.265625,
+            "width": 171.59375,
+            "height": 151.90625,
+            "top": 312.265625,
+            "right": 374.390625,
+            "bottom": 464.171875,
+            "left": 202.796875
+          },
+          "quality": {
+            "totalVideoFrames": 92,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-4",
+          "source": "source-4",
+          "kind": "video",
+          "currentTime": 3.988085,
+          "rate": 1.21,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 75,
+          "decoded": {
+            "wall": 6780,
+            "mediaTime": 3.958333,
+            "presentedFrames": 75
+          },
+          "rect": {
+            "x": 15.59375,
+            "y": 489.515625,
+            "width": 109.1875,
+            "height": 143.46875,
+            "top": 489.515625,
+            "right": 124.78125,
+            "bottom": 632.984375,
+            "left": 15.59375
+          },
+          "quality": {
+            "totalVideoFrames": 104,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-5",
+          "source": "source-5",
+          "kind": "video",
+          "currentTime": 4.474812,
+          "rate": 1.28,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 79,
+          "decoded": {
+            "wall": 6796.7,
+            "mediaTime": 4.458333,
+            "presentedFrames": 80
+          },
+          "rect": {
+            "x": 140.390625,
+            "y": 489.515625,
+            "width": 109.1875,
+            "height": 143.46875,
+            "top": 489.515625,
+            "right": 249.578125,
+            "bottom": 632.984375,
+            "left": 140.390625
+          },
+          "quality": {
+            "totalVideoFrames": 116,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-6",
+          "source": "source-6",
+          "kind": "video",
+          "currentTime": 4.961545,
+          "rate": 1.35,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 81,
+          "decoded": {
+            "wall": 6796.7,
+            "mediaTime": 4.958333,
+            "presentedFrames": 84
+          },
+          "rect": {
+            "x": 265.1875,
+            "y": 489.515625,
+            "width": 109.1875,
+            "height": 143.46875,
+            "top": 489.515625,
+            "right": 374.375,
+            "bottom": 632.984375,
+            "left": 265.1875
+          },
+          "quality": {
+            "totalVideoFrames": 127,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-7",
+          "source": "source-7",
+          "kind": "video",
+          "currentTime": 5.447996,
+          "rate": 1.42,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 87,
+          "decoded": {
+            "wall": 6763.4,
+            "mediaTime": 5.416667,
+            "presentedFrames": 88
+          },
+          "rect": {
+            "x": 15.59375,
+            "y": 666.75,
+            "width": 358.796875,
+            "height": 151.90625,
+            "top": 666.75,
+            "right": 374.390625,
+            "bottom": 818.65625,
+            "left": 15.59375
+          },
+          "quality": {
+            "totalVideoFrames": 139,
+            "droppedVideoFrames": 0
+          }
+        }
+      ],
+      "eventCount": 38
+    }
+  ],
+  "events": [
+    {
+      "type": "source",
+      "id": "loop-1",
+      "frame": 0,
+      "wall": 4217.100000000093,
+      "source": "source-1"
+    },
+    {
+      "type": "source",
+      "id": "loop-2",
+      "frame": 0,
+      "wall": 4217.5,
+      "source": "source-2"
+    },
+    {
+      "type": "source",
+      "id": "loop-3",
+      "frame": 0,
+      "wall": 4217.700000000186,
+      "source": "source-3"
+    },
+    {
+      "type": "source",
+      "id": "loop-4",
+      "frame": 0,
+      "wall": 4218,
+      "source": "source-4"
+    },
+    {
+      "type": "source",
+      "id": "loop-5",
+      "frame": 0,
+      "wall": 4218.100000000093,
+      "source": "source-5"
+    },
+    {
+      "type": "source",
+      "id": "loop-6",
+      "frame": 0,
+      "wall": 4218.40000000014,
+      "source": "source-6"
+    },
+    {
+      "type": "source",
+      "id": "loop-7",
+      "frame": 0,
+      "wall": 4218.600000000093,
+      "source": "source-7"
+    },
+    {
+      "type": "loadstart",
+      "id": "loop-1",
+      "frame": 0,
+      "wall": 4223.5
+    },
+    {
+      "type": "loadstart",
+      "id": "loop-2",
+      "frame": 0,
+      "wall": 4223.600000000093
+    },
+    {
+      "type": "loadstart",
+      "id": "loop-3",
+      "frame": 0,
+      "wall": 4224
+    },
+    {
+      "type": "loadstart",
+      "id": "loop-4",
+      "frame": 0,
+      "wall": 4226
+    },
+    {
+      "type": "loadstart",
+      "id": "loop-5",
+      "frame": 0,
+      "wall": 4226
+    },
+    {
+      "type": "loadstart",
+      "id": "loop-6",
+      "frame": 0,
+      "wall": 4226
+    },
+    {
+      "type": "loadstart",
+      "id": "loop-7",
+      "frame": 0,
+      "wall": 4226
+    },
+    {
+      "type": "seek-command",
+      "id": "loop-2",
+      "frame": 0,
+      "wall": 4238.5,
+      "target": 0.31,
+      "reason": "initial"
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 4239.300000000047,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "seek-command",
+      "id": "loop-5",
+      "frame": 0,
+      "wall": 4239.5,
+      "target": 1.24,
+      "reason": "initial"
+    },
+    {
+      "type": "seek-command",
+      "id": "loop-7",
+      "frame": 0,
+      "wall": 4239.700000000186,
+      "target": 1.86,
+      "reason": "initial"
+    },
+    {
+      "type": "seek-command",
+      "id": "loop-4",
+      "frame": 0,
+      "wall": 4239.90000000014,
+      "target": 0.93,
+      "reason": "initial"
+    },
+    {
+      "type": "seeking",
+      "id": "loop-2",
+      "frame": 0,
+      "wall": 4240.100000000093
+    },
+    {
+      "type": "seek-command",
+      "id": "loop-3",
+      "frame": 0,
+      "wall": 4240.100000000093,
+      "target": 0.62,
+      "reason": "initial"
+    },
+    {
+      "type": "seeking",
+      "id": "loop-5",
+      "frame": 0,
+      "wall": 4240.200000000186
+    },
+    {
+      "type": "seeking",
+      "id": "loop-7",
+      "frame": 0,
+      "wall": 4240.200000000186
+    },
+    {
+      "type": "seek-command",
+      "id": "loop-6",
+      "frame": 0,
+      "wall": 4240.200000000186,
+      "target": 1.55,
+      "reason": "initial"
+    },
+    {
+      "type": "seeking",
+      "id": "loop-4",
+      "frame": 0,
+      "wall": 4240.600000000093
+    },
+    {
+      "type": "seeking",
+      "id": "loop-3",
+      "frame": 0,
+      "wall": 4240.600000000093
+    },
+    {
+      "type": "seeking",
+      "id": "loop-6",
+      "frame": 0,
+      "wall": 4240.700000000186
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 4246.200000000186,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 4249.90000000014,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 4255.40000000014,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 4255.5,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 4257.40000000014,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 4257.90000000014,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 4258,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 12,
+      "wall": 4815,
+      "orientation": "landscape",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 25,
+      "wall": 5347.300000000047,
+      "orientation": "portrait",
+      "width": 900,
+      "height": 1300
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 38,
+      "wall": 5864.200000000186,
+      "orientation": "landscape",
+      "width": 844,
+      "height": 390
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 50,
+      "wall": 6364.100000000093,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    }
+  ]
+}

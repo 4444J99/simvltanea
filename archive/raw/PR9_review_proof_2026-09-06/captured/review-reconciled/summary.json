@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "transport": "in-memory",
+  "python": "3.13.5",
+  "status": "passed",
+  "groups": [
+    {
+      "tests_run": 58,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "model",
+      "elapsed_seconds": 16.067,
+      "tests": [
+        "test_composition_model",
+        "test_authoring_contract",
+        "test_composition_render",
+        "test_browser_runtime.PlanTests",
+        "test_browser_boundaries.PlanBoundaryTests"
+      ]
+    },
+    {
+      "tests_run": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "counts-3-5",
+      "elapsed_seconds": 21.141,
+      "tests": [
+        "test_browser_runtime.BrowserTests.test_3_loop_native_continuity",
+        "test_browser_runtime.BrowserTests.test_4_loop_native_continuity",
+        "test_browser_runtime.BrowserTests.test_5_loop_native_continuity"
+      ]
+    },
+    {
+      "tests_run": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "counts-6-7",
+      "elapsed_seconds": 19.238,
+      "tests": [
+        "test_browser_runtime.BrowserTests.test_6_loop_native_continuity",
+        "test_browser_runtime.BrowserTests.test_7_loop_experimental_continuity"
+      ]
+    },
+    {
+      "tests_run": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "load-resize",
+      "elapsed_seconds": 10.559,
+      "tests": [
+        "test_browser_runtime.BrowserTests.test_container_resize_without_viewport_change",
+        "test_browser_runtime.BrowserTests.test_browser_rejects_altered_media_before_mounting",
+        "test_browser_runtime.BrowserTests.test_resize_while_media_is_loading"
+      ]
+    },
+    {
+      "tests_run": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "controls",
+      "elapsed_seconds": 20.428,
+      "tests": [
+        "test_browser_runtime.BrowserTests.test_native_controls_hold_release_swap_reroll_move",
+        "test_browser_runtime.BrowserTests.test_native_trim_loop_boundaries"
+      ]
+    },
+    {
+      "tests_run": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "invalid-input",
+      "elapsed_seconds": 9.651,
+      "tests": [
+        "test_browser_boundaries.NativeBoundaryTests.test_invalid_plan_rejected_before_media_io_or_mount",
+        "test_browser_boundaries.NativeBoundaryTests.test_error_during_start_cannot_be_overwritten_by_playing"
+      ]
+    },
+    {
+      "tests_run": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "shared-hidden",
+      "elapsed_seconds": 12.469,
+      "tests": [
+        "test_browser_boundaries.NativeBoundaryTests.test_explicit_source_reuse_preserves_independent_clocks_through_resize",
+        "test_browser_boundaries.NativeBoundaryTests.test_zero_size_container_restores_without_reset"
+      ]
+    },
+    {
+      "tests_run": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "hold-still",
+      "elapsed_seconds": 20.204,
+      "tests": [
+        "test_browser_boundaries.NativeBoundaryTests.test_hold_resize_release_and_finish_are_not_restarts",
+        "test_browser_boundaries.NativeBoundaryTests.test_still_video_swap_preserves_loop_boxes_and_unrelated_video"
+      ]
+    },
+    {
+      "tests_run": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "independent-a",
+      "elapsed_seconds": 26.114,
+      "tests": [
+        "test_browser_continuity.ContinuityTests.test_3",
+        "test_browser_continuity.ContinuityTests.test_4",
+        "test_browser_continuity.ContinuityTests.test_5",
+        "test_browser_continuity.ContinuityTests.test_6"
+      ]
+    },
+    {
+      "tests_run": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "independent-b",
+      "elapsed_seconds": 23.358,
+      "tests": [
+        "test_browser_continuity.ContinuityTests.test_7_experimental",
+        "test_browser_continuity.ContinuityTests.test_container_only",
+        "test_browser_continuity.ContinuityTests.test_held_loop_survives_resize",
+        "test_browser_continuity.ContinuityTests.test_reject_wrong_layout"
+      ]
+    },
+    {
+      "tests_run": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "independent-c",
+      "elapsed_seconds": 16.483,
+      "tests": [
+        "test_browser_continuity.ContinuityTests.test_reject_time_reset",
+        "test_browser_continuity.ContinuityTests.test_reject_same_source_reload",
+        "test_browser_continuity.ContinuityTests.test_reject_source_reroll",
+        "test_browser_continuity.ContinuityTests.test_reject_transient_duplicate"
+      ]
+    },
+    {
+      "tests_run": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "unexpected_successes": 0,
+      "status": "passed",
+      "exit_code": 0,
+      "group": "independent-d",
+      "elapsed_seconds": 16.436,
+      "tests": [
+        "test_browser_continuity.ContinuityTests.test_reject_transient_removal",
+        "test_browser_continuity.ContinuityTests.test_reject_same_id_replacement",
+        "test_browser_continuity.ContinuityTests.test_reject_pause",
+        "test_browser_continuity.ContinuityTests.test_reject_rate_change"
+      ]
+    }
+  ],
+  "scope": "incubator-only; not a whole-repository or hosted-CI check",
+  "demonstrated": {
+    "local_narrow_tests": true,
+    "served_http": false,
+    "physical_device": false,
+    "historical_original": false,
+    "deployment": false,
+    "artist_approval": false
+  },
+  "totals": {
+    "tests_run": 90,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "unexpected_successes": 0
+  },
+  "complete_group_set": true,
+  "source_sha256": {
+    "artifact001_layouts.py": "48d75f432cb37492073ef9fdb1ad6d94737b6745edab3fc1946e86bf2cfe7aab",
+    "browser_continuity_probe.js": "87e1a012f0e19ade631cc95ab34560ca0dfcd294e11052a77629588af3a7eb7b",
+    "browser_runtime.js": "be1e9a960815839dd623bf154922b7877fee6489ccf3b5857c5e9cf61ed3a0dd",
+    "browser_runtime.py": "3481dbdb4f2eea90145097545c8256f9fcc374358cda530543427a900feb1fa4",
+    "composition.py": "58c203e387d5592c10c1209ff321e66fbb474659c6371404fb7b878fe162dcce",
+    "composition_model.py": "8e8cbad76eae99ffd55e4e317b5280d846bf2d9bc313120166d09426218718d8",
+    "make_artifact_001.py": "fc508e4bf18fed21f16bd181af0dd1ee6fa02903dae304305eb45fe9abdbc4b0",
+    "make_runtime_fixture.py": "87f0cb14c1fd29c291247d15a4e785f43a69b21f3c879e0b3b24294848429942",
+    "render_runtime_family.py": "4294b3e792589cbfff7c64b186eccb34146111b83a920a15f7ba674d98d32a42",
+    "render_triptych.py": "5f3792459e86fe330cf720e6ba2a50af35775b16ff44d2435854257f1ab8f933",
+    "run_review_proof.py": "50784e9069bea0c28fb4615f6285a84b9d4b15bdcdd5a434b5cf7c704b903059",
+    "test_authoring_contract.py": "b9b8d5eae983a3f420350858c879e38c5455d6f09e1b7257b4c67d63fc135369",
+    "test_browser_boundaries.py": "57d144bbbeb3a897fb0dfc84efa800f6db131a6a6aa97af89a85c78f15cc2490",
+    "test_browser_continuity.py": "afad89fc614894a3d2c7a29d71413b623995eb037c34639310c601caf9959537",
+    "test_browser_runtime.py": "9515ace6e69e0541b5e026cd2c257e2c82df41ba1e3b7240b8eeb7e37eba770a",
+    "test_composition_model.py": "d6016a97a104ce42e8bd162db44900f2e7c698876ab75bc6439ab6488796c020",
+    "test_composition_render.py": "7ce1596ab941136db9349382e0f28b6c80db0001cd48b4008fed704eba1aad57",
+    "verify_legacy_decoded.py": "3203ae3a6406b90d71b1ff3706aacd1410590a1af7d2a080460c2a6e3be4305c",
+    "verify_runtime_renders.py": "e453024b0bc8e80fb7a175e847ead24514c9c82090934dc0923f5c55ad7f52f1"
+  }
+}

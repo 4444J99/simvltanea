@@ -1,0 +1,29 @@
+{
+  "repository": "organvm/portvs",
+  "pull_request": 9,
+  "issue": 8,
+  "branch": "work/n-loop-paired-compositions-2026-09-05",
+  "final_head": "beecfee905cb2685b7c71ede13a1955faed6c153",
+  "tested_code_commit": "d523af18797996d9fc3b1446dfb1238cef7bbfbd",
+  "main": "48da3da293ecd7604b6c9d3ce19d0bf49a70013d",
+  "commits": 11,
+  "state": "open",
+  "draft": true,
+  "merged": false,
+  "code_commit_files": 5,
+  "receipt_commit_files": 3,
+  "receipt_blobs": {
+    "INCUBATION.md": "e785e6fb0542febb51f69715d1a758610f3983a1",
+    "REVIEW_READINESS_RECEIPT.md": "1cf1473090a99b2df897296bf44791a7e70d69a6",
+    "REVIEW_READINESS_EVIDENCE.json": "aebf43a1b6ce74c6030c426538ca2981e6e8a500"
+  },
+  "issue_comment_id": 5558628476,
+  "final_head_check": {
+    "name": "Analyze (python)",
+    "run_id": 34027486951,
+    "check_id": 101470947653,
+    "conclusion": "failure",
+    "cause": "unknown",
+    "completed_at": "2026-09-06T10:27:53Z"
+  }
+}

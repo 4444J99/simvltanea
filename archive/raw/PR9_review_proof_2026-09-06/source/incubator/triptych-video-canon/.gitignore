@@ -1,0 +1,27 @@
+samples/*
+!samples/.gitkeep
+
+renders/*
+!renders/.gitkeep
+
+work/*
+!work/.gitkeep
+
+site/*
+!site/.gitkeep
+
+packages/*
+!packages/.gitkeep
+
+__pycache__/
+.DS_Store
+
+# Generated synthetic media/exports stay local; only regression inputs are tracked.
+artifact-001/*
+!artifact-001/baseline-manifest.json
+!artifact-001/baseline/
+artifact-001/baseline/*
+!artifact-001/baseline/render_triptych.original.py
+
+# Generated labeled media, browser copies and runtime evidence stay local.
+runtime-proof/

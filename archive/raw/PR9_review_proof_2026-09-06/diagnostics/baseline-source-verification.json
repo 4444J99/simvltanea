@@ -1,0 +1,14 @@
+[
+  {
+    "path": "artifact-001/baseline-manifest.json",
+    "expected_git_blob": "43083a34c08e56296e9a608c602272cd108361a7",
+    "actual_git_blob": "43083a34c08e56296e9a608c602272cd108361a7",
+    "verified": true
+  },
+  {
+    "path": "artifact-001/baseline/render_triptych.original.py",
+    "expected_git_blob": "6155fa1b8c9d5284c3deda0eaf56b342e47cf1bc",
+    "actual_git_blob": "6155fa1b8c9d5284c3deda0eaf56b342e47cf1bc",
+    "verified": true
+  }
+]

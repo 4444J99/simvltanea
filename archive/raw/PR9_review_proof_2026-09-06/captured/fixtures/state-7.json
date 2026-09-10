@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "engine_version": "1.0.0",
+  "rng": "sha256-counter-v1",
+  "seed": 444499,
+  "fps": 24,
+  "frames": 144,
+  "allow_source_reuse": false,
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "media/source-1.mp4",
+      "sha256": "8589a9471aa7e336e687bc96a6336e203d4c7f2a46e8bca657c2d69ea9e7485a",
+      "kind": "video",
+      "duration": "8"
+    },
+    {
+      "id": "source-2",
+      "path": "media/source-2.mp4",
+      "sha256": "67d0e0899217e9caece2be7e818d6a36c7e3632444317400fc51fd9f40687fcd",
+      "kind": "video",
+      "duration": "8"
+    },
+    {
+      "id": "source-3",
+      "path": "media/source-3.mp4",
+      "sha256": "51d02dcafb7d74a967a2d08af5d58c03396871b591607054a488daebf0de0536",
+      "kind": "video",
+      "duration": "8"
+    },
+    {
+      "id": "source-4",
+      "path": "media/source-4.mp4",
+      "sha256": "3017ae6d170254d1cbd4da31543a5d9e3cdcf8b34c18453f22e2fc1f9d6340a7",
+      "kind": "video",
+      "duration": "8"
+    },
+    {
+      "id": "source-5",
+      "path": "media/source-5.mp4",
+      "sha256": "92a509b8427b4cbab73cfbaee6b9c03b2f16c0599d3ca8d7982cb02e7647aa20",
+      "kind": "video",
+      "duration": "8"
+    },
+    {
+      "id": "source-6",
+      "path": "media/source-6.mp4",
+      "sha256": "b95c865f378f188c37c26882ba6343ac4ef10cd814c0442751bb54452edbfbac",
+      "kind": "video",
+      "duration": "8"
+    },
+    {
+      "id": "source-7",
+      "path": "media/source-7.mp4",
+      "sha256": "e394908b0b893421d4a4d7af9aac3f2d9238b458191edfe2ceb528edbcfe8411",
+      "kind": "video",
+      "duration": "8"
+    }
+  ],
+  "loops": [
+    {
+      "id": "loop-1",
+      "bank": [
+        "source-1"
+      ],
+      "offset": "0",
+      "rate": "1",
+      "period": "8",
+      "epoch": 0,
+      "held": false
+    },
+    {
+      "id": "loop-2",
+      "bank": [
+        "source-2"
+      ],
+      "offset": "31/100",
+      "rate": "107/100",
+      "period": "8",
+      "epoch": 0,
+      "held": false
+    },
+    {
+      "id": "loop-3",
+      "bank": [
+        "source-3"
+      ],
+      "offset": "31/50",
+      "rate": "57/50",
+      "period": "8",
+      "epoch": 0,
+      "held": false
+    },
+    {
+      "id": "loop-4",
+      "bank": [
+        "source-4"
+      ],
+      "offset": "93/100",
+      "rate": "121/100",
+      "period": "8",
+      "epoch": 0,
+      "held": false
+    },
+    {
+      "id": "loop-5",
+      "bank": [
+        "source-5"
+      ],
+      "offset": "31/25",
+      "rate": "32/25",
+      "period": "8",
+      "epoch": 0,
+      "held": false
+    },
+    {
+      "id": "loop-6",
+      "bank": [
+        "source-6"
+      ],
+      "offset": "31/20",
+      "rate": "27/20",
+      "period": "8",
+      "epoch": 0,
+      "held": false
+    },
+    {
+      "id": "loop-7",
+      "bank": [
+        "source-7"
+      ],
+      "offset": "93/50",
+      "rate": "71/50",
+      "period": "8",
+      "epoch": 0,
+      "held": false
+    }
+  ],
+  "layouts": {
+    "portrait": {
+      "name": "experimental-seven-portrait",
+      "cells": [
+        {
+          "loop": "loop-1",
+          "rect": [
+            "4/100",
+            "3/100",
+            "92/100",
+            "30/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-2",
+          "rect": [
+            "4/100",
+            "37/100",
+            "44/100",
+            "18/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-3",
+          "rect": [
+            "52/100",
+            "37/100",
+            "44/100",
+            "18/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-4",
+          "rect": [
+            "4/100",
+            "58/100",
+            "28/100",
+            "17/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-5",
+          "rect": [
+            "36/100",
+            "58/100",
+            "28/100",
+            "17/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-6",
+          "rect": [
+            "68/100",
+            "58/100",
+            "28/100",
+            "17/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-7",
+          "rect": [
+            "4/100",
+            "79/100",
+            "92/100",
+            "18/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        }
+      ]
+    },
+    "landscape": {
+      "name": "experimental-seven-landscape",
+      "cells": [
+        {
+          "loop": "loop-1",
+          "rect": [
+            "3/100",
+            "5/100",
+            "38/100",
+            "90/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-2",
+          "rect": [
+            "45/100",
+            "5/100",
+            "24/100",
+            "26/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-3",
+          "rect": [
+            "73/100",
+            "5/100",
+            "24/100",
+            "26/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-4",
+          "rect": [
+            "45/100",
+            "36/100",
+            "24/100",
+            "28/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-5",
+          "rect": [
+            "73/100",
+            "36/100",
+            "24/100",
+            "28/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-6",
+          "rect": [
+            "45/100",
+            "69/100",
+            "24/100",
+            "26/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        },
+        {
+          "loop": "loop-7",
+          "rect": [
+            "73/100",
+            "69/100",
+            "24/100",
+            "26/100"
+          ],
+          "fit": "contain",
+          "focal": [
+            "1/2",
+            "1/2"
+          ]
+        }
+      ]
+    }
+  },
+  "events": [],
+  "audio": {
+    "mode": "none",
+    "routing": null,
+    "generative": null
+  }
+}

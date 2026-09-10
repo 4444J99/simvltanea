@@ -1,0 +1,14 @@
+{
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "-v",
+    "test_browser_continuity.ContinuityTests.test_3"
+  ],
+  "transport": "http (default; override absent)",
+  "exit_code": 1,
+  "passed": false,
+  "log_sha256": "9535fee85e413f49349482b56d1fb9058be09bba3112f5e58e5e69c7b32478ea",
+  "code_commit": "d523af18797996d9fc3b1446dfb1238cef7bbfbd"
+}

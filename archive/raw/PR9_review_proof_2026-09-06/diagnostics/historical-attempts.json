@@ -1,0 +1,42 @@
+{
+  "date_utc": "2026-09-06",
+  "original_bytes_inspected": 0,
+  "historical_gates_closed": [],
+  "attempts": [
+    {
+      "source": "Up the Hill Backwards MP4",
+      "metadata_resolved": true,
+      "expected_bytes": 199654595,
+      "raw_bytes_retrieved": false,
+      "error_class": "ConnectionError",
+      "signed_url_published": false
+    },
+    {
+      "source": "Floating Points V1 Premiere project",
+      "indexed_locator_resolved": true,
+      "original_download_result": "NOT_FOUND",
+      "raw_bytes_retrieved": false
+    },
+    {
+      "source": "TripTicks MOV",
+      "metadata_resolved": true,
+      "expected_bytes": 595564647,
+      "raw_bytes_retrieved": false,
+      "transfer_result": "container download adapter required prior web URL viewing; private signed URL was not opened through web"
+    },
+    {
+      "source": "earlier selector / First Circle",
+      "result": "targeted Library and Dropbox searches did not establish exact implementation identity"
+    },
+    {
+      "source": "Narcissus audiovisual work",
+      "result": "targeted Library and Dropbox searches did not establish audiovisual identity; similarly named literary PDF not substituted"
+    }
+  ],
+  "limits": [
+    "Indexed locators are not byte possession",
+    "Provider content_hash is not an ordinary whole-file SHA-256",
+    "No private path, file ID, signed URL, raw project or media is published",
+    "No frame topology, XML object graph, dependency integrity, layer count or artist approval is inferred"
+  ]
+}

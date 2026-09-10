@@ -1,0 +1,1029 @@
+{
+  "schema_version": "1.0",
+  "title": "Persona — GitHub repository research map",
+  "observed_on": "2026-09-05",
+  "record_id_namespace": "PER-GH; local identifiers for this map, not asserted to replace an existing project-wide registry",
+  "scope": "Selected verified repositories and a metadata-only discovery queue; not an exhaustive census of every branch, artifact, or organization.",
+  "counts_by_tier": {
+    "working_core": 12,
+    "research_ring": 5,
+    "publishing_performance_support": 6,
+    "partner_comparator": 2,
+    "discovery_queue": 7,
+    "historical_not_write_target": 4,
+    "excluded_false_lead": 1
+  },
+  "verification_limits": [
+    "Authenticated GitHub repository metadata and selected files/trees were inspected.",
+    "No build, test suite, media render or deployed service was executed in this audit.",
+    "README statements are repository claims, not independent verification of deployment or performance.",
+    "No GitHub repository was modified and no Copilot session was launched.",
+    "The user's Copilot balance, plan, repository enablement and Actions availability were not inspected.",
+    "The older Portvs census counts and probe failures are historical document assertions, not a newly reproduced census."
+  ],
+  "unresolved_work_mappings": [
+    {
+      "work": "Triptych / Tryptich",
+      "status": "Project directory verified",
+      "location": "organvm/portvs/incubator/triptych-video-canon/",
+      "gap": "Exact original film / The First Circle / current selector lineage and remote source-media availability still require file-level reconciliation."
+    },
+    {
+      "work": "Floating Points",
+      "status": "No independent dedicated-repository or exact source-file mapping established in this audit"
+    },
+    {
+      "work": "Up the Hill Backwards",
+      "status": "No independent dedicated-repository or exact quad-panel source-file mapping established in this audit"
+    }
+  ],
+  "governing_research_boundary": {
+    "existing_visual_form_workspace": "organvm/portvs/incubator/triptych-video-canon/",
+    "final_runtime_owner": "Unresolved in inspected Visual Form Canon",
+    "rules": [
+      "Do not create a new persona monorepo merely to consolidate names.",
+      "Keep research coordination distinct from per-repository implementation ownership.",
+      "Do not mutate Limen, config/_limen, graph.jsonl, or adjacent implementation repositories during the Portvs incubation pass.",
+      "Public tracked findings must be sanitized; private prompt excerpts, personal/partner material and raw source receipts remain private.",
+      "A remote source-code repository does not imply that media referenced by local Mac paths is remotely available."
+    ]
+  },
+  "copilot_references": [
+    {
+      "title": "Usage-based billing for individuals",
+      "url": "https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-individuals",
+      "checked_on": "2026-09-05"
+    },
+    {
+      "title": "About Copilot cloud agent",
+      "url": "https://docs.github.com/en/copilot/concepts/agents/cloud-agent/about-cloud-agent",
+      "checked_on": "2026-09-05"
+    }
+  ],
+  "repositories": [
+    {
+      "id": "PER-GH-001",
+      "repository": "organvm/portvs",
+      "github_repository_id": 1257137342,
+      "url": "https://github.com/organvm/portvs",
+      "tier": "working_core",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "lineage",
+        "triptych",
+        "visual-form",
+        "research-coordination"
+      ],
+      "annotation": "Existing Visual Form Canon and Triptych incubation workspace. The visual-form documentation keeps lineage here while leaving final runtime ownership unresolved; Portvs should not absorb the other repositories.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/portvs",
+          "path": "incubator/triptych-video-canon/VISUAL_FORM_CANON.md",
+          "url": "https://github.com/organvm/portvs/blob/main/incubator/triptych-video-canon/VISUAL_FORM_CANON.md",
+          "file_blob_sha": "c2ae79c9c4fd864897ee5e891758f2a63628636d",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Inspect the existing Triptych project and reconcile work titles, source locators, renderer paths, and current ownership. Follow the no-adjacent-mutations and public/private receipt rules."
+    },
+    {
+      "id": "PER-GH-002",
+      "repository": "organvm/the-thing-without-a-name",
+      "github_repository_id": 1320324017,
+      "url": "https://github.com/organvm/the-thing-without-a-name",
+      "tier": "working_core",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "danse",
+        "photography",
+        "generative-image",
+        "browser",
+        "capture"
+      ],
+      "annotation": "Canonical source repository for Danse. Its README distinguishes a browser artwork evidenced at an earlier commit from a broader project package that remains draft with open approval and publication gates.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/the-thing-without-a-name",
+          "path": "README.md",
+          "url": "https://github.com/organvm/the-thing-without-a-name/blob/main/README.md",
+          "file_blob_sha": "7bbfee86ad9a29509e8c026413b2c1e84b0a1c42",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Map seeded composition, panel/fragment selection, temporal behavior, sound coupling, capture, and release evidence without treating README claims as new runtime proof."
+    },
+    {
+      "id": "PER-GH-003",
+      "repository": "organvm-ii-poiesis/a-mavs-olevm",
+      "github_repository_id": 924834822,
+      "url": "https://github.com/organvm-ii-poiesis/a-mavs-olevm",
+      "tier": "working_core",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "etceter4",
+        "website-as-art",
+        "music",
+        "chambers",
+        "generative-web"
+      ],
+      "annotation": "Source for the ET CETER4 / Pantheon creative site. The documented project combines music, writing, visual art, diary material, and nonlinear chambers rather than functioning only as a conventional portfolio.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm-ii-poiesis/a-mavs-olevm",
+          "path": "README.md",
+          "url": "https://github.com/organvm-ii-poiesis/a-mavs-olevm/blob/main/README.md",
+          "file_blob_sha": "ed565331ceecf7d7e9eaaf2ddb81cee6bc7af61f",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Inventory actual creative modules and historical media references; separate existing navigation/runtime behavior from proposed chambers."
+    },
+    {
+      "id": "PER-GH-004",
+      "repository": "organvm/alchemical-synthesizer",
+      "github_repository_id": 1157553907,
+      "url": "https://github.com/organvm/alchemical-synthesizer",
+      "tier": "working_core",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "brahma",
+        "forge",
+        "aether",
+        "audio",
+        "visual-cortex",
+        "streaming"
+      ],
+      "annotation": "One repository containing Brahma's synthesis/visual engine, Forge's audio-to-track-and-visual production lane, and AETHER's living-radio streaming lane. These are components, not three verified independent repositories.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/alchemical-synthesizer",
+          "path": "README.md",
+          "url": "https://github.com/organvm/alchemical-synthesizer/blob/main/README.md",
+          "file_blob_sha": "67bfc5e040dfb302aab13df1a80a2df20cfb308b",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Inspect ORGANS.md and the three component boundaries; identify remote-testable smoke checks and hardware-dependent functionality."
+    },
+    {
+      "id": "PER-GH-005",
+      "repository": "organvm/metasystem-master",
+      "github_repository_id": 1124366412,
+      "url": "https://github.com/organvm/metasystem-master",
+      "tier": "working_core",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "omni-dromenon",
+        "performance",
+        "audience-participation",
+        "control"
+      ],
+      "annotation": "Omni-Dromenon performance engine: the documentation describes audience parameter input, consensus aggregation, performer override, and an OSC bridge. Relevance is live participatory performance, not a claim that the current deployment has been tested.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/metasystem-master",
+          "path": "README.md",
+          "url": "https://github.com/organvm/metasystem-master/blob/main/README.md",
+          "file_blob_sha": "b98ba20247ad0023dd5aa03b0f7f2ff215eb4204",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Inspect current branches and existing reproducibility work before proposing changes. Trace parameter and performer-override contracts to source/tests."
+    },
+    {
+      "id": "PER-GH-006",
+      "repository": "organvm/generative-abstract-environments-studies",
+      "github_repository_id": 1247127617,
+      "url": "https://github.com/organvm/generative-abstract-environments-studies",
+      "tier": "working_core",
+      "visibility": "private",
+      "archived": false,
+      "tags": [
+        "visualizer",
+        "canvas",
+        "p5",
+        "generative-environments",
+        "prototype"
+      ],
+      "annotation": "Private browser-visualizer R&D corpus. Current root contents were inspected; Portvs documents named HTML/canvas studies and explicitly distinguishes them from CLI renderers.",
+      "verification_scope": "Current repository metadata/root contents inspected; named-study interpretation comes from the existing Portvs cross-repository report. No current visualizer was executed.",
+      "evidence": [
+        {
+          "repository": "organvm/portvs",
+          "path": "incubator/triptych-video-canon/UNIFICATION.md",
+          "url": "https://github.com/organvm/portvs/blob/main/incubator/triptych-video-canon/UNIFICATION.md",
+          "file_blob_sha": "ff0779db28aede48d53fa1d2dbc23dbeafd53f93",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Inventory current HTML/JS studies and independently check which can run in a remote browser. Do not inherit the old probe's HEAD or failures as current facts."
+    },
+    {
+      "id": "PER-GH-007",
+      "repository": "organvm-iii-ergon/glyph-cascade",
+      "github_repository_id": 1242954342,
+      "url": "https://github.com/organvm-iii-ergon/glyph-cascade",
+      "tier": "working_core",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "glyph",
+        "typography",
+        "react",
+        "tonejs",
+        "audiovisual"
+      ],
+      "annotation": "Generative audiovisual frontend built around React/Vite/Tailwind/Tone.js. A live metadata lookup resolves the older organvm/glyph-cascade name to this owner; older Portvs notes also describe a different visibility and historical build problems.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm-iii-ergon/glyph-cascade",
+          "path": "README.md",
+          "url": "https://github.com/organvm-iii-ergon/glyph-cascade/blob/main/README.md",
+          "file_blob_sha": "7d7c973671021c641a0dc1085319342cea36d9df",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Verify the current entrypoint, surfaces, build and demo evidence; treat old missing-file findings as hypotheses to recheck, not current diagnoses."
+    },
+    {
+      "id": "PER-GH-008",
+      "repository": "organvm/glyph-cascade-tapes",
+      "github_repository_id": 1247145512,
+      "url": "https://github.com/organvm/glyph-cascade-tapes",
+      "tier": "working_core",
+      "visibility": "private",
+      "archived": false,
+      "tags": [
+        "cyberpoetry",
+        "iterations",
+        "react",
+        "text-as-image",
+        "source-history"
+      ],
+      "annotation": "Distinct private source repository with CyberpoetryIterationCinema, CyberpoetryIterationLab, multiple CyberpoetryReactor variants, MatrixCascade, specifications, and archive/history files. The presence of files does not establish a passing build.",
+      "verification_scope": "Live repository metadata and complete nonrecursive root Git tree inspected. Root README was not present.",
+      "evidence": [
+        {
+          "url": "https://api.github.com/repos/organvm/glyph-cascade-tapes/git/trees/main",
+          "observed_tree_sha": "1146b39664d2aa60d8c4725d59c6f7bd804cbae9",
+          "ref_kind": "git_tree",
+          "observed_on": "2026-09-05"
+        }
+      ],
+      "next_research_task": "Classify source variants and specs; compare their lineage to glyph-cascade through explicit file evidence without merging the repositories."
+    },
+    {
+      "id": "PER-GH-009",
+      "repository": "organvm/linguistic-atomization-framework",
+      "github_repository_id": 1138338762,
+      "url": "https://github.com/organvm/linguistic-atomization-framework",
+      "tier": "working_core",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "lingframe",
+        "language",
+        "atomization",
+        "rhetoric",
+        "text-corpus"
+      ],
+      "annotation": "Text-analysis and atomization instrument. Its hierarchical treatment of theme, paragraph, sentence, word and letter is relevant to the project's language-as-material and modular-transformation research.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/linguistic-atomization-framework",
+          "path": "README.md",
+          "url": "https://github.com/organvm/linguistic-atomization-framework/blob/main/README.md",
+          "file_blob_sha": "42d842b15d5afde491c3d083f73c297cb9576d17",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Locate actual atomization models, transformations, fixtures and visualization contracts; distinguish analysis from generation."
+    },
+    {
+      "id": "PER-GH-010",
+      "repository": "organvm/media-ark",
+      "github_repository_id": 1263033255,
+      "url": "https://github.com/organvm/media-ark",
+      "tier": "working_core",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "archive",
+        "ingestion",
+        "deduplication",
+        "metadata",
+        "source-custody"
+      ],
+      "annotation": "Media-processing and archival infrastructure with sidecars, indexes, canonicalization and repairable state. Repository access does not establish that the user's source photos, recordings or Dropbox exports are present remotely.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/media-ark",
+          "path": "README.md",
+          "url": "https://github.com/organvm/media-ark/blob/main/README.md",
+          "file_blob_sha": "c44f2c9fd887cc111f2884d5a85d9b7e1ec4aa34",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Build a remote-availability ledger of source collections and locators. Keep private media and sensitive metadata out of public tracked files."
+    },
+    {
+      "id": "PER-GH-011",
+      "repository": "organvm/vox--architectura-gubernatio",
+      "github_repository_id": 1191211891,
+      "url": "https://github.com/organvm/vox--architectura-gubernatio",
+      "tier": "working_core",
+      "visibility": "private",
+      "archived": false,
+      "tags": [
+        "voice",
+        "authorial-corpus",
+        "editorial",
+        "register",
+        "provenance"
+      ],
+      "annotation": "Voice inference and governance system with corpus-backed scoring, editable stylesheets and editorial workflows. Useful for studying authorial patterns; existing institutional scoring rules are not automatically appropriate for improvised public speech.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/vox--architectura-gubernatio",
+          "path": "README.md",
+          "url": "https://github.com/organvm/vox--architectura-gubernatio/blob/main/README.md",
+          "file_blob_sha": "f575a9939a0e4607303bfb8704eedb283e9ecd85",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Determine which corpus sources and profiles reflect the creator's own voice, and separate descriptive analysis from prescriptive rules."
+    },
+    {
+      "id": "PER-GH-012",
+      "repository": "4444J99/content-engine--asset-amplifier",
+      "github_repository_id": 1190558991,
+      "url": "https://github.com/4444J99/content-engine--asset-amplifier",
+      "tier": "working_core",
+      "visibility": "private",
+      "archived": false,
+      "tags": [
+        "cronus-metabolus",
+        "clips",
+        "media-processing",
+        "distribution",
+        "partner-boundary"
+      ],
+      "annotation": "Content Yield Engine / Cronus Metabolus. Potential reusable production machinery for turning source assets into platform-specific derivatives, but its brand/partner product brief must not become the persona project's artistic brief.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "4444J99/content-engine--asset-amplifier",
+          "path": "README.md",
+          "url": "https://github.com/4444J99/content-engine--asset-amplifier/blob/main/README.md",
+          "file_blob_sha": "9e16acda1a6b4d6ce293cdc1eb4165f12f71df5f",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Audit generic ingestion, extraction, rendering and staging interfaces only; identify reuse boundaries without importing partner data or assuming all advertised integrations work."
+    },
+    {
+      "id": "PER-GH-013",
+      "repository": "organvm-ii-poiesis/ivi374ivi027-05",
+      "github_repository_id": 1156295383,
+      "url": "https://github.com/organvm-ii-poiesis/ivi374ivi027-05",
+      "tier": "research_ring",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "met4morfoses",
+        "thesis",
+        "web-edition",
+        "nonlinear-reading",
+        "literary-lineage"
+      ],
+      "annotation": "MET4MORFOSES Web Edition, with mythic map, faux feed, scroll, reader and mirror modes. Provides a direct literary and interactive-web lineage for the wider practice.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm-ii-poiesis/ivi374ivi027-05",
+          "path": "README.md",
+          "url": "https://github.com/organvm-ii-poiesis/ivi374ivi027-05/blob/main/README.md",
+          "file_blob_sha": "55436739d10c8586b8e4c6c6d71b8e125f5fae10",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Trace mode-specific transformations back to source editions and preserve canonical text versus interface distinctions."
+    },
+    {
+      "id": "PER-GH-014",
+      "repository": "organvm/collective-persona-operations",
+      "github_repository_id": 1042754839,
+      "url": "https://github.com/organvm/collective-persona-operations",
+      "tier": "research_ring",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "identity",
+        "persona",
+        "register",
+        "theory",
+        "multi-context"
+      ],
+      "annotation": "Conceptual framework for identity and register across contexts. Read as theory and proposed architecture; the inspected README contains planning language and is not proof of an implemented persona runtime.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/collective-persona-operations",
+          "path": "README.md",
+          "url": "https://github.com/organvm/collective-persona-operations/blob/main/README.md",
+          "file_blob_sha": "0ba4a6a507d8eda244ddab29a15f14918f8c7447",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Extract questions and explicit design propositions; test their compatibility with the creator's improvised, nonfiction public-life aims."
+    },
+    {
+      "id": "PER-GH-015",
+      "repository": "organvm-ii-poiesis/narratological-algorithmic-lenses",
+      "github_repository_id": 1144699044,
+      "url": "https://github.com/organvm-ii-poiesis/narratological-algorithmic-lenses",
+      "tier": "research_ring",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "narrative",
+        "film",
+        "comedy",
+        "pixar",
+        "comparative-craft"
+      ],
+      "annotation": "Comparative narrative research corpus and analysis stack, including traditions and creators spanning classical theory, film, games and comedy. Useful for editing and interpretation, not for forcing unscripted life into a formula.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm-ii-poiesis/narratological-algorithmic-lenses",
+          "path": "README.md",
+          "url": "https://github.com/organvm-ii-poiesis/narratological-algorithmic-lenses/blob/main/README.md",
+          "file_blob_sha": "631fc33599d8273add4d8fdef576a6bf27b56a65",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Identify source-grounded lenses relevant to documentary selection, episodic form, comedy and audiovisual juxtaposition."
+    },
+    {
+      "id": "PER-GH-016",
+      "repository": "organvm/recursive-engine--generative-entity",
+      "github_repository_id": 1140011103,
+      "url": "https://github.com/organvm/recursive-engine--generative-entity",
+      "tier": "research_ring",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "re-ge",
+        "memory",
+        "myth",
+        "recursion",
+        "symbolic-transformation"
+      ],
+      "annotation": "RE:GE models fragments, recurrence, significance and transformation. Relevant to long-horizon memory/myth/identity research; its conceptual claims must be distinguished from demonstrated mechanisms.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/recursive-engine--generative-entity",
+          "path": "README.md",
+          "url": "https://github.com/organvm/recursive-engine--generative-entity/blob/main/README.md",
+          "file_blob_sha": "65466401ad77f5ec7d3f2de25cab71eca195f515",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Trace fragment and recurrence models into source/tests; identify defensible links to the artistic corpus without asserting universal theories."
+    },
+    {
+      "id": "PER-GH-017",
+      "repository": "organvm-ii-poiesis/archive-past-works",
+      "github_repository_id": 1155240179,
+      "url": "https://github.com/organvm-ii-poiesis/archive-past-works",
+      "tier": "research_ring",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "preservation",
+        "provenance",
+        "historical-work",
+        "metadata"
+      ],
+      "annotation": "Preservation-oriented archive documentation for historical artwork, explicitly distinct from portfolio presentation. It is a candidate for stable artwork records, not evidence that all past source assets have already been recovered.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm-ii-poiesis/archive-past-works",
+          "path": "README.md",
+          "url": "https://github.com/organvm-ii-poiesis/archive-past-works/blob/main/README.md",
+          "file_blob_sha": "e4eef0a5440c85e69b2c9b2df0289436aa3562ad",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Inspect actual work records and coverage gaps against Portvs, media-ark and the original work titles."
+    },
+    {
+      "id": "PER-GH-018",
+      "repository": "organvm-iii-ergon/multi-camera--livestream--framework",
+      "github_repository_id": 1138219896,
+      "url": "https://github.com/organvm-iii-ergon/multi-camera--livestream--framework",
+      "tier": "publishing_performance_support",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "capture",
+        "multicamera",
+        "livestream",
+        "obs",
+        "audio-sync"
+      ],
+      "annotation": "Documented camera/audio/streaming production framework. Supports future performance and podcast capture; hardware profiles and performance claims were not reproduced in this audit.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm-iii-ergon/multi-camera--livestream--framework",
+          "path": "README.md",
+          "url": "https://github.com/organvm-iii-ergon/multi-camera--livestream--framework/blob/main/README.md",
+          "file_blob_sha": "08a542123e149a804c70c9a5ed5de11c8fda6d24",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Separate phone-only, remote-testable and physical-studio requirements."
+    },
+    {
+      "id": "PER-GH-019",
+      "repository": "organvm-vii-kerygma/showcase-portfolio",
+      "github_repository_id": 1155240168,
+      "url": "https://github.com/organvm-vii-kerygma/showcase-portfolio",
+      "tier": "publishing_performance_support",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "curation",
+        "exhibition",
+        "artist-portfolio",
+        "public-projection"
+      ],
+      "annotation": "Artistic presentation and curatorial layer for works, processes and installations. Use verified project records rather than treating a showcase as source custody.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm-vii-kerygma/showcase-portfolio",
+          "path": "README.md",
+          "url": "https://github.com/organvm-vii-kerygma/showcase-portfolio/blob/main/README.md",
+          "file_blob_sha": "431d5dddb3ffbdaabdd93aa423b8e5ab622b7a71",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Identify reusable artwork metadata and audience-specific presentation templates."
+    },
+    {
+      "id": "PER-GH-020",
+      "repository": "organvm-vii-kerygma/portfolio",
+      "github_repository_id": 1155412125,
+      "url": "https://github.com/organvm-vii-kerygma/portfolio",
+      "tier": "publishing_performance_support",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "professional",
+        "case-studies",
+        "gateway",
+        "portfolio"
+      ],
+      "annotation": "General professional portfolio and case-study gateway. Relevant as a public projection, while maintaining the user's separation between professional/LinkedIn-facing work and public-life media.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm-vii-kerygma/portfolio",
+          "path": "README.md",
+          "url": "https://github.com/organvm-vii-kerygma/portfolio/blob/main/README.md",
+          "file_blob_sha": "9182295ccd041ff888edd3759c329ccc64ac1805",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Check project links and metadata boundaries without importing institutional framing into the public-life project."
+    },
+    {
+      "id": "PER-GH-021",
+      "repository": "organvm-iv-taxis/distribution-strategy",
+      "github_repository_id": 1155240327,
+      "url": "https://github.com/organvm-iv-taxis/distribution-strategy",
+      "tier": "publishing_performance_support",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "audiences",
+        "channels",
+        "distribution",
+        "strategy"
+      ],
+      "annotation": "Existing audience/channel strategy is explicitly oriented toward grant, hiring and creative-institutional goals. Useful comparative material, not an already-approved persona strategy.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm-iv-taxis/distribution-strategy",
+          "path": "README.md",
+          "url": "https://github.com/organvm-iv-taxis/distribution-strategy/blob/main/README.md",
+          "file_blob_sha": "c3deb9f62ab6403aeb3f5faf7e9003aa54bafbd0",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Identify which principles transfer and which conflict with public-life audience/community goals."
+    },
+    {
+      "id": "PER-GH-022",
+      "repository": "organvm/social-automation",
+      "github_repository_id": 1155240309,
+      "url": "https://github.com/organvm/social-automation",
+      "tier": "publishing_performance_support",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "publishing",
+        "adapters",
+        "scheduling",
+        "receipts"
+      ],
+      "annotation": "Repository describes scheduling, channel adapters, retries and delivery/analytics handling. Reuse requires inspection of actual adapters and approval controls; no posting was enabled or executed.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/social-automation",
+          "path": "README.md",
+          "url": "https://github.com/organvm/social-automation/blob/main/README.md",
+          "file_blob_sha": "0ceca14f1f2626e85cfcf5a61a1045205e6a4e48",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Audit available adapters, dry-run behavior and approval boundaries against current platform requirements."
+    },
+    {
+      "id": "PER-GH-023",
+      "repository": "organvm/kerygma-pipeline",
+      "github_repository_id": 1160837489,
+      "url": "https://github.com/organvm/kerygma-pipeline",
+      "tier": "publishing_performance_support",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "orchestration",
+        "distribution",
+        "pipeline"
+      ],
+      "annotation": "Named distribution-pipeline orchestrator. The inspected root README is brief; no end-to-end integration or active deployment is established by this inspection.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/kerygma-pipeline",
+          "path": "README.md",
+          "url": "https://github.com/organvm/kerygma-pipeline/blob/main/README.md",
+          "file_blob_sha": "873611bca72d106b6ede377af95c16949b7eac79",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Inspect source and working-context documents to establish actual orchestration coverage."
+    },
+    {
+      "id": "PER-GH-024",
+      "repository": "4444J99/new-ancients-social",
+      "github_repository_id": 1332509152,
+      "url": "https://github.com/4444J99/new-ancients-social",
+      "tier": "partner_comparator",
+      "visibility": "private",
+      "archived": false,
+      "tags": [
+        "musician",
+        "approval-gates",
+        "source-linked-voice",
+        "partner-boundary"
+      ],
+      "annotation": "Separate musician-client instance of the content engine, with documented provenance and approval patterns. It is not the user's persona repository and its partner voice/content must remain separate.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "4444J99/new-ancients-social",
+          "path": "README.md",
+          "url": "https://github.com/4444J99/new-ancients-social/blob/main/README.md",
+          "file_blob_sha": "7f199abc96071546143aee4cbc94c21a419ebe15",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Study only generic approval/provenance design for potential independently scoped reuse; do not import client material."
+    },
+    {
+      "id": "PER-GH-025",
+      "repository": "4444J99/post-dsp-platform",
+      "github_repository_id": 1332296090,
+      "url": "https://github.com/4444J99/post-dsp-platform",
+      "tier": "partner_comparator",
+      "visibility": "private",
+      "archived": false,
+      "tags": [
+        "artist-infrastructure",
+        "music-distribution",
+        "provenance",
+        "long-horizon"
+      ],
+      "annotation": "Partner project exploring alternative music distribution/accounting infrastructure. Long-horizon reference for artist-owned infrastructure; its README explicitly says consumer playback, UI and live transport are not built.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "4444J99/post-dsp-platform",
+          "path": "README.md",
+          "url": "https://github.com/4444J99/post-dsp-platform/blob/main/README.md",
+          "file_blob_sha": "0dd8921480c2dcd18cc48ef0ed9178c5319e7579",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": "Use as a comparative research source, not as a functioning distribution platform or immediate launch dependency."
+    },
+    {
+      "id": "PER-GH-026",
+      "repository": "organvm/audio-synthesis-bridge",
+      "github_repository_id": 1110990770,
+      "url": "https://github.com/organvm/audio-synthesis-bridge",
+      "tier": "discovery_queue",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "audio",
+        "bridge"
+      ],
+      "annotation": "Repository existence was verified in the connected census. Relevance is a candidate for a focused follow-up, not a content or runtime finding from this audit.",
+      "verification_scope": "Metadata only; no substantive content audit for this entry.",
+      "evidence": [],
+      "next_research_task": "Read current project instructions, source and tests before assigning an implementation role."
+    },
+    {
+      "id": "PER-GH-027",
+      "repository": "organvm/announcement-templates",
+      "github_repository_id": 1155240293,
+      "url": "https://github.com/organvm/announcement-templates",
+      "tier": "discovery_queue",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "publishing",
+        "templates"
+      ],
+      "annotation": "Repository existence was verified in the connected census. Relevance is a candidate for a focused follow-up, not a content or runtime finding from this audit.",
+      "verification_scope": "Metadata only; no substantive content audit for this entry.",
+      "evidence": [],
+      "next_research_task": "Read current project instructions, source and tests before assigning an implementation role."
+    },
+    {
+      "id": "PER-GH-028",
+      "repository": "organvm/kerygma-profiles",
+      "github_repository_id": 1165887388,
+      "url": "https://github.com/organvm/kerygma-profiles",
+      "tier": "discovery_queue",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "publishing",
+        "profiles"
+      ],
+      "annotation": "Repository existence was verified in the connected census. Relevance is a candidate for a focused follow-up, not a content or runtime finding from this audit.",
+      "verification_scope": "Metadata only; no substantive content audit for this entry.",
+      "evidence": [],
+      "next_research_task": "Read current project instructions, source and tests before assigning an implementation role."
+    },
+    {
+      "id": "PER-GH-029",
+      "repository": "organvm/analytics-engine",
+      "github_repository_id": 1160364226,
+      "url": "https://github.com/organvm/analytics-engine",
+      "tier": "discovery_queue",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "analytics",
+        "feedback"
+      ],
+      "annotation": "Repository existence was verified in the connected census. Relevance is a candidate for a focused follow-up, not a content or runtime finding from this audit.",
+      "verification_scope": "Metadata only; no substantive content audit for this entry.",
+      "evidence": [],
+      "next_research_task": "Read current project instructions, source and tests before assigning an implementation role."
+    },
+    {
+      "id": "PER-GH-030",
+      "repository": "organvm/essay-pipeline",
+      "github_repository_id": 1160364179,
+      "url": "https://github.com/organvm/essay-pipeline",
+      "tier": "discovery_queue",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "writing",
+        "essays"
+      ],
+      "annotation": "Repository existence was verified in the connected census. Relevance is a candidate for a focused follow-up, not a content or runtime finding from this audit.",
+      "verification_scope": "Metadata only; no substantive content audit for this entry.",
+      "evidence": [],
+      "next_research_task": "Read current project instructions, source and tests before assigning an implementation role."
+    },
+    {
+      "id": "PER-GH-031",
+      "repository": "organvm/editorial-standards",
+      "github_repository_id": 1160364281,
+      "url": "https://github.com/organvm/editorial-standards",
+      "tier": "discovery_queue",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "editing",
+        "standards"
+      ],
+      "annotation": "Repository existence was verified in the connected census. Relevance is a candidate for a focused follow-up, not a content or runtime finding from this audit.",
+      "verification_scope": "Metadata only; no substantive content audit for this entry.",
+      "evidence": [],
+      "next_research_task": "Read current project instructions, source and tests before assigning an implementation role."
+    },
+    {
+      "id": "PER-GH-032",
+      "repository": "organvm/session-meta",
+      "github_repository_id": 1247918765,
+      "url": "https://github.com/organvm/session-meta",
+      "tier": "discovery_queue",
+      "visibility": "private",
+      "archived": false,
+      "tags": [
+        "history",
+        "targeted-provenance"
+      ],
+      "annotation": "Repository existence was verified in the connected census. Relevance is a candidate for a focused follow-up, not a content or runtime finding from this audit.",
+      "verification_scope": "Metadata only; no substantive content audit for this entry.",
+      "evidence": [],
+      "next_research_task": "Search only project-specific historical references; do not ingest unrelated private histories."
+    },
+    {
+      "id": "PER-GH-033",
+      "repository": "4444J99/the-thing-without-a-name",
+      "github_repository_id": 1347780050,
+      "url": "https://github.com/4444J99/the-thing-without-a-name",
+      "tier": "historical_not_write_target",
+      "visibility": "public",
+      "archived": true,
+      "tags": [
+        "archived",
+        "duplicate",
+        "danse"
+      ],
+      "annotation": "Archived counterpart; the inspected canonical Danse project record is in organvm/the-thing-without-a-name.",
+      "verification_scope": "Archived state verified in live repository metadata.",
+      "evidence": [],
+      "next_research_task": ""
+    },
+    {
+      "id": "PER-GH-034",
+      "repository": "organvm/etceter4",
+      "github_repository_id": 1148310968,
+      "url": "https://github.com/organvm/etceter4",
+      "tier": "historical_not_write_target",
+      "visibility": "private",
+      "archived": true,
+      "tags": [
+        "archived",
+        "etceter4",
+        "history"
+      ],
+      "annotation": "Archived repository. Preserve as potential history; do not count it as another active creative-site implementation without comparing lineage.",
+      "verification_scope": "Archived state verified in live repository metadata.",
+      "evidence": [],
+      "next_research_task": ""
+    },
+    {
+      "id": "PER-GH-035",
+      "repository": "organvm/content-engine--asset-amplifier--a-organvm-legacy",
+      "github_repository_id": 1225803691,
+      "url": "https://github.com/organvm/content-engine--asset-amplifier--a-organvm-legacy",
+      "tier": "historical_not_write_target",
+      "visibility": "public",
+      "archived": true,
+      "tags": [
+        "archived",
+        "legacy",
+        "content-engine"
+      ],
+      "annotation": "Archived legacy repository; distinguish from the active private 4444J99/content-engine--asset-amplifier.",
+      "verification_scope": "Archived state verified in live repository metadata.",
+      "evidence": [],
+      "next_research_task": ""
+    },
+    {
+      "id": "PER-GH-036",
+      "repository": "4444J99/limen",
+      "github_repository_id": 1255213941,
+      "url": "https://github.com/4444J99/limen",
+      "tier": "historical_not_write_target",
+      "visibility": "public",
+      "archived": false,
+      "tags": [
+        "scope-boundary",
+        "do-not-mutate"
+      ],
+      "annotation": "The current Portvs Visual Form Canon explicitly excludes Limen mutations during the incubation pass. Its presence is not a reason to use it as a new owner for this work.",
+      "verification_scope": "Repository existence verified; no-touch relationship read in Portvs. Limen implementation itself not audited.",
+      "evidence": [
+        {
+          "repository": "organvm/portvs",
+          "path": "incubator/triptych-video-canon/VISUAL_FORM_CANON.md",
+          "url": "https://github.com/organvm/portvs/blob/main/incubator/triptych-video-canon/VISUAL_FORM_CANON.md",
+          "file_blob_sha": "c2ae79c9c4fd864897ee5e891758f2a63628636d",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": ""
+    },
+    {
+      "id": "PER-GH-037",
+      "repository": "organvm/persona-fleet",
+      "github_repository_id": 1235211388,
+      "url": "https://github.com/organvm/persona-fleet",
+      "tier": "excluded_false_lead",
+      "visibility": "private",
+      "archived": false,
+      "tags": [
+        "name-collision",
+        "not-public-life"
+      ],
+      "annotation": "Separate pseudonymous strategy runtime. Its README explicitly excludes the operator's identity, brand, audience and network; it is not the persona/public-life project's home.",
+      "verification_scope": "Selected documentation inspected; runtime not executed.",
+      "evidence": [
+        {
+          "repository": "organvm/persona-fleet",
+          "path": "README.md",
+          "url": "https://github.com/organvm/persona-fleet/blob/main/README.md",
+          "file_blob_sha": "83a1045e6ba4a9b2f3cddf5818729899103d8bfe",
+          "ref_kind": "default_branch_file",
+          "observed_on": "2026-09-05",
+          "note": "A file blob SHA identifies file contents; it is not the repository HEAD commit."
+        }
+      ],
+      "next_research_task": ""
+    }
+  ]
+}

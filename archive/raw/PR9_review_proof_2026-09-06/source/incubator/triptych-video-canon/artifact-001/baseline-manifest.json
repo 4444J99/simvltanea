@@ -1,0 +1,19 @@
+{
+  "clips": [
+    "media/loop-1.mp4",
+    "media/loop-2.mp4",
+    "media/loop-3.mp4"
+  ],
+  "canvas": {
+    "width": 360,
+    "height": 640,
+    "fps": 24
+  },
+  "render": {
+    "preset": "ultrafast",
+    "crf": 20
+  },
+  "max_clip_seconds": 1,
+  "output_file": "baseline/clip-none.mp4",
+  "work_dir": "baseline/work"
+}

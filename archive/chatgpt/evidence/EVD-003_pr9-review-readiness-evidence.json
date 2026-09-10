@@ -1,0 +1,194 @@
+{
+  "proof_id": "PR9-RECONCILED-REVIEW-2026-09-06",
+  "starting_head": "00d3788260e1b8d3d76cf030dd9b69418059101b",
+  "concurrent_head_preserved": "c3fbae7d4d354de0306e62f123c77eadddc4565e",
+  "tested_code_commit": "d523af18797996d9fc3b1446dfb1238cef7bbfbd",
+  "scope": "incubator-only verified source snapshot; not a full checkout",
+  "transport": "in-memory",
+  "tests": {
+    "tests_run": 90,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "unexpected_successes": 0
+  },
+  "complete_group_set": true,
+  "groups": [
+    {
+      "group": "model",
+      "tests_run": 58,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "counts-3-5",
+      "tests_run": 3,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "counts-6-7",
+      "tests_run": 2,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "load-resize",
+      "tests_run": 3,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "controls",
+      "tests_run": 2,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "invalid-input",
+      "tests_run": 2,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "shared-hidden",
+      "tests_run": 2,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "hold-still",
+      "tests_run": 2,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "independent-a",
+      "tests_run": 4,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "independent-b",
+      "tests_run": 4,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "independent-c",
+      "tests_run": 4,
+      "status": "passed",
+      "exit_code": 0
+    },
+    {
+      "group": "independent-d",
+      "tests_run": 4,
+      "status": "passed",
+      "exit_code": 0
+    }
+  ],
+  "independent_continuity": {
+    "positive_cases": 7,
+    "negative_cases": 9,
+    "checkpoints": 42,
+    "animation_samples": 529,
+    "sampled_loop_observations": 2584,
+    "source_color_checks": 186,
+    "maximum_clock_error_seconds": 0.01766599999954921,
+    "max_reported_dropped_frames": 1,
+    "window_seconds_range": [
+      1.7008000000002794,
+      1.7675999999996275
+    ],
+    "unexpected_events": 0
+  },
+  "fresh_render_proofs": {
+    "paired_small_exports": 10,
+    "portable_replays": 2,
+    "legacy_decoded_pairs": 5,
+    "full_hd_reference_reruns": 0
+  },
+  "http_attempt": {
+    "tests_run": 1,
+    "errors": 1,
+    "exit_code": 1,
+    "stage": "before application loading",
+    "error": "ERR_BLOCKED_BY_ADMINISTRATOR",
+    "policy_modified": false
+  },
+  "historical_original_bytes_inspected": 0,
+  "code_head_ci": {
+    "name": "Analyze (python)",
+    "run_id": 34027095294,
+    "job_id": 101469897770,
+    "status": "completed",
+    "conclusion": "failure",
+    "steps": [],
+    "logs": "404 BlobNotFound",
+    "cause": "unknown"
+  },
+  "readiness": {
+    "keep_draft": true,
+    "served_http": false,
+    "physical_devices": false,
+    "historical_fidelity": false,
+    "artist_approval": false,
+    "deployment": false,
+    "hosted_ci_green": false
+  },
+  "revised_source": [
+    {
+      "path": "browser_runtime.py",
+      "bytes": 7699,
+      "blob": "9bf5561bfe336af98f0f0c887301de74a03baccb",
+      "sha256": "3481dbdb4f2eea90145097545c8256f9fcc374358cda530543427a900feb1fa4"
+    },
+    {
+      "path": "browser_runtime.js",
+      "bytes": 14447,
+      "blob": "82a3fce7066b882cf7d0c393981bc41a6467668b",
+      "sha256": "be1e9a960815839dd623bf154922b7877fee6489ccf3b5857c5e9cf61ed3a0dd"
+    },
+    {
+      "path": "test_browser_boundaries.py",
+      "bytes": 14040,
+      "blob": "84f1a28eeb4616535c8203a876e0dcfcce793973",
+      "sha256": "57d144bbbeb3a897fb0dfc84efa800f6db131a6a6aa97af89a85c78f15cc2490"
+    },
+    {
+      "path": "run_review_proof.py",
+      "bytes": 7835,
+      "blob": "1da9ce610c3524df9fe1f5d3e92cd5e5ed2798c4",
+      "sha256": "50784e9069bea0c28fb4615f6285a84b9d4b15bdcdd5a434b5cf7c704b903059"
+    },
+    {
+      "path": "verify_legacy_decoded.py",
+      "bytes": 4395,
+      "blob": "37d58a78996c292d84532eac04bf7d5c34dd2d5c",
+      "sha256": "3203ae3a6406b90d71b1ff3706aacd1410590a1af7d2a080460c2a6e3be4305c"
+    }
+  ],
+  "completed_log_sha256": {
+    "controls.log": "b79613f5ae3c1d66565de8a5e5498ac1c4fc79096ce038274ed0c4102168e546",
+    "counts-3-5.log": "13fe44ef4a461c189c4a7dd0004ee6e873658545cba2c8e10682c6234f625352",
+    "counts-6-7.log": "2877b32d5acc0be8bc9f2437b19a98f8272858809b066ba613ec4265379842ce",
+    "hold-still.log": "630145ad3af7b9f016331a98657e2bbc4455cd7db5bcbab3235d576e683350a1",
+    "independent-a.log": "10f4eed9fe721157b2217a008bb06e99d7c5f881a7bc234065c43d14ccae9ba2",
+    "independent-b.log": "413c2a5b6bf8b824d406e7fe7747cfaa64c2ff2ed0af700b971c3194a8c22af4",
+    "independent-c.log": "fa8c0553903ed78d510557c5a26f91ff25e84d8c6eff298a41522d9b68d957d4",
+    "independent-d.log": "4d2a04d16dd0726eee905168cdf913f3be3440c5aac1ad5f51890702b949b36b",
+    "invalid-input.log": "d4d3c01ca610a72cc6750162dcf6cf1d309c9c8bfa89220aa1a707a17ae38b88",
+    "load-resize.log": "dddd79b8f6284749bb0090e2d6f4e0164b5b59deab9102ce5d78e034a55d0f5f",
+    "model.log": "82c7e224c1e30689d493bb73e8c2896a4da0f9cc621818fb2e07acb71762834c",
+    "shared-hidden.log": "d72cb1582a4f142affece4750d2e9bcb605d1b7fab03752f15a9a430786b7692"
+  },
+  "evidence_sha256": {
+    "review-reconciled/summary.json": "636c12c30362dbdfcce89a17f36a6ca2e678076a9ce5cae82e3d885a43957ebb",
+    "legacy-regression/receipt.json": "05eefb414cbd8981337d9248427088a56ac8779391c74e94db70ba5c09a8ac93",
+    "decoded-pixel-checks.json": "bd3e3296180e0c3b530f334ad4965d83fde71af8b16942e3d43dd3ac192f890c",
+    "portable-reproduction.json": "eda9270b0880984c065c4383f5ad0b35341d1134dcd2dd9d5f71d9abaf4ae87f",
+    "http-reconciled.log": "9535fee85e413f49349482b56d1fb9058be09bba3112f5e58e5e69c7b32478ea",
+    "historical-attempts.json": "3683762d6dea40f244d1625f232bc33a22c0df9b68358b79a398ccb5f794f75e",
+    "reconciled-continuity-metrics.json": "9e4ba87124175aa8ea658f0dcee42db915992f420825e5d74f2be15bb1456f27"
+  }
+}

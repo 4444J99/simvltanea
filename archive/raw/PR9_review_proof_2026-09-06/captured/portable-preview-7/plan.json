@@ -1,0 +1,438 @@
+{
+  "plan_version": 1,
+  "engine_version": "1.0.0",
+  "state_sha256": "144e2925e525a7ac927be21bd59827163c22759c9842022e054f4d05a60246f3",
+  "fps": 24,
+  "frames": 144,
+  "audio": "none",
+  "tracks": [
+    {
+      "id": "loop-1",
+      "spans": [
+        {
+          "frame": 0,
+          "id": "loop-1",
+          "source": "source-1",
+          "kind": "video",
+          "local": "0",
+          "source_offset": "0",
+          "rate": "1",
+          "held": false,
+          "epoch": 0
+        }
+      ]
+    },
+    {
+      "id": "loop-2",
+      "spans": [
+        {
+          "frame": 0,
+          "id": "loop-2",
+          "source": "source-2",
+          "kind": "video",
+          "local": "31/100",
+          "source_offset": "31/100",
+          "rate": "107/100",
+          "held": false,
+          "epoch": 0
+        }
+      ]
+    },
+    {
+      "id": "loop-3",
+      "spans": [
+        {
+          "frame": 0,
+          "id": "loop-3",
+          "source": "source-3",
+          "kind": "video",
+          "local": "31/50",
+          "source_offset": "31/50",
+          "rate": "57/50",
+          "held": false,
+          "epoch": 0
+        }
+      ]
+    },
+    {
+      "id": "loop-4",
+      "spans": [
+        {
+          "frame": 0,
+          "id": "loop-4",
+          "source": "source-4",
+          "kind": "video",
+          "local": "93/100",
+          "source_offset": "93/100",
+          "rate": "121/100",
+          "held": false,
+          "epoch": 0
+        },
+        {
+          "frame": 141,
+          "id": "loop-4",
+          "source": "source-4",
+          "kind": "video",
+          "local": "6431/800",
+          "source_offset": "31/800",
+          "rate": "121/100",
+          "held": false,
+          "epoch": 0
+        }
+      ]
+    },
+    {
+      "id": "loop-5",
+      "spans": [
+        {
+          "frame": 0,
+          "id": "loop-5",
+          "source": "source-5",
+          "kind": "video",
+          "local": "31/25",
+          "source_offset": "31/25",
+          "rate": "32/25",
+          "held": false,
+          "epoch": 0
+        },
+        {
+          "frame": 127,
+          "id": "loop-5",
+          "source": "source-5",
+          "kind": "video",
+          "local": "601/75",
+          "source_offset": "1/75",
+          "rate": "32/25",
+          "held": false,
+          "epoch": 0
+        }
+      ]
+    },
+    {
+      "id": "loop-6",
+      "spans": [
+        {
+          "frame": 0,
+          "id": "loop-6",
+          "source": "source-6",
+          "kind": "video",
+          "local": "31/20",
+          "source_offset": "31/20",
+          "rate": "27/20",
+          "held": false,
+          "epoch": 0
+        },
+        {
+          "frame": 115,
+          "id": "loop-6",
+          "source": "source-6",
+          "kind": "video",
+          "local": "1283/160",
+          "source_offset": "3/160",
+          "rate": "27/20",
+          "held": false,
+          "epoch": 0
+        }
+      ]
+    },
+    {
+      "id": "loop-7",
+      "spans": [
+        {
+          "frame": 0,
+          "id": "loop-7",
+          "source": "source-7",
+          "kind": "video",
+          "local": "93/50",
+          "source_offset": "93/50",
+          "rate": "71/50",
+          "held": false,
+          "epoch": 0
+        },
+        {
+          "frame": 104,
+          "id": "loop-7",
+          "source": "source-7",
+          "kind": "video",
+          "local": "601/75",
+          "source_offset": "1/75",
+          "rate": "71/50",
+          "held": false,
+          "epoch": 0
+        }
+      ]
+    }
+  ],
+  "layout_keyframes": [
+    {
+      "frame": 0,
+      "layouts": {
+        "portrait": {
+          "name": "experimental-seven-portrait",
+          "cells": [
+            {
+              "loop": "loop-1",
+              "rect": [
+                "1/25",
+                "3/100",
+                "23/25",
+                "3/10"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-2",
+              "rect": [
+                "1/25",
+                "37/100",
+                "11/25",
+                "9/50"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-3",
+              "rect": [
+                "13/25",
+                "37/100",
+                "11/25",
+                "9/50"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-4",
+              "rect": [
+                "1/25",
+                "29/50",
+                "7/25",
+                "17/100"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-5",
+              "rect": [
+                "9/25",
+                "29/50",
+                "7/25",
+                "17/100"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-6",
+              "rect": [
+                "17/25",
+                "29/50",
+                "7/25",
+                "17/100"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-7",
+              "rect": [
+                "1/25",
+                "79/100",
+                "23/25",
+                "9/50"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            }
+          ]
+        },
+        "landscape": {
+          "name": "experimental-seven-landscape",
+          "cells": [
+            {
+              "loop": "loop-1",
+              "rect": [
+                "3/100",
+                "1/20",
+                "19/50",
+                "9/10"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-2",
+              "rect": [
+                "9/20",
+                "1/20",
+                "6/25",
+                "13/50"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-3",
+              "rect": [
+                "73/100",
+                "1/20",
+                "6/25",
+                "13/50"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-4",
+              "rect": [
+                "9/20",
+                "9/25",
+                "6/25",
+                "7/25"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-5",
+              "rect": [
+                "73/100",
+                "9/25",
+                "6/25",
+                "7/25"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-6",
+              "rect": [
+                "9/20",
+                "69/100",
+                "6/25",
+                "13/50"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            },
+            {
+              "loop": "loop-7",
+              "rect": [
+                "73/100",
+                "69/100",
+                "6/25",
+                "13/50"
+              ],
+              "fit": "contain",
+              "focal": [
+                "1/2",
+                "1/2"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "media/8589a9471aa7e336e687bc96a6336e203d4c7f2a46e8bca657c2d69ea9e7485a.mp4",
+      "sha256": "8589a9471aa7e336e687bc96a6336e203d4c7f2a46e8bca657c2d69ea9e7485a",
+      "kind": "video",
+      "duration": "8",
+      "bytes": 228364
+    },
+    {
+      "id": "source-2",
+      "path": "media/67d0e0899217e9caece2be7e818d6a36c7e3632444317400fc51fd9f40687fcd.mp4",
+      "sha256": "67d0e0899217e9caece2be7e818d6a36c7e3632444317400fc51fd9f40687fcd",
+      "kind": "video",
+      "duration": "8",
+      "bytes": 207180
+    },
+    {
+      "id": "source-3",
+      "path": "media/51d02dcafb7d74a967a2d08af5d58c03396871b591607054a488daebf0de0536.mp4",
+      "sha256": "51d02dcafb7d74a967a2d08af5d58c03396871b591607054a488daebf0de0536",
+      "kind": "video",
+      "duration": "8",
+      "bytes": 231169
+    },
+    {
+      "id": "source-4",
+      "path": "media/3017ae6d170254d1cbd4da31543a5d9e3cdcf8b34c18453f22e2fc1f9d6340a7.mp4",
+      "sha256": "3017ae6d170254d1cbd4da31543a5d9e3cdcf8b34c18453f22e2fc1f9d6340a7",
+      "kind": "video",
+      "duration": "8",
+      "bytes": 221621
+    },
+    {
+      "id": "source-5",
+      "path": "media/92a509b8427b4cbab73cfbaee6b9c03b2f16c0599d3ca8d7982cb02e7647aa20.mp4",
+      "sha256": "92a509b8427b4cbab73cfbaee6b9c03b2f16c0599d3ca8d7982cb02e7647aa20",
+      "kind": "video",
+      "duration": "8",
+      "bytes": 234695
+    },
+    {
+      "id": "source-6",
+      "path": "media/b95c865f378f188c37c26882ba6343ac4ef10cd814c0442751bb54452edbfbac.mp4",
+      "sha256": "b95c865f378f188c37c26882ba6343ac4ef10cd814c0442751bb54452edbfbac",
+      "kind": "video",
+      "duration": "8",
+      "bytes": 228476
+    },
+    {
+      "id": "source-7",
+      "path": "media/e394908b0b893421d4a4d7af9aac3f2d9238b458191edfe2ceb528edbcfe8411.mp4",
+      "sha256": "e394908b0b893421d4a4d7af9aac3f2d9238b458191edfe2ceb528edbcfe8411",
+      "kind": "video",
+      "duration": "8",
+      "bytes": 208778
+    }
+  ],
+  "origin_state_sha256": "934eb6ed3dcab2f927976592809278b3ec89dd1d875d1b37dc5b4790cfa83efb"
+}

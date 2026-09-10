@@ -129,3 +129,11 @@ Recovered from `organvm/portvs` branch
 `c9fa438847da98cbb6901c032f94ca443f607a21`.
 
 The Portvs incubator copy is not deleted.
+
+## Archive & Project Manifest
+
+Historical ChatGPT transcripts, execution handoffs, receipts, telemetry traces, bundles, and media proofs are cataloged in the master annotated bibliography:
+
+- **[Project Manifest & Annotated Bibliography](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/PROJECT_MANIFEST.md)** (`archive/PROJECT_MANIFEST.md`)
+- **[Classified Archive Directory](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/chatgpt/)** (`archive/chatgpt/`)
+

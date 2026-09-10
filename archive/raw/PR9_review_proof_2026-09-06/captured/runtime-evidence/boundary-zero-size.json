@@ -1,0 +1,322 @@
+{
+  "transport": "in-memory",
+  "browser": "144.0.7559.96",
+  "snapshots": [
+    {
+      "frame": 8,
+      "wall": 2308.1999999999534,
+      "orientation": "portrait",
+      "running": true,
+      "finished": false,
+      "error": null,
+      "loops": [
+        {
+          "id": "loop-1",
+          "source": "source-1",
+          "kind": "video",
+          "currentTime": 0.355267,
+          "rate": 1,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 7,
+          "decoded": {
+            "wall": 2270.3,
+            "mediaTime": 0.333333,
+            "presentedFrames": 9
+          },
+          "rect": {
+            "x": 15.59375,
+            "y": 25.3125,
+            "width": 358.796875,
+            "height": 354.46875,
+            "top": 25.3125,
+            "right": 374.390625,
+            "bottom": 379.78125,
+            "left": 15.59375
+          },
+          "quality": {
+            "totalVideoFrames": 13,
+            "droppedVideoFrames": 0
+          }
+        },
+        {
+          "id": "loop-2",
+          "source": "source-2",
+          "kind": "video",
+          "currentTime": 0.690129,
+          "rate": 1.07,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 8,
+          "decoded": {
+            "wall": 2303.6,
+            "mediaTime": 0.708333,
+            "presentedFrames": 11
+          },
+          "rect": {
+            "x": 15.59375,
+            "y": 405.109375,
+            "width": 171.59375,
+            "height": 413.546875,
+            "top": 405.109375,
+            "right": 187.1875,
+            "bottom": 818.65625,
+            "left": 15.59375
+          },
+          "quality": {
+            "totalVideoFrames": 26,
+            "droppedVideoFrames": 1
+          }
+        },
+        {
+          "id": "loop-3",
+          "source": "source-3",
+          "kind": "video",
+          "currentTime": 1.024701,
+          "rate": 1.14,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 9,
+          "decoded": {
+            "wall": 2303.6,
+            "mediaTime": 1.041667,
+            "presentedFrames": 12
+          },
+          "rect": {
+            "x": 202.796875,
+            "y": 405.109375,
+            "width": 171.59375,
+            "height": 413.546875,
+            "top": 405.109375,
+            "right": 374.390625,
+            "bottom": 818.65625,
+            "left": 202.796875
+          },
+          "quality": {
+            "totalVideoFrames": 34,
+            "droppedVideoFrames": 1
+          }
+        }
+      ],
+      "eventCount": 14
+    },
+    {
+      "frame": 20,
+      "wall": 2819.0999999998603,
+      "orientation": "landscape",
+      "running": true,
+      "finished": false,
+      "error": null,
+      "loops": [
+        {
+          "id": "loop-1",
+          "source": "source-1",
+          "kind": "video",
+          "currentTime": 0.866106,
+          "rate": 1,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 17,
+          "decoded": {
+            "wall": 2803.6,
+            "mediaTime": 0.833333,
+            "presentedFrames": 20
+          },
+          "rect": {
+            "x": 11.6875,
+            "y": 9,
+            "width": 179.390625,
+            "height": 162,
+            "top": 9,
+            "right": 191.078125,
+            "bottom": 171,
+            "left": 11.6875
+          },
+          "quality": {
+            "totalVideoFrames": 25,
+            "droppedVideoFrames": 5
+          }
+        },
+        {
+          "id": "loop-2",
+          "source": "source-2",
+          "kind": "video",
+          "currentTime": 1.23667,
+          "rate": 1.07,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 18,
+          "decoded": {
+            "wall": 2803.6,
+            "mediaTime": 1.25,
+            "presentedFrames": 23
+          },
+          "rect": {
+            "x": 202.796875,
+            "y": 9,
+            "width": 81.890625,
+            "height": 162,
+            "top": 9,
+            "right": 284.6875,
+            "bottom": 171,
+            "left": 202.796875
+          },
+          "quality": {
+            "totalVideoFrames": 38,
+            "droppedVideoFrames": 6
+          }
+        },
+        {
+          "id": "loop-3",
+          "source": "source-3",
+          "kind": "video",
+          "currentTime": 1.606993,
+          "rate": 1.14,
+          "paused": false,
+          "readyState": 4,
+          "busy": false,
+          "callbacks": 21,
+          "decoded": {
+            "wall": 2803.6,
+            "mediaTime": 1.625,
+            "presentedFrames": 26
+          },
+          "rect": {
+            "x": 296.390625,
+            "y": 9,
+            "width": 81.890625,
+            "height": 162,
+            "top": 9,
+            "right": 378.28125,
+            "bottom": 171,
+            "left": 296.390625
+          },
+          "quality": {
+            "totalVideoFrames": 47,
+            "droppedVideoFrames": 6
+          }
+        }
+      ],
+      "eventCount": 15
+    }
+  ],
+  "events": [
+    {
+      "type": "source",
+      "id": "loop-1",
+      "frame": 0,
+      "wall": 1912.1999999999534,
+      "source": "source-1"
+    },
+    {
+      "type": "source",
+      "id": "loop-2",
+      "frame": 0,
+      "wall": 1912.5999999998603,
+      "source": "source-2"
+    },
+    {
+      "type": "source",
+      "id": "loop-3",
+      "frame": 0,
+      "wall": 1912.8000000000466,
+      "source": "source-3"
+    },
+    {
+      "type": "loadstart",
+      "id": "loop-1",
+      "frame": 0,
+      "wall": 1915.1999999999534
+    },
+    {
+      "type": "loadstart",
+      "id": "loop-2",
+      "frame": 0,
+      "wall": 1915.3000000000466
+    },
+    {
+      "type": "loadstart",
+      "id": "loop-3",
+      "frame": 0,
+      "wall": 1915.3000000000466
+    },
+    {
+      "type": "seek-command",
+      "id": "loop-2",
+      "frame": 0,
+      "wall": 1926.3000000000466,
+      "target": 0.31,
+      "reason": "initial"
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 1926.9999999997672,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "seek-command",
+      "id": "loop-3",
+      "frame": 0,
+      "wall": 1926.9999999997672,
+      "target": 0.62,
+      "reason": "initial"
+    },
+    {
+      "type": "seeking",
+      "id": "loop-2",
+      "frame": 0,
+      "wall": 1927.3000000000466
+    },
+    {
+      "type": "seeking",
+      "id": "loop-3",
+      "frame": 0,
+      "wall": 1927.3000000000466
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 1930.4000000001397,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 1931.1999999999534,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 0,
+      "wall": 1931.1999999999534,
+      "orientation": "portrait",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "type": "layout",
+      "id": null,
+      "frame": 14,
+      "wall": 2571.0999999998603,
+      "orientation": "landscape",
+      "width": 390,
+      "height": 180
+    }
+  ]
+}

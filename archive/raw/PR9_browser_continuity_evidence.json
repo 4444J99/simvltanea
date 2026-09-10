@@ -1,0 +1,278 @@
+{
+  "schema_version": 1,
+  "proof_id": "PR9-NATIVE-RESIZE-2026-09-06",
+  "recorded_at_utc": "2026-09-06T09:54:50.786533+00:00",
+  "upstream_head": "00d3788260e1b8d3d76cf030dd9b69418059101b",
+  "scope": "incubator/triptych-video-canon; scoped snapshot, not whole-repository checkout",
+  "transport": "in-memory; file-backed plan/media IO and Python digest; real Chromium DOM/media/clocks/decoding",
+  "environment": {
+    "python": "3.13.5",
+    "chromium": "144.0.7559.96",
+    "playwright": "1.57.0",
+    "Pillow": "12.3.0",
+    "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers"
+  },
+  "gates": {
+    "bounded_native_resize_continuity": "demonstrated",
+    "served_http_webcrypto": "blocked_not_demonstrated",
+    "physical_mobile_orientation": "not_run",
+    "hosted_ci": "not_claimed",
+    "overall_review_readiness": "not_claimed; remain draft"
+  },
+  "new_tests": {
+    "passed": 16,
+    "positive_scenarios": 7,
+    "rejected_browser_faults": 9,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "existing_tests_rerun": {
+    "passed": 65,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "total_distinct_passing_tests": 81,
+  "http_attempts": [
+    {
+      "test": "test_browser_runtime.BrowserTests.test_3_loop_native_continuity",
+      "log": "http-attempt.log",
+      "exit_code": 1
+    },
+    {
+      "test": "test_browser_continuity.ContinuityTests.test_3",
+      "log": "http-independent-attempt.log",
+      "exit_code": 1
+    }
+  ],
+  "http_error": "ERR_BLOCKED_BY_ADMINISTRATOR before application loading; no policy modification or automatic fallback",
+  "viewport_shapes": [
+    [
+      390,
+      844
+    ],
+    [
+      1280,
+      720
+    ],
+    [
+      900,
+      1300
+    ],
+    [
+      844,
+      390
+    ],
+    [
+      700,
+      700
+    ],
+    [
+      390,
+      844
+    ]
+  ],
+  "container_only": {
+    "fixed_viewport": [
+      1600,
+      1000
+    ],
+    "shapes": [
+      [
+        390,
+        844
+      ],
+      [
+        844,
+        390
+      ],
+      [
+        450,
+        900
+      ],
+      [
+        900,
+        450
+      ],
+      [
+        700,
+        700
+      ],
+      [
+        390,
+        844
+      ]
+    ]
+  },
+  "tolerances": {
+    "native_clock_seconds": 0.15,
+    "held_clock_seconds": 0.001,
+    "geometry_css_pixels": 1.1,
+    "source_color_rgb_channel": 12
+  },
+  "positive_metrics": {
+    "positive-3-container-False-held-False": {
+      "loops": 3,
+      "samples": 54,
+      "checkpoints": 6,
+      "duration_seconds": 1.72,
+      "max_clock_error_seconds": 0.012996000000026542,
+      "unexpected_events": 0,
+      "max_reported_dropped_frames": 1
+    },
+    "positive-3-container-False-held-True": {
+      "loops": 3,
+      "samples": 56,
+      "checkpoints": 6,
+      "duration_seconds": 1.6955999999999767,
+      "max_clock_error_seconds": 0.005357999999946905,
+      "unexpected_events": 0,
+      "max_reported_dropped_frames": 1
+    },
+    "positive-3-container-True-held-False": {
+      "loops": 3,
+      "samples": 56,
+      "checkpoints": 6,
+      "duration_seconds": 1.7898999999999068,
+      "max_clock_error_seconds": 0.004787999999946946,
+      "unexpected_events": 0,
+      "max_reported_dropped_frames": 1
+    },
+    "positive-4-container-False-held-False": {
+      "loops": 4,
+      "samples": 53,
+      "checkpoints": 6,
+      "duration_seconds": 1.6932999999999883,
+      "max_clock_error_seconds": 0.006412999999986013,
+      "unexpected_events": 0,
+      "max_reported_dropped_frames": 1
+    },
+    "positive-5-container-False-held-False": {
+      "loops": 5,
+      "samples": 106,
+      "checkpoints": 6,
+      "duration_seconds": 1.7272999999999883,
+      "max_clock_error_seconds": 0.007423999999984998,
+      "unexpected_events": 0,
+      "max_reported_dropped_frames": 0
+    },
+    "positive-6-container-False-held-False": {
+      "loops": 6,
+      "samples": 107,
+      "checkpoints": 6,
+      "duration_seconds": 1.7445,
+      "max_clock_error_seconds": 0.009315000000031493,
+      "unexpected_events": 0,
+      "max_reported_dropped_frames": 0
+    },
+    "positive-7-container-False-held-False": {
+      "loops": 7,
+      "samples": 107,
+      "checkpoints": 6,
+      "duration_seconds": 1.7410999999999768,
+      "max_clock_error_seconds": 0.012779999999999792,
+      "unexpected_events": 0,
+      "max_reported_dropped_frames": 0
+    }
+  },
+  "totals": {
+    "checkpoints": 42,
+    "animation_frame_samples": 539,
+    "sampled_loop_observations": 2631,
+    "decoded_source_color_checks": 186,
+    "moving_pixel_and_decoder_comparisons": 150,
+    "held_pixel_comparisons": 5,
+    "max_clock_error_seconds": 0.012996000000026542,
+    "unexpected_events": 0,
+    "max_reported_dropped_frames_per_video": 1
+  },
+  "negative_controls": [
+    "negative-pause",
+    "negative-rate-change",
+    "negative-same-id-replacement",
+    "negative-same-source-reload",
+    "negative-source-reroll",
+    "negative-time-reset",
+    "negative-transient-duplicate",
+    "negative-transient-removal",
+    "negative-wrong-layout"
+  ],
+  "test_and_runtime_sha256": {
+    "browser_continuity_probe.js": "87e1a012f0e19ade631cc95ab34560ca0dfcd294e11052a77629588af3a7eb7b",
+    "test_browser_continuity.py": "afad89fc614894a3d2c7a29d71413b623995eb037c34639310c601caf9959537",
+    "browser_runtime.js": "53dc625855dd94c8ed0494065fe3244c53c21e0f95cf95760cb72bd9951cb6e4",
+    "browser_runtime.py": "9bb013151dd1599078585155d67235837a83e7d8e11e75971c7f52fc1255d874",
+    "composition.py": "58c203e387d5592c10c1209ff321e66fbb474659c6371404fb7b878fe162dcce",
+    "make_runtime_fixture.py": "87f0cb14c1fd29c291247d15a4e785f43a69b21f3c879e0b3b24294848429942"
+  },
+  "final_logs": {
+    "final-existing-browser-a.log": {
+      "passed": 4,
+      "seconds": 23.605,
+      "sha256": "c90d9f353b2e9da005a05c93535f4043cc0c891f129965538f216ad00e84160b"
+    },
+    "final-existing-browser-b.log": {
+      "passed": 4,
+      "seconds": 21.36,
+      "sha256": "4e4474367a862067d47ecb69b1d399b4b89d4a7d3e1b861968a6c71da93c944b"
+    },
+    "final-existing-browser-c.log": {
+      "passed": 2,
+      "seconds": 19.851,
+      "sha256": "3ffc7babc064c66542181e31f74f5d6c303eff4fd6000014c6731b234ff2036f"
+    },
+    "final-independent-a.log": {
+      "passed": 4,
+      "seconds": 26.361,
+      "sha256": "b03b487c7ef14197dd91e307a99f472c94a7d0a8ce267b30e836b7125ac8cf09"
+    },
+    "final-independent-b.log": {
+      "passed": 4,
+      "seconds": 24.433,
+      "sha256": "7a013d7368574187122c4ef9a7f34171a1783a60a70b29f23b61441a613a55a3"
+    },
+    "final-independent-c.log": {
+      "passed": 4,
+      "seconds": 16.238,
+      "sha256": "1e1ecfe633157d3861053a0e20b6da4e28a534e8109fa8db1aad52e4e07bb27d"
+    },
+    "final-independent-d.log": {
+      "passed": 4,
+      "seconds": 15.815,
+      "sha256": "fa8c31e2086d38e18c5b038a71b155922a2e2d1382fc48ff5edf837bc8d15e8c"
+    },
+    "final-regression-unit.log": {
+      "passed": 55,
+      "seconds": 11.238,
+      "sha256": "ef8fed20bc83b99867a3c9d6c605c5f71bcdaf0c9ff8b0dc4050580c9cf3207d"
+    }
+  },
+  "raw_trace_sha256": {
+    "negative-pause.json": "5113f40b869225aabe322b658e2b83e1ff3c0c156e26e390decc1aa4a8c0b22f",
+    "negative-rate-change.json": "6c10f900b18bd2334e1999e590066444a2004a79c847b4d65ddd0364746c8045",
+    "negative-same-id-replacement.json": "f876429820fe1c065dcff6263d6a9f1da34f259134e4ecc43b318aee61cefe6a",
+    "negative-same-source-reload.json": "f1851e63b879144809cdafe7a50ceec0a46a6ab04a81ba040861b4d0ae7b4003",
+    "negative-source-reroll.json": "7bb3e2580c96ebaec5acfc2ad36fdbd6b630e89a38e76929bc191a00b04d598b",
+    "negative-time-reset.json": "43004c2093431d24b6f3d8466b689ffd7d7bc5ed6ec947daae4f9ce0d8c488a6",
+    "negative-transient-duplicate.json": "93a6cb4f685004d4f6a1ac1e03e1be0833a5169763909b1eb8ce0d290111b42d",
+    "negative-transient-removal.json": "87f26939e47928853479a832f2ee06d337d357b3639a258968a896289f6dac20",
+    "negative-wrong-layout.json": "52448d2f0941f95ba904230d6fc1153e39a71eb13ad2cb15af7c0fb51a9dfd07",
+    "positive-3-container-False-held-False.json": "9f790a9fbef399d4f61d60654cf117e8882457f82fd9f9b59b593d433ef184a2",
+    "positive-3-container-False-held-True.json": "1babe91863cc0bf224aabb119d4d088e2df23e05ebfd0a0501aba4ba97ed48d5",
+    "positive-3-container-True-held-False.json": "9b6935bb818eddf37081730043d6510c5b003e0575997bccb6887a277eb02e48",
+    "positive-4-container-False-held-False.json": "a04206341f2e586c6939d6aa8a31683f10b897105b3d6cf230e39a9db21a2fe2",
+    "positive-5-container-False-held-False.json": "9e1656814b4f60c0d4c37eeaa27f59b5075fa524e705aecd1ddf78969c3eb55d",
+    "positive-6-container-False-held-False.json": "43827e83001799586155c24ac1c7edca37dd04823da92270f9aef37ca1558643",
+    "positive-7-container-False-held-False.json": "1128d36091dd0c2531354da4db804a3dbb47e42c4f5828fec66a8409a8bd4dc0"
+  },
+  "limitations": [
+    "Bounded foreground windows of about 1.69-1.79 seconds, not indefinite playback.",
+    "Resize windows intentionally exclude authored hold/release/source/trim boundaries; existing control and wrap tests rerun separately.",
+    "One dropped frame was reported on some videos; no zero-drop or frame-exact guarantee.",
+    "Source-color and pixel-fingerprint checks use the synthetic labeled fixture only; not exact frame-number OCR or archival verification.",
+    "No physical phone rotation, Safari/WebKit, Firefox, audio, background/sleep or production hosting test.",
+    "Historical full decoded-output comparison matrix and eight offline reference renders were not rerun in this tranche.",
+    "No merge, deployment, release, review approval, artist approval, dependency or production-runtime change."
+  ]
+}

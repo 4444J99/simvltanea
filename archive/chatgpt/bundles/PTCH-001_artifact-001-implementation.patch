@@ -1,0 +1,1433 @@
+diff --git a/incubator/triptych-video-canon/COMPOSITION.md b/incubator/triptych-video-canon/COMPOSITION.md
+new file mode 100644
+index 0000000..f932e90
+--- /dev/null
++++ b/incubator/triptych-video-canon/COMPOSITION.md
+@@ -0,0 +1,156 @@
++# Composition v1 — Artifact 001
++
++Status: offline synthetic engineering proof, not a historical reconstruction,
++artist-approved layout, published release, deployed interface, or merged change.
++Implementation remains inside the Portvs incubator. Final promotion owner remains
++unresolved; existing Media Ark, art-runtime, portfolio and exhibit apertures are
++unchanged.
++
++## One rendering backend, two authoring frontends
++
++The existing `render_triptych.py` is extended, not replaced. Its legacy CLI and
++manifest scheduler continue to create `Panel` / `Segment` objects. The new
++`composition.py` adapts versioned independent-loop state into the **same** objects,
++`render_segment`, encoding, temporary-file lifecycle and concatenation functions.
++Legacy canon scheduling remains a compatibility frontend; it is not falsely
++represented as independent-loop timing. The new state format does not serialize
++the legacy round scheduler or its audio/effect settings. Those remain reproducible
++through the original manifest/CLI. No second FFmpeg renderer was introduced.
++
++`export_project.py` is unchanged. Its renderer command builder was inspected;
++full generated-site/browser integration is not claimed by this proof.
++
++## State and exact clock semantics
++
++Schema: `portvs.composition/1`.
++Engine contract: `portvs-segments/1.0.0`.
++Selection algorithm: `sha256-loop-counter/1`.
++
++Time is a nonnegative **output-frame index** at the state's integer FPS. A source
++has a stable ID, relative path, SHA256, video/still kind and explicit rational
++logical duration. Hash validation and ffprobe validation precede rendering.
++A still's duration is a declared hold/loop interval, not an inferred file duration.
++All supplied synthetic videos have a two-second cycle and 48 source frames/sec;
++the eight compositions have 96 output frames at 24 frames/sec.
++
++Each stable loop identity has an ordered source bank, initial binding or seeded
++choice, reroll counter, rational offset, rational positive rate, rational trim
++window and held flag. Phases use Python `Fraction`, not accumulated float time.
++Sampling is deterministic at output frames; the media decoder samples the source
++at the compiled timestamp. Pixel/encoding equivalence across FFmpeg versions,
++codecs, thread counts or hardware is not promised.
++
++Events apply **before** sampling their frame. Array order resolves equal-frame
++operations. Every event and the complete initial state is retained for replay.
++
++| Operation | Defined effect |
++| --- | --- |
++| `hold(value=true)` | Freeze only the target loop's source phase. No other clock resets. |
++| `hold(value=false)` | Resume from that phase, without catching up for held time. |
++| `reroll` | Increment only the target counter, choose from its ordered bank while excluding its previous source when another candidate exists, reset its phase to zero; preserve its held/rate state. This explicit action can change a held image. |
++| `swap` | Exchange two current source bindings only. IDs, banks, local phases, rates, trim windows and held states stay attached to their loops. Fail if a exchanged source cannot fit its destination trim. |
++| `move` | Replace one normalized rectangle in one named orientation. Do not change clocks, bindings or the other orientation. |
++
++Selection hashes compact UTF-8 JSON `[algorithm, seed, loop_id, counter]` with
++SHA256, interprets the digest as an unsigned big-endian integer and takes modulo
++the eligible bank length. No mutable global PRNG and no loop-evaluation-order
++dependency exist. This is reproducible selection, not a claim of cryptographic
++uniformity after modulo reduction. Source reuse is rejected unless explicitly
++enabled; a reroll that would violate that constraint fails validation rather than
++silently cloning a video into another aperture.
++
++## Presentation is separate from time
++
++Each state contains authored `portrait` and `landscape` layouts. Both map every
++active loop ID exactly once. Placement array order is explicit compositing order.
++Rectangles are normalized, fit is `cover` or `contain`, and cover crop focal points
++are normalized. Contain uses centered letterboxing. V1 rejects empty, overlapping,
++unknown or missing apertures instead of dropping/occluding loops.
++
++`orientation_for(width, height)` selects by actual dimensions (square selects
++portrait). It does not modify temporal state. Raster export bounds are rounded to
++even shared edges for YUV420 and reject a too-small target. Export dimensions must
++be even. No live-browser resize/rotation adapter was built or browser-tested.
++
++Counts 3, 4, 5 and 6 each have distinct authored paired maps in
++`make_artifact_001.py`. There is no generic grid fallback. The schema ceiling of
++16 loops is a defensive validation limit, **not** a tested performance claim for
++7–16 loops. No automatic perceptual/layout approval is implied.
++
++## Audio and deferred capabilities
++
++Legacy `none`, `panel` and `mix` modes, selected-panel semantics, gain/fades,
++forward/reverse/pingpong and tone options retain their existing implementation.
++New composition-v1 exports are silent. `audio: {mode: none, generative: null}` and
++`routing: []` reserve extension points; requesting active routing or generative
++sound fails explicitly. Arbitrary blend, masks, nesting, animation interpolation,
++negative rates, realtime playback, browser controls, spatial rendering and
++installation targets are not implemented in this tranche.
++
++## Reproduce the supplied proof
++
++Runtime: Python standard library, FFmpeg and ffprobe with libx264 support.
++The decoded-frame verification script additionally uses NumPy and Pillow;
++versions used are in `requirements-verification.txt`. No API keys/network or Mac
++software are required for the supplied synthetic inputs.
++
++From this incubator directory in the reproduction bundle:
++
++```sh
++python -m unittest -v test_composition
++python make_artifact_001.py --render-only --only 3
++python make_artifact_001.py --render-only --only 4
++python make_artifact_001.py --render-only --only 5
++python make_artifact_001.py --render-only --only 6
++python verify_artifact_001.py
++```
++
++`--render-only` uses the **supplied source bytes, state and hashes**, rather than
++regenerating inputs. `--resume` may reuse a video only when its state/code recipe,
++output hash, dimensions and frame count match. The final verifier remains a
++separate mandatory check; a container batch timeout is not a passed batch.
++
++One direct render command:
++
++```sh
++python render_triptych.py \
++  --composition work/artifact-001/state-4.json \
++  --orientation landscape --width 1920 --height 1080 \
++  --preset veryfast --crf 20 \
++  --output work/artifact-001/renders/4-landscape.mp4
++```
++
++`python make_artifact_001.py --prepare-only` regenerates the synthetic source banks
++and state fixtures. This changes source hashes if another encoder/toolchain emits
++different bytes; preserve the supplied source manifest for an exact source replay.
++`baseline_run.py` is the pre-refactor baseline command, intentionally guarded by
++the upstream renderer blob hash; it is not a post-refactor replay command.
++
++## Evidence actually obtained
++
++The upstream renderer blob was matched exactly to Git object
++`6155fa1b8c9d5284c3deda0eaf56b342e47cf1bc` from upstream commit
++`48da3da293ecd7604b6c9d3ce19d0bf49a70013d` before it was changed.
++Four unchanged baseline exports were rendered before refactoring and the three
++full-height columns were visually inspected.
++
++37 tests pass, including 1,296 legacy schedule/FFmpeg-command comparisons, plus a
++separate silent-source/nondefault-gain comparison. Four actual post-refactor
++legacy outputs match baseline bytes under the same toolchain and CPU affinity.
++This is not 1,296 independently encoded render tests or a whole-repository CI run.
++No pre-existing renderer unit-test suite was retrieved in the scoped searches;
++the new regression suite and existing CLI were used. The unrelated generated-site
++verifiers were not run.
++
++Eight actual full-HD, four-second moving videos plus a one-second still/video
++adapter render exist. Each full-HD video is decoded for all 96 frames. Checks
++verify panel presence throughout, movement of every loop, and held-phase visual
++stability. A first-render freeze bug (black frames after the first held frame) was
++caught by this check, repaired with an explicit one-frame loop, and the complete
++family was rerendered. The passing results describe the corrected files only.
++Reference frames were visually inspected separately. Inspection-sheet labels are
++outside the artwork; MP4s and extracted artwork PNGs contain no interface chrome.
++
++Generated states, input/output hashes, source bytes, ffprobe facts, commands,
++verification results and baseline receipts live under ignored `work/` in the
++reproduction bundle. No private historical source media is included.
+diff --git a/incubator/triptych-video-canon/baseline_run.py b/incubator/triptych-video-canon/baseline_run.py
+new file mode 100644
+index 0000000..b035627
+--- /dev/null
++++ b/incubator/triptych-video-canon/baseline_run.py
+@@ -0,0 +1,39 @@
++"""Baseline receipt runner; does not change the upstream renderer."""
++import hashlib, json, os, subprocess, sys
++from pathlib import Path
++ROOT = Path(__file__).resolve().parent
++os.sched_setaffinity(0, set(sorted(os.sched_getaffinity(0))[:2]))
++OUT = ROOT / 'work' / 'baseline'
++OUT.mkdir(parents=True, exist_ok=True)
++source = (ROOT/'render_triptych.py').read_bytes()
++assert hashlib.sha1(b'blob '+str(len(source)).encode()+b'\0'+source).hexdigest() == '6155fa1b8c9d5284c3deda0eaf56b342e47cf1bc'
++(OUT/'render_triptych.py.original').write_bytes(source)
++commands=[]
++def run(cmd, name):
++    commands.append(cmd)
++    p=subprocess.run(cmd,cwd=ROOT,capture_output=True,text=True,timeout=90)
++    (OUT/(name+'.log')).write_text(p.stdout+'\nSTDERR\n'+p.stderr)
++    if p.returncode: raise RuntimeError(f'{name} failed ({p.returncode}): {p.stderr[-2000:]}')
++    return p
++for i,d in enumerate([0.4,0.6,0.8]):
++    run(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','lavfi','-i',f'testsrc2=size=160x120:rate=10:duration={d}', '-f','lavfi','-i',f'sine=frequency={220*(i+1)}:sample_rate=48000:duration={d}', '-vf',f'hue=h={i*100}','-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-c:a','aac',str(OUT/f'source-{i}.mp4')],f'generate-{i}')
++manifest={'clips':[f'source-{i}.mp4' for i in range(3)], 'canvas':{'width':240,'height':426,'fps':10},'render':{'crf':20,'preset':'ultrafast'},'work_dir':'.','output_file':'clip-none.mp4'}
++(OUT/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
++for mode in ['none','panel','mix']:
++    cmd=[sys.executable,'render_triptych.py','--manifest',str(OUT/'manifest.json'),'--audio',mode,'--output',str(OUT/f'clip-{mode}.mp4')]
++    run(cmd,f'clip-{mode}')
++run([sys.executable,'render_triptych.py','--manifest',str(OUT/'manifest.json'),'--timing','fixed','--phrase','0.4','--output',str(OUT/'fixed-none.mp4')],'fixed-none')
++import render_triptych as r
++from unittest.mock import patch
++with patch.object(sys,'argv',['render_triptych.py','--manifest',str(OUT/'manifest.json')]):
++    settings=r.build_settings(r.parse_args())
++clips=r.load_clips(settings)
++schedule=[{'index':s.index,'start':s.start,'duration':s.duration,'panels':[{'id':p.name,'source':p.source_index,'offset':p.source_offset} for p in s.panels]} for s in r.build_segments(clips,settings)]
++facts={}
++for p in OUT.glob('*.mp4'):
++    probe=run(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(p)],p.stem+'-probe')
++    facts[p.name]={'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'bytes':p.stat().st_size,'probe':json.loads(probe.stdout)}
++receipt={'upstream_commit':'48da3da293ecd7604b6c9d3ce19d0bf49a70013d','upstream_renderer_blob':'6155fa1b8c9d5284c3deda0eaf56b342e47cf1bc','retrieval':'connector text materialized locally and Git blob SHA-1 matched exactly','python':sys.version,'ffmpeg':subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0],'execution_cpu_affinity':sorted(os.sched_getaffinity(0)),'commands':commands,'schedule':schedule,'facts':facts}
++(OUT/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
++print('Baseline complete: clip none/panel/mix, fixed none; source blob verified.')
++print(json.dumps(schedule,indent=2))
+diff --git a/incubator/triptych-video-canon/composition.py b/incubator/triptych-video-canon/composition.py
+new file mode 100644
+index 0000000..efb88bb
+--- /dev/null
++++ b/incubator/triptych-video-canon/composition.py
+@@ -0,0 +1,449 @@
++"""Versioned, frame-addressed composition state; no rendering or UI side effects.
++
++Time is an output-frame index. Local phases use exact rational seconds. Events at
++frame f apply before sampling f; a held clock resumes without catching up. Layout
++selection is a projection and never mutates loop state. See COMPOSITION.md.
++"""
++from __future__ import annotations
++
++import copy
++import hashlib
++import json
++import math
++import re
++import subprocess
++from fractions import Fraction
++from pathlib import Path
++from typing import Any
++
++SCHEMA = "portvs.composition/1"
++ENGINE = "portvs-segments/1.0.0"
++RANDOMNESS = "sha256-loop-counter/1"
++ORIENTATIONS = ("portrait", "landscape")
++MAX_LOOPS = 16  # validation ceiling, NOT a claim that 16 loops are performance-tested
++MAX_FRAMES = 14400
++ID = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
++
++
++class StateError(ValueError):
++    """Invalid state or explicitly unsupported capability."""
++
++
++def canonical(state: dict[str, Any]) -> str:
++    return json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
++
++
++def save(state: dict[str, Any], path: Path) -> None:
++    validate(state)
++    path.write_text(json.dumps(state, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
++
++
++def load(path: Path, *, verify_media: bool = True) -> dict[str, Any]:
++    def pairs(items):
++        result = {}
++        for key, value in items:
++            if key in result:
++                raise StateError(f"Duplicate JSON key: {key}")
++            result[key] = value
++        return result
++    try:
++        state = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs,
++                           parse_constant=lambda s: (_ for _ in ()).throw(StateError(f"Non-finite JSON: {s}")))
++    except (OSError, json.JSONDecodeError) as exc:
++        raise StateError(f"Cannot read composition: {exc}") from exc
++    validate(state, path.parent if verify_media else None)
++    return state
++
++
++def keys(value: Any, required: set[str], optional: set[str], label: str) -> None:
++    if not isinstance(value, dict):
++        raise StateError(f"{label} must be an object")
++    missing, unknown = required - value.keys(), value.keys() - required - optional
++    if missing or unknown:
++        raise StateError(f"{label}: missing={sorted(missing)}, unsupported={sorted(unknown)}")
++
++
++def integer(value: Any, lo: int, hi: int, label: str) -> int:
++    if type(value) is not int or not lo <= value <= hi:
++        raise StateError(f"{label} must be an integer in [{lo}, {hi}]")
++    return value
++
++
++def number(value: Any, lo: float, hi: float, label: str) -> float:
++    if type(value) not in (float, int) or not math.isfinite(value) or not lo <= value <= hi:
++        raise StateError(f"{label} must be finite in [{lo}, {hi}]")
++    return float(value)
++
++
++def fraction(value: Any, label: str) -> Fraction:
++    if not isinstance(value, list) or len(value) != 2:
++        raise StateError(f"{label} must be [integer numerator, positive denominator]")
++    integer(value[0], 0, 10**9, label)
++    integer(value[1], 1, 10**9, label)
++    return Fraction(*value)
++
++
++def identifier(value: Any, label: str) -> str:
++    if not isinstance(value, str) or not ID.fullmatch(value):
++        raise StateError(f"Invalid {label}: {value!r}")
++    return value
++
++
++def media_path(source: dict[str, Any], root: Path) -> Path:
++    raw = source["path"]
++    if not isinstance(raw, str) or not raw or Path(raw).is_absolute():
++        raise StateError("Source path must be a nonempty relative path")
++    path = (root / raw).resolve()
++    if not path.is_relative_to(root.resolve()):
++        raise StateError("Source path escapes the state directory")
++    return path
++
++
++def hash_file(path: Path) -> str:
++    with path.open("rb") as handle:
++        return hashlib.file_digest(handle, "sha256").hexdigest()
++
++
++def geometry(placement: Any) -> None:
++    keys(placement, {"loop", "rect", "fit", "focal"}, set(), "placement")
++    identifier(placement["loop"], "loop reference")
++    if placement["fit"] not in ("cover", "contain"):
++        raise StateError("Only explicit cover/contain media fit is implemented")
++    rect, focal = placement["rect"], placement["focal"]
++    if not isinstance(rect, list) or len(rect) != 4:
++        raise StateError("rect must be normalized [x,y,width,height]")
++    x, y, w, h = [number(v, 0, 1, "rect") for v in rect]
++    if w <= 0 or h <= 0 or x + w > 1 + 1e-9 or y + h > 1 + 1e-9:
++        raise StateError("Rectangle is empty or outside the canvas")
++    if not isinstance(focal, list) or len(focal) != 2:
++        raise StateError("focal must be normalized [x,y]")
++    for v in focal:
++        number(v, 0, 1, "focal")
++
++
++def check_layout(layout: Any, ids: set[str]) -> None:
++    keys(layout, {"name", "placements"}, set(), "layout")
++    identifier(layout["name"], "layout name")
++    placements = layout["placements"]
++    if not isinstance(placements, list) or len(placements) != len(ids):
++        raise StateError("A layout must map every active loop exactly once")
++    for p in placements:
++        geometry(p)
++    if {p["loop"] for p in placements} != ids:
++        raise StateError("Duplicate, missing, or unknown layout loop")
++    # v1 rejects overlapping apertures, so no loop can be accidentally occluded.
++    for i, a in enumerate(placements):
++        ax, ay, aw, ah = a["rect"]
++        for b in placements[i + 1:]:
++            bx, by, bw, bh = b["rect"]
++            if min(ax + aw, bx + bw) - max(ax, bx) > 1e-9 and min(ay + ah, by + bh) - max(ay, by) > 1e-9:
++                raise StateError("Overlapping apertures are not supported in v1")
++
++
++def choose(seed: str, loop_id: str, counter: int, bank: list[str], previous: str | None = None) -> str:
++    """Counter-based SHA256 choice, independent of iteration order; modulo mapping."""
++    eligible = [sid for sid in bank if sid != previous] or bank
++    payload = json.dumps([RANDOMNESS, seed, loop_id, counter], separators=(",", ":"), ensure_ascii=False).encode()
++    return eligible[int.from_bytes(hashlib.sha256(payload).digest(), "big") % len(eligible)]
++
++
++def initial_runtime(state: dict[str, Any]) -> dict[str, Any]:
++    result = {}
++    for loop in state["loops"]:
++        source = loop["source"] if loop["source"] is not None else choose(state["seed"], loop["id"], loop["counter"], loop["bank"])
++        result[loop["id"]] = {**copy.deepcopy(loop), "source": source,
++                              "phase": fraction(loop["offset"], "offset"), "anchor": 0,
++                              "rate_fraction": fraction(loop["rate"], "rate")}
++    return result
++
++
++def span(loop: dict[str, Any]) -> Fraction:
++    return fraction(loop["trim"][1], "trim out") - fraction(loop["trim"][0], "trim in")
++
++
++def phase_at(loop: dict[str, Any], frame: int, fps: int) -> Fraction:
++    elapsed = Fraction(0) if loop["held"] else Fraction(frame - loop["anchor"], fps) * loop["rate_fraction"]
++    return (loop["phase"] + elapsed) % span(loop)
++
++
++def apply_event(runtime: dict[str, Any], layouts: dict[str, Any], event: dict[str, Any], state: dict[str, Any]) -> None:
++    f, kind = event["frame"], event["op"]
++    fps = state["fps"]
++    if kind == "swap":
++        a, b = (runtime[k] for k in event["loops"])
++        a["source"], b["source"] = b["source"], a["source"]
++        return
++    loop = runtime[event["loop"]]
++    if kind == "hold":
++        loop["phase"], loop["anchor"] = phase_at(loop, f, fps), f
++        loop["held"] = event["value"]
++    elif kind == "reroll":
++        loop["counter"] += 1
++        loop["source"] = choose(state["seed"], loop["id"], loop["counter"], loop["bank"], loop["source"])
++        loop["phase"], loop["anchor"] = Fraction(0), f
++    elif kind == "move":
++        for p in layouts[event["orientation"]]["placements"]:
++            if p["loop"] == loop["id"]:
++                p["rect"] = list(event["rect"])
++                break
++
++
++def compatible_sources(runtime: dict[str, Any], sources: dict[str, Any], reuse: bool) -> None:
++    active = [l["source"] for l in runtime.values()]
++    if not reuse and len(active) != len(set(active)):
++        raise StateError("Source reuse must be explicitly enabled; no automatic filler duplication")
++    for loop in runtime.values():
++        source = sources[loop["source"]]
++        end = fraction(loop["trim"][1], "trim end")
++        if end > fraction(source["duration"], "source duration"):
++            raise StateError(f"Trim exceeds selected/swapped source: {loop['id']}")
++
++
++def _validate(state: Any, media_root: Path | None = None) -> None:
++    keys(state, {"schema", "engine", "randomness", "id", "seed", "fps", "frames", "sources", "loops", "layouts", "events", "audio", "routing", "allow_source_reuse"}, {"note"}, "state")
++    if (state["schema"], state["engine"], state["randomness"]) != (SCHEMA, ENGINE, RANDOMNESS):
++        raise StateError("Unsupported schema, engine, or randomness version")
++    identifier(state["id"], "composition id")
++    if not isinstance(state["seed"], str) or not 1 <= len(state["seed"]) <= 200:
++        raise StateError("seed must be a nonempty string of at most 200 characters")
++    integer(state["fps"], 1, 120, "fps")
++    integer(state["frames"], 1, MAX_FRAMES, "frames")
++    if type(state["allow_source_reuse"]) is not bool:
++        raise StateError("allow_source_reuse must be boolean")
++    if state["audio"] != {"mode": "none", "generative": None} or state["routing"] != []:
++        raise StateError("Composition-v1 audio/routing is reserved, not implemented; use legacy CLI for existing audio modes")
++    if not isinstance(state["sources"], list) or not state["sources"]:
++        raise StateError("sources must be a nonempty ordered list")
++    sources = {}
++    for s in state["sources"]:
++        keys(s, {"id", "path", "sha256", "kind", "duration"}, set(), "source")
++        sid = identifier(s["id"], "source id")
++        if sid in sources:
++            raise StateError("Duplicate source identity")
++        if s["kind"] not in ("video", "still") or fraction(s["duration"], "duration") <= 0:
++            raise StateError("Source needs video/still kind and positive explicit duration")
++        if not isinstance(s["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", s["sha256"]):
++            raise StateError("Source requires a SHA256 identity")
++        p = media_path(s, media_root or Path.cwd())
++        if s["kind"] == "still" and p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
++            raise StateError("Unsupported still extension")
++        if media_root is not None:
++            if not p.is_file():
++                raise StateError(f"Missing media: {s['id']}")
++            if hash_file(p) != s["sha256"]:
++                raise StateError(f"Media hash mismatch: {s['id']}")
++        sources[sid] = s
++    loops = state["loops"]
++    if not isinstance(loops, list) or not 1 <= len(loops) <= MAX_LOOPS:
++        raise StateError(f"v1 validation ceiling is {MAX_LOOPS} loops; only rendered counts are supported")
++    ids = set()
++    for loop in loops:
++        keys(loop, {"id", "bank", "source", "counter", "offset", "rate", "trim", "held"}, set(), "loop")
++        lid = identifier(loop["id"], "loop id")
++        if lid in ids:
++            raise StateError("Duplicate loop identity")
++        ids.add(lid)
++        bank = loop["bank"]
++        if not isinstance(bank, list) or not bank or any(not isinstance(k, str) or k not in sources for k in bank) or len(bank) != len(set(bank)):
++            raise StateError("Each loop needs an ordered unique bank of existing sources")
++        if loop["source"] is not None and loop["source"] not in bank:
++            raise StateError("Explicit initial source must belong to its bank")
++        integer(loop["counter"], 0, 10**9, "counter")
++        offset, rate = fraction(loop["offset"], "offset"), fraction(loop["rate"], "rate")
++        if not Fraction(1, 16) <= rate <= 16:
++            raise StateError("Only positive rates 1/16 through 16 are implemented")
++        if type(loop["held"]) is not bool:
++            raise StateError("held must be boolean")
++        if not isinstance(loop["trim"], list) or len(loop["trim"]) != 2:
++            raise StateError("trim must be [in-seconds rational, out-seconds rational]")
++        start, end = (fraction(v, "trim") for v in loop["trim"])
++        if end <= start or offset >= end - start:
++            raise StateError("Invalid trim or offset outside loop duration")
++        if any(end > fraction(sources[k]["duration"], "source duration") for k in bank):
++            raise StateError("Loop trim must fit every candidate in its bank")
++    keys(state["layouts"], set(ORIENTATIONS), set(), "paired layouts")
++    for layout in state["layouts"].values():
++        check_layout(layout, ids)
++    if not isinstance(state["events"], list) or len(state["events"]) > 1000:
++        raise StateError("events must be a list of at most 1000 items")
++    previous = -1
++    for e in state["events"]:
++        if not isinstance(e, dict) or e.get("op") not in ("hold", "reroll", "swap", "move"):
++            raise StateError("Unsupported event operation")
++        extra = {"hold": {"loop", "value"}, "reroll": {"loop"}, "swap": {"loops"}, "move": {"loop", "orientation", "rect"}}[e["op"]]
++        keys(e, {"frame", "op"} | extra, set(), "event")
++        f = integer(e["frame"], 0, state["frames"] - 1, "event frame")
++        if f < previous:
++            raise StateError("Events must be nondecreasing; array order breaks same-frame ties")
++        previous = f
++        if e["op"] == "swap":
++            if not isinstance(e["loops"], list) or len(e["loops"]) != 2 or len(set(e["loops"])) != 2 or not set(e["loops"]) <= ids:
++                raise StateError("swap requires two distinct known loops")
++        elif e["loop"] not in ids:
++            raise StateError("Event references unknown loop")
++        if e["op"] == "hold" and type(e["value"]) is not bool:
++            raise StateError("hold value must be boolean")
++        if e["op"] == "move":
++            if e["orientation"] not in ORIENTATIONS:
++                raise StateError("move requires explicit orientation")
++            geometry({"loop": e["loop"], "rect": e["rect"], "fit": "cover", "focal": [0.5, 0.5]})
++    runtime, layouts = initial_runtime(state), copy.deepcopy(state["layouts"])
++    compatible_sources(runtime, sources, state["allow_source_reuse"])
++    for e in state["events"]:
++        apply_event(runtime, layouts, e, state)
++        compatible_sources(runtime, sources, state["allow_source_reuse"])
++        for layout in layouts.values():
++            check_layout(layout, ids)
++
++
++def validate(state: Any, media_root: Path | None = None) -> None:
++    try:
++        _validate(state, media_root)
++    except (KeyError, TypeError, OverflowError) as exc:
++        raise StateError(f"Malformed state: {exc}") from exc
++
++
++def verify_media_streams(state: dict[str, Any], root: Path) -> None:
++    """Check encoded facts separately from hash/schema validation; no Adobe claim."""
++    for source in state["sources"]:
++        try:
++            p = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
++                                "-show_entries", "stream=width,height:format=duration", "-of", "json",
++                                str(media_path(source, root))], check=True, capture_output=True, text=True, timeout=30)
++            facts = json.loads(p.stdout)
++            stream = facts["streams"][0]
++            if stream["width"] <= 0 or stream["height"] <= 0:
++                raise ValueError("empty visual stream")
++            if source["kind"] == "video":
++                actual = float(facts["format"]["duration"])
++                declared = float(fraction(source["duration"], "duration"))
++                if not math.isfinite(actual) or actual + 0.001 < declared:
++                    raise ValueError("declared duration exceeds encoded media")
++        except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError) as exc:
++            raise StateError(f"Invalid visual source {source['id']}: {exc}") from exc
++
++
++def snapshot(state: dict[str, Any], frame: int) -> dict[str, Any]:
++    """Pure temporal replay; orientation deliberately absent from this signature."""
++    integer(frame, 0, state["frames"] - 1, "sample frame")
++    runtime, layouts = initial_runtime(state), copy.deepcopy(state["layouts"])
++    for event in state["events"]:
++        if event["frame"] > frame:
++            break
++        apply_event(runtime, layouts, event, state)
++    loops = {}
++    for lid, loop in runtime.items():
++        phase = phase_at(loop, frame, state["fps"])
++        time = phase + fraction(loop["trim"][0], "trim start")
++        loops[lid] = {"source": loop["source"], "phase": [phase.numerator, phase.denominator],
++                      "source_time": [time.numerator, time.denominator], "held": loop["held"],
++                      "counter": loop["counter"], "rate": loop["rate"], "trim": loop["trim"]}
++    return {"frame": frame, "loops": loops, "layouts": layouts}
++
++
++def orientation_for(width: int, height: int) -> str:
++    integer(width, 2, 8192, "viewport width")
++    integer(height, 2, 8192, "viewport height")
++    return "portrait" if height >= width else "landscape"
++
++
++def pixel_boxes(layout: dict[str, Any], width: int, height: int) -> dict[str, tuple[int, int, int, int]]:
++    """Even boundaries for YUV420. Shared edges round identically; no dropped loop."""
++    if width % 2 or height % 2:
++        raise StateError("Export dimensions must be even for YUV420")
++    integer(width, 2, 8192, "width")
++    integer(height, 2, 8192, "height")
++    boxes = {}
++    for p in layout["placements"]:
++        x, y, w, h = p["rect"]
++        x0, x1 = (round(v * width / 2) * 2 for v in (x, x + w))
++        y0, y1 = (round(v * height / 2) * 2 for v in (y, y + h))
++        if x1 <= x0 or y1 <= y0:
++            raise StateError("Viewport too small: would hide a panel")
++        boxes[p["loop"]] = (x0, y0, x1 - x0, y1 - y0)
++    return boxes
++
++
++def compile_segments(state: dict[str, Any], root: Path, orientation: str, width: int, height: int):
++    """Adapt state to the SAME Panel/Segment backend used by the legacy canon.
++
++    Scan a bounded frame timeline and coalesce linear spans. Splitting at loop
++    wraps, events, and layout changes prevents resetting unrelated clocks.
++    """
++    from render_triptych import Panel, Segment
++    validate(state, root)
++    if orientation not in ORIENTATIONS:
++        raise StateError("Explicit portrait/landscape export orientation required")
++    sources = {s["id"]: s for s in state["sources"]}
++    source_indexes = {sid: i for i, sid in enumerate(sources)}
++    fps = state["fps"]
++    chunks = []
++    first = previous = snapshot(state, 0)
++    start = 0
++    for f in range(1, state["frames"] + 1):
++        current = snapshot(state, f) if f < state["frames"] else None
++        continuous = current is not None and current["layouts"][orientation] == previous["layouts"][orientation]
++        if continuous:
++            for lid, old in previous["loops"].items():
++                new = current["loops"][lid]
++                step = Fraction(0) if old["held"] else fraction(old["rate"], "rate") / fps
++                if any(old[k] != new[k] for k in ("source", "held", "counter", "rate", "trim")) or fraction(new["source_time"], "time") != fraction(old["source_time"], "time") + step:
++                    continuous = False
++                    break
++        if not continuous:
++            layout = first["layouts"][orientation]
++            boxes = pixel_boxes(layout, width, height)
++            panels = []
++            for p in layout["placements"]:
++                loop = first["loops"][p["loop"]]
++                source = sources[loop["source"]]
++                panels.append(Panel(
++                    name=p["loop"], source_index=source_indexes[source["id"]], source_path=media_path(source, root),
++                    source_offset=float(fraction(loop["source_time"], "time")),
++                    source_duration=float(fraction(source["duration"], "duration")), source_has_audio=False,
++                    box=boxes[p["loop"]], source_kind=source["kind"], playback_rate=float(fraction(loop["rate"], "rate")),
++                    held=loop["held"], fit=p["fit"], focal=tuple(p["focal"]),
++                    trim_end=float(fraction(loop["trim"][1], "trim end")), clocked=True))
++            chunks.append(Segment(len(chunks), start / fps, (f - start) / fps, tuple(panels)))
++            start, first = f, current
++        previous = current
++    return chunks
++
++
++def render_cli(args: Any) -> int:
++    from render_triptych import Settings, SCRIPT_DIR, render, print_schedule, path_inside
++    state_path = args.composition.resolve()
++    state = load(state_path)
++    verify_media_streams(state, state_path.parent)
++    if args.manifest or args.input_dir:
++        raise StateError("Do not combine a legacy manifest/input with --composition")
++    # Reject ignored legacy options rather than implying support.
++    forbidden = ("timing", "phrase", "layout", "panel_order", "max_videos", "max_clip_seconds", "audio", "audio_panel", "audio_gain", "audio_left_gain", "audio_middle_gain", "audio_right_gain", "audio_fade", "direction", "tone", "tone_strength", "tone_smoothing")
++    if any(getattr(args, name) is not None for name in forbidden):
++        raise StateError("Legacy scheduling/audio/effect overrides are not composition-v1 capabilities")
++    if args.orientation not in ORIENTATIONS:
++        raise StateError("--composition requires --orientation portrait|landscape")
++    if args.fps is not None and args.fps != state["fps"]:
++        raise StateError("FPS is part of replay state; edit the state instead of overriding it")
++    default = (1080, 1920) if args.orientation == "portrait" else (1920, 1080)
++    width, height = args.width or default[0], args.height or default[1]
++    if orientation_for(width, height) != args.orientation:
++        raise StateError("Export dimensions contradict the requested orientation")
++    output = (args.output or (SCRIPT_DIR / "renders" / f"{state['id']}-{args.orientation}.mp4")).resolve()
++    work = (args.work_dir or SCRIPT_DIR / "work").resolve()
++    if not path_inside(output, SCRIPT_DIR) or not path_inside(work, SCRIPT_DIR):
++        raise StateError("Outputs/work must remain inside the incubator")
++    settings = Settings(input_dir=state_path.parent, output_file=output, work_dir=work,
++                        timing_mode="composition-v1", phrase_seconds=state["frames"] / state["fps"],
++                        width=width, height=height, fps=state["fps"], crf=args.crf if args.crf is not None else 20,
++                        preset=args.preset or "medium", max_videos=None, max_clip_seconds=None,
++                        dry_run=args.dry_run, keep_work=args.keep_work, layout="composition-v1", clip_paths=None,
++                        audio_mode="none", audio_panel="left", audio_gain=0.8, audio_panel_gains={},
++                        audio_fade_seconds=0, video_direction="forward", tone_mode="none", tone_strength=0.35,
++                        tone_smoothing=50, panel_order=("left", "middle", "right"), declarative=True)
++    segments = compile_segments(state, state_path.parent, args.orientation, width, height)
++    print_schedule(segments, settings)
++    if not args.dry_run:
++        render(segments, settings)
++        print(f"wrote {output}")
++    return 0
+diff --git a/incubator/triptych-video-canon/make_artifact_001.py b/incubator/triptych-video-canon/make_artifact_001.py
+new file mode 100644
+index 0000000..999bc99
+--- /dev/null
++++ b/incubator/triptych-video-canon/make_artifact_001.py
+@@ -0,0 +1,197 @@
++#!/usr/bin/env python3
++"""Generate synthetic inputs and eight authored compositions, then render them.
++
++No historical/private media and no network calls. All outputs remain in work/.
++A reconstruction uses saved source bytes/hashes; the source generator is also
++provided, but encoding on another toolchain need not have identical byte hashes.
++"""
++from __future__ import annotations
++import argparse
++import copy
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++import time
++import composition as c
++
++ROOT = Path(__file__).resolve().parent
++OUT = ROOT / "work" / "artifact-001"
++# Authored aperture maps, not generated per-count grids. Placement array is z-order.
++DESIGNS = {
++    3: {
++        "portrait": ("three-voices-columns", [[0, 0, 1/3, 1], [1/3, 0, 1/3, 1], [2/3, 0, 1/3, 1]]),
++        "landscape": ("three-voices-suspended", [[.04,.16,.28,.68],[.36,.06,.28,.88],[.68,.22,.28,.62]]),
++    },
++    4: {
++        "portrait": ("four-offset-quadrants", [[.04,.04,.44,.42],[.52,.12,.44,.34],[.04,.52,.38,.44],[.46,.50,.50,.46]]),
++        "landscape": ("four-bookends", [[.04,.07,.28,.86],[.35,.07,.30,.40],[.35,.51,.30,.42],[.68,.18,.28,.65]]),
++    },
++    5: {
++        "portrait": ("five-spine-and-flanks", [[.35,.04,.30,.92],[.04,.10,.27,.35],[.04,.50,.27,.42],[.69,.04,.27,.44],[.69,.54,.27,.42]]),
++        "landscape": ("five-anchor-and-echoes", [[.04,.08,.36,.84],[.44,.06,.24,.41],[.72,.12,.24,.35],[.44,.51,.24,.43],[.72,.53,.24,.41]]),
++    },
++    6: {
++        "portrait": ("six-staggered-pairs", [[.04,.04,.44,.28],[.52,.10,.44,.22],[.04,.36,.34,.28],[.42,.36,.54,.28],[.04,.68,.54,.28],[.62,.68,.34,.23]]),
++        "landscape": ("six-asymmetric-columns", [[.04,.05,.24,.53],[.04,.62,.24,.33],[.32,.12,.36,.36],[.32,.52,.36,.43],[.72,.05,.24,.34],[.72,.43,.24,.46]]),
++    },
++}
++
++
++def run(cmd: list[str], label: str, commands: list[dict]) -> None:
++    started = time.monotonic()
++    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=240)
++    (OUT / "logs" / f"{label}.log").write_text(result.stdout + "\nSTDERR\n" + result.stderr, encoding="utf-8")
++    commands.append({"argv": cmd, "label": label, "returncode": result.returncode, "elapsed_seconds": round(time.monotonic()-started,3)})
++    (OUT / "commands.json").write_text(json.dumps(commands, indent=2)+"\n")
++    if result.returncode:
++        raise RuntimeError(f"{label} failed: {result.stderr[-3000:]}")
++
++
++def make_state(count: int, sources: list[dict]) -> dict:
++    layouts = {}
++    for orientation, (name, boxes) in DESIGNS[count].items():
++        layouts[orientation] = {"name": name, "placements": [{"loop": f"loop-{i+1}", "rect": rect,
++                                   "fit": "cover", "focal": [.5,.5]} for i, rect in enumerate(boxes)]}
++    state = {"schema": c.SCHEMA, "engine": c.ENGINE, "randomness": c.RANDOMNESS,
++             "id": f"artifact-001-{count}", "seed": "VNT0N1VS-artifact-001", "fps": 24, "frames": 96,
++             "sources": sources, "loops": [], "layouts": layouts, "events": [],
++             "audio": {"mode": "none", "generative": None}, "routing": [], "allow_source_reuse": False,
++             "note": "Synthetic engineering proof; proposed layouts, not historical reconstruction or artist-approved release."}
++    rates = [[1,1],[1,2],[3,2],[1,1],[2,1],[3,4]]
++    for i in range(count):
++        bank = [f"source-{i+1}", f"source-{i+1}-alternate"]
++        state["loops"].append({"id": f"loop-{i+1}", "bank": bank, "source": None, "counter": 0,
++                               "offset": [i, 8], "rate": rates[i], "trim": [[0,1],[2,1]], "held": False})
++    state["events"] = [
++        {"frame": 18, "op": "hold", "loop": "loop-1", "value": True},
++        {"frame": 30, "op": "hold", "loop": "loop-1", "value": False},
++        {"frame": 42, "op": "reroll", "loop": "loop-2"},
++        {"frame": 60, "op": "swap", "loops": ["loop-1", "loop-3"]},
++    ]
++    # A gentle inset tests serialized move in each orientation, without overlap.
++    for orientation in c.ORIENTATIONS:
++        x,y,w,h = layouts[orientation]["placements"][-1]["rect"]
++        state["events"].append({"frame": 72, "op": "move", "loop": f"loop-{count}", "orientation": orientation,
++                                "rect": [x+w*.04, y+h*.04, w*.92, h*.92]})
++    c.validate(state)
++    return state
++
++
++def generate_sources(commands: list[dict]) -> list[dict]:
++    sources = []
++    # Smooth periodic geometry with two distinct variants per loop; 2-second cycles.
++    # 96 source frames permit sub-frame-rate slow playback in the 24fps composition.
++    for i in range(6):
++        for alt in (False, True):
++            sid = f"source-{i+1}" + ("-alternate" if alt else "")
++            path = OUT / "media" / f"{sid}.mp4"
++            hue = i*57 + (23 if alt else 0)
++            phase = i*.55 + (1.2 if alt else 0)
++            # geq runs per-pixel on a compact source, then hue gives each voice identity.
++            expr = (f"nullsrc=s=320x240:r=48:d=2,format=yuv444p,"
++                    f"geq=lum='40+110*(0.5+0.5*sin(2*PI*(X/W*{2+(i%3)}+Y/H*0.45-T/2)+{phase}))':"
++                    f"cb='128+65*sin(2*PI*(Y/H+T/2)+{phase})':"
++                    f"cr='128+65*cos(2*PI*(X/W-T/2)+{phase})',hue=h={hue}")
++            run(["ffmpeg","-hide_banner","-loglevel","error","-y","-f","lavfi","-i",expr,
++                 "-an","-c:v","libx264","-preset","veryfast","-crf","16","-pix_fmt","yuv420p",str(path)],sid,commands)
++            sources.append({"id":sid,"path":f"media/{path.name}","sha256":c.hash_file(path),"kind":"video","duration":[2,1]})
++    # Still fixture is an actual static source frame, not schema-only support.
++    path = OUT / "media" / "still.png"
++    run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(OUT/"media"/"source-1.mp4"),
++         "-frames:v","1",str(path)],"source-still",commands)
++    sources.append({"id":"still","path":"media/still.png","sha256":c.hash_file(path),"kind":"still","duration":[2,1]})
++    return sources
++
++
++def facts(path: Path) -> dict:
++    probe = json.loads(subprocess.check_output(["ffprobe","-v","error","-show_streams","-show_format","-of","json",str(path)],text=True))
++    return {"path":str(path.relative_to(OUT)),"bytes":path.stat().st_size,"sha256":c.hash_file(path),"probe":probe}
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--prepare-only", action="store_true")
++    parser.add_argument("--render-only", action="store_true")
++    parser.add_argument("--only", help="One count, e.g. 4, to render a bounded batch")
++    parser.add_argument("--resume", action="store_true", help="Reuse outputs only after expected stream/frame checks")
++    parser.add_argument("--draft", action="store_true", help="540/960 proof; default reference exports are full HD")
++    args = parser.parse_args()
++    if hasattr(os,"sched_setaffinity"):
++        os.sched_setaffinity(0,set(sorted(os.sched_getaffinity(0))[:4]))
++    for folder in ("media","renders","stills","logs"):
++        (OUT/folder).mkdir(parents=True,exist_ok=True)
++    commands = []
++    if args.render_only:
++        sources=json.loads((OUT/"source-manifest.json").read_text())["sources"]
++        if (OUT/"commands.json").exists():
++            commands=json.loads((OUT/"commands.json").read_text())
++    else:
++        sources=generate_sources(commands)
++        (OUT/"source-manifest.json").write_text(json.dumps({"synthetic":True,"sources":sources},indent=2)+"\n")
++        for count in DESIGNS:
++            c.save(make_state(count,sources),OUT/f"state-{count}.json")
++        still=make_state(3,sources)
++        still["id"]="artifact-001-still-adapter"
++        still["loops"][0].update(bank=["still"],source="still")
++        still["events"]=[]
++        still["frames"]=24
++        c.save(still,OUT/"state-still.json")
++    if args.prepare_only:
++        print("Prepared synthetic source banks and paired states.")
++        return
++    receipts_path=OUT/"render-receipts.json"
++    receipts=json.loads(receipts_path.read_text()) if receipts_path.exists() else {}
++    outputs=[]
++    for count in DESIGNS:
++        if args.only and str(count) != args.only:
++            continue
++        for orientation in c.ORIENTATIONS:
++            name=f"{count}-{orientation}"
++            dims = (540,960) if args.draft else (1080,1920)
++            if orientation=="landscape":
++                dims=dims[::-1]
++            path=OUT/"renders"/f"{name}.mp4"
++            recipe={"state_sha256":c.hash_file(OUT/f"state-{count}.json"),
++                    "renderer_sha256":c.hash_file(ROOT/"render_triptych.py"),
++                    "composition_sha256":c.hash_file(ROOT/"composition.py"),
++                    "width":dims[0],"height":dims[1],"preset":"veryfast","crf":20}
++            complete = False
++            if args.resume and path.exists() and receipts.get(name,{}).get("recipe")==recipe:
++                try:
++                    streams = facts(path)["probe"]["streams"]
++                    v = next(s for s in streams if s["codec_type"] == "video")
++                    complete = ((v["width"],v["height"],int(v.get("nb_frames",0))) == (*dims,96)
++                                and c.hash_file(path)==receipts[name]["sha256"])
++                except (subprocess.CalledProcessError,KeyError,ValueError,StopIteration):
++                    pass
++            if not complete:
++                run([sys.executable,"render_triptych.py","--composition",str(OUT/f"state-{count}.json"),
++                     "--orientation",orientation,"--width",str(dims[0]),"--height",str(dims[1]),
++                     "--preset","veryfast","--crf","20","--output",str(path)],name,commands)
++                receipts[name]={"recipe":recipe,"sha256":c.hash_file(path)}
++                receipts_path.write_text(json.dumps(receipts,indent=2)+"\n")
++            temporary=OUT/"stills"/f"{name}-sample-%02d.png"
++            run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",str(path),"-vf",
++                 "select=eq(n\\,0)+eq(n\\,24)+eq(n\\,48)+eq(n\\,80)","-fps_mode","vfr",str(temporary)],f"{name}-stills",commands)
++            for sample,frame in enumerate((0,24,48,80),start=1):
++                (OUT/"stills"/f"{name}-sample-{sample:02d}.png").replace(OUT/"stills"/f"{name}-f{frame:03d}.png")
++            outputs.append(facts(path))
++            (OUT/"outputs.json").write_text(json.dumps(outputs,indent=2)+"\n")
++            print(f"Rendered {name}",flush=True)
++    path=OUT/"renders"/"still-adapter.mp4"
++    still_recipe={"renderer_sha256":c.hash_file(ROOT/"render_triptych.py"),"composition_sha256":c.hash_file(ROOT/"composition.py"),
++                  "state_sha256":c.hash_file(OUT/"state-still.json")}
++    if not path.exists() or receipts.get("still-adapter",{}).get("recipe")!=still_recipe:
++        run([sys.executable,"render_triptych.py","--composition",str(OUT/"state-still.json"),"--orientation","portrait",
++             "--width","240","--height","426","--preset","ultrafast","--output",str(path)],"still-adapter",commands)
++        receipts["still-adapter"]={"recipe":still_recipe,"sha256":c.hash_file(path)}
++        receipts_path.write_text(json.dumps(receipts,indent=2)+"\n")
++    outputs.append(facts(path))
++    (OUT/"outputs-last-batch.json").write_text(json.dumps(outputs,indent=2)+"\n")
++    print("Artifact family rendered; visual inspection is a separate gate.")
++
++
++if __name__=="__main__":
++    main()
+diff --git a/incubator/triptych-video-canon/render_triptych.py b/incubator/triptych-video-canon/render_triptych.py
+index 6155fa1..866432f 100644
+--- a/incubator/triptych-video-canon/render_triptych.py
++++ b/incubator/triptych-video-canon/render_triptych.py
+@@ -67,6 +67,7 @@ class Settings:
+     tone_strength: float
+     tone_smoothing: int
+     panel_order: tuple[str, str, str]
++    declarative: bool = False
+ 
+ 
+ @dataclass(frozen=True)
+@@ -93,6 +94,15 @@ class Panel:
+     source_offset: float
+     source_duration: float | None
+     source_has_audio: bool
++    # Optional composition adapter fields. Legacy construction/behavior is unchanged.
++    box: tuple[int, int, int, int] | None = None
++    source_kind: str = "video"
++    playback_rate: float = 1.0
++    held: bool = False
++    fit: str = "cover"
++    focal: tuple[float, float] = (0.5, 0.5)
++    trim_end: float | None = None
++    clocked: bool = False
+ 
+ 
+ @dataclass(frozen=True)
+@@ -121,6 +131,8 @@ def parse_args() -> argparse.Namespace:
+         type=Path,
+         help="Optional JSON settings file. Relative paths resolve from the manifest.",
+     )
++    parser.add_argument("--composition", type=Path, help="Versioned independent-loop composition JSON.")
++    parser.add_argument("--orientation", choices=("portrait", "landscape"), help="Explicit composition export orientation.")
+     parser.add_argument("--output", type=Path, help="Output .mp4 path.")
+     parser.add_argument("--work-dir", type=Path, help="Temporary segment directory.")
+     parser.add_argument(
+@@ -798,6 +810,34 @@ def video_source_filters(
+     output_label: str,
+ ) -> list[str]:
+     input_label = f"[{input_index}:v]"
++    if panel.clocked:
++        # Independent clock spans are compiled into the same Segment pipeline.
++        # Each span ends before a loop wrap. Pad only the final quantized frame.
++        if panel.source_kind == "still":
++            time_filters = f"trim=duration={seconds(segment.duration)},setpts=PTS-STARTPTS,"
++        elif panel.held:
++            end = min(panel.trim_end or panel.source_duration, panel.source_offset + 1 / settings.fps)
++            time_filters = (
++                f"trim=start={seconds(panel.source_offset)}:end={seconds(end)},"
++                "trim=end_frame=1,loop=loop=-1:size=1:start=0,"
++                f"setpts=N/({settings.fps}*TB),"
++            )
++        else:
++            time_filters = (
++                f"trim=start={seconds(panel.source_offset)}:end={seconds(panel.trim_end or panel.source_duration)},"
++                f"setpts=(PTS-STARTPTS)/{seconds(panel.playback_rate)},"
++                f"tpad=stop_mode=clone:stop_duration={seconds(segment.duration)},"
++            )
++        w, h = panel.box[2:]
++        if panel.fit == "contain":
++            spatial = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
++                       f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,")
++        else:
++            fx, fy = panel.focal
++            spatial = (f"scale={w}:{h}:force_original_aspect_ratio=increase,"
++                       f"crop={w}:{h}:(iw-ow)*{fx}:(ih-oh)*{fy},")
++        return [input_label + time_filters + f"fps={settings.fps},trim=duration={seconds(segment.duration)},"
++                "setpts=PTS-STARTPTS," + spatial + "setsar=1,format=yuv420p" + output_label]
+     if settings.video_direction == "forward":
+         return [
+             finish_video_filter(
+@@ -868,7 +908,7 @@ def render_segment(
+     segment: Segment,
+     settings: Settings,
+ ) -> None:
+-    layout_panels = layout_panel_names(settings)
++    layout_panels = tuple(p.name for p in segment.panels) if settings.declarative else layout_panel_names(settings)
+     panel_width = settings.width // 3 if settings.layout == "story" else settings.width
+     command = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y"]
+     render_panels = [panel_by_name(segment, panel_name) for panel_name in layout_panels]
+@@ -885,6 +925,10 @@ def render_segment(
+                     f"color=c=black:s={panel_width}x{settings.height}:r={settings.fps}",
+                 ]
+             )
++        elif panel.clocked and panel.source_kind == "still":
++            command.extend(["-loop", "1", "-framerate", str(settings.fps), "-t", seconds(segment.duration), "-i", str(panel.source_path)])
++        elif panel.clocked:
++            command.extend(["-i", str(panel.source_path)])
+         else:
+             command.extend(["-stream_loop", "-1", "-i", str(panel.source_path)])
+ 
+@@ -941,7 +985,13 @@ def render_segment(
+                 )
+             )
+ 
+-    if len(render_panels) == 1:
++    if settings.declarative:
++        filters.append(f"color=c=black:s={settings.width}x{settings.height}:r={settings.fps}:d={seconds(segment.duration)}[canvas0]")
++        for index, panel in enumerate(render_panels):
++            x, y, _, _ = panel.box
++            label = "[outv]" if index == len(render_panels) - 1 else f"[canvas{index + 1}]"
++            filters.append(f"[canvas{index}][v{index}]overlay=x={x}:y={y}:eof_action=pass:shortest=0{label}")
++    elif len(render_panels) == 1:
+         filters.append("[v0]copy[outv]")
+     else:
+         labels = "".join(f"[v{index}]" for index in range(len(render_panels)))
+@@ -1043,6 +1093,14 @@ def render(segments: list[Segment], settings: Settings) -> None:
+ 
+ def main() -> int:
+     args = parse_args()
++    if args.composition:
++        from composition import StateError, render_cli
++        try:
++            return render_cli(args)
++        except StateError as error:
++            raise SystemExit(str(error)) from error
++    if args.orientation:
++        raise SystemExit("--orientation requires --composition; legacy layout behavior is unchanged.")
+     settings = build_settings(args)
+     clips = load_clips(settings)
+     segments = build_segments(clips, settings)
+diff --git a/incubator/triptych-video-canon/requirements-verification.txt b/incubator/triptych-video-canon/requirements-verification.txt
+new file mode 100644
+index 0000000..20b3516
+--- /dev/null
++++ b/incubator/triptych-video-canon/requirements-verification.txt
+@@ -0,0 +1,3 @@
++# Only for decoded-frame verification; core renderer/model use the standard library.
++numpy==2.3.5
++Pillow==12.3.0
+diff --git a/incubator/triptych-video-canon/test_composition.py b/incubator/triptych-video-canon/test_composition.py
+new file mode 100644
+index 0000000..4e83005
+--- /dev/null
++++ b/incubator/triptych-video-canon/test_composition.py
+@@ -0,0 +1,316 @@
++"""Model, replay, geometry and legacy FFmpeg-command compatibility tests."""
++import copy
++import hashlib
++import importlib.util
++import itertools
++import json
++from pathlib import Path
++import sys
++import subprocess
++import tempfile
++import types
++import unittest
++from unittest.mock import patch
++from fractions import Fraction
++
++import composition as c
++import make_artifact_001 as fixture
++import render_triptych as renderer
++
++ROOT=Path(__file__).resolve().parent
++
++
++def fake_sources():
++    sources=[]
++    for i in range(1,7):
++        for suffix in ('','-alternate'):
++            sid=f'source-{i}{suffix}'
++            sources.append({'id':sid,'path':f'media/{sid}.mp4','sha256':'0'*64,'kind':'video','duration':[2,1]})
++    return sources
++
++
++class CompositionTests(unittest.TestCase):
++    def setUp(self):
++        self.s=fixture.make_state(4,fake_sources())
++
++    def test_eight_authored_layouts(self):
++        names=set()
++        for count in range(3,7):
++            state=fixture.make_state(count,fake_sources()); c.validate(state)
++            for layout in state['layouts'].values():
++                names.add(layout['name']); self.assertEqual(len(layout['placements']),count)
++        self.assertEqual(len(names),8)
++
++    def test_serialization_roundtrip_replays_every_frame(self):
++        other=json.loads(c.canonical(self.s)); c.validate(other)
++        for frame in range(self.s['frames']):
++            self.assertEqual(c.snapshot(self.s,frame),c.snapshot(other,frame))
++
++    def test_hold_freezes_only_target(self):
++        a,b=(c.snapshot(self.s,f)['loops'] for f in (18,29))
++        self.assertEqual(a['loop-1']['phase'],b['loop-1']['phase'])
++        self.assertNotEqual(a['loop-2']['phase'],b['loop-2']['phase'])
++
++    def test_release_no_catchup(self):
++        a,b,d=(c.snapshot(self.s,f)['loops']['loop-1'] for f in (18,30,31))
++        self.assertEqual(a['phase'],b['phase'])
++        self.assertEqual(Fraction(*d['phase'])-Fraction(*b['phase']),Fraction(1,24))
++
++    def test_reroll_changes_source_and_counter_only_target(self):
++        a,b=(c.snapshot(self.s,f)['loops'] for f in (41,42))
++        self.assertNotEqual(a['loop-2']['source'],b['loop-2']['source'])
++        self.assertEqual(b['loop-2']['counter'],1)
++        self.assertEqual(b['loop-2']['phase'],[0,1])
++        self.assertEqual(a['loop-1']['counter'],b['loop-1']['counter'])
++        self.assertEqual(a['loop-1']['source'],b['loop-1']['source'])
++
++    def test_swap_sources_not_clocks_banks_or_identity(self):
++        control=copy.deepcopy(self.s); control['events']=[e for e in control['events'] if e['op']!='swap']
++        a,b=c.snapshot(control,60)['loops'],c.snapshot(self.s,60)['loops']
++        self.assertEqual(a['loop-1']['source'],b['loop-3']['source'])
++        self.assertEqual(a['loop-3']['source'],b['loop-1']['source'])
++        for key in ('phase','counter','rate','held'):
++            self.assertEqual(a['loop-1'][key],b['loop-1'][key])
++
++    def test_move_only_presentation(self):
++        control=copy.deepcopy(self.s); control['events']=[e for e in control['events'] if e['op']!='move']
++        a,b=c.snapshot(control,80),c.snapshot(self.s,80)
++        self.assertEqual(a['loops'],b['loops']); self.assertNotEqual(a['layouts'],b['layouts'])
++
++    def test_orientation_roundtrip_does_not_touch_clocks(self):
++        for f in range(96):
++            before=c.canonical(self.s); snap=c.snapshot(self.s,f)
++            for w,h in ((390,844),(1440,900),(390,844)):
++                orientation=c.orientation_for(w,h)
++                c.pixel_boxes(snap['layouts'][orientation],w,h)
++                self.assertEqual(c.snapshot(self.s,f)['loops'],snap['loops'])
++            self.assertEqual(c.canonical(self.s),before)
++
++    def test_loop_evaluation_order_independent(self):
++        other=copy.deepcopy(self.s); other['loops'].reverse(); c.validate(other)
++        for f in (0,17,19,43,61,80,95):
++            self.assertEqual(c.snapshot(self.s,f),c.snapshot(other,f))
++
++    def test_source_record_order_not_bank_order_controls_selection(self):
++        other=copy.deepcopy(self.s); other['sources'].reverse(); c.validate(other)
++        self.assertEqual(c.snapshot(self.s,43),c.snapshot(other,43))
++
++    def test_seed_has_stable_golden_vector(self):
++        # Independently specify the algorithm, not Python's hash/random module.
++        payload=b'["sha256-loop-counter/1","seed","voice",0]'
++        expected=['a','b','c'][int.from_bytes(hashlib.sha256(payload).digest(),'big')%3]
++        self.assertEqual(c.choose('seed','voice',0,['a','b','c']),expected)
++
++    def test_ordered_bank_affects_choice(self):
++        self.assertNotEqual(c.choose('s','l',0,['a','b']),c.choose('s','l',0,['b','a']))
++
++    def test_independent_offsets_rates_and_wraps(self):
++        s=copy.deepcopy(self.s); s['events']=[]
++        a=c.snapshot(s,24)['loops']
++        self.assertEqual(a['loop-1']['phase'],[1,1])
++        self.assertEqual(a['loop-2']['phase'],[5,8])
++        self.assertEqual(a['loop-3']['phase'],[7,4])
++        self.assertEqual(c.snapshot(s,48)['loops']['loop-1']['phase'],[0,1])
++
++    def test_reroll_while_held_is_explicit_change_but_stays_held(self):
++        s=copy.deepcopy(self.s); s['events']=[{'frame':0,'op':'hold','loop':'loop-1','value':True},{'frame':1,'op':'reroll','loop':'loop-1'}]
++        c.validate(s)
++        a,b=c.snapshot(s,0)['loops']['loop-1'],c.snapshot(s,3)['loops']['loop-1']
++        self.assertNotEqual(a['source'],b['source']); self.assertTrue(b['held']); self.assertEqual(b['phase'],[0,1])
++
++    def test_same_frame_array_order_is_preserved(self):
++        s=copy.deepcopy(self.s); s['events']=[{'frame':4,'op':'hold','loop':'loop-1','value':True},{'frame':4,'op':'hold','loop':'loop-1','value':False}]
++        self.assertFalse(c.snapshot(s,4)['loops']['loop-1']['held'])
++        s['events'].reverse(); self.assertTrue(c.snapshot(s,4)['loops']['loop-1']['held'])
++
++    def test_validation_rejects_missing_and_unknown_fields(self):
++        for key in ('seed','schema','loops','layouts','audio'):
++            s=copy.deepcopy(self.s); del s[key]
++            with self.assertRaises(c.StateError): c.validate(s)
++        s=copy.deepcopy(self.s); s['unimplemented']='magic'
++        with self.assertRaises(c.StateError): c.validate(s)
++
++    def test_versions_are_not_silently_upgraded(self):
++        for key in ('schema','engine','randomness'):
++            s=copy.deepcopy(self.s); s[key]='future'
++            with self.assertRaises(c.StateError): c.validate(s)
++
++    def test_audio_routing_fail_explicitly(self):
++        for key,val in [('audio',{'mode':'mix','generative':None}),('routing',[{'x':1}])]:
++            s=copy.deepcopy(self.s); s[key]=val
++            with self.assertRaisesRegex(c.StateError,'not implemented'): c.validate(s)
++
++    def test_bad_clocks(self):
++        for key,val in [('rate',[0,1]),('rate',[1,0]),('rate',[-1,1]),('offset',[3,1]),('held','false'),('counter',True),('trim',[[2,1],[1,1]])]:
++            s=copy.deepcopy(self.s); s['loops'][0][key]=val
++            with self.assertRaises(c.StateError): c.validate(s)
++
++    def test_geometry_duplicate_drop_overlap_nonfinite(self):
++        for mutation in ('drop','duplicate','overlap','nan','outside'):
++            s=copy.deepcopy(self.s); ps=s['layouts']['portrait']['placements']
++            if mutation=='drop': ps.pop()
++            if mutation=='duplicate': ps[1]['loop']=ps[0]['loop']
++            if mutation=='overlap': ps[1]['rect']=ps[0]['rect'][:]
++            if mutation=='nan': ps[0]['rect'][0]=float('nan')
++            if mutation=='outside': ps[0]['rect'][2]=2
++            with self.assertRaises(c.StateError): c.validate(s)
++
++    def test_missing_orientation(self):
++        del self.s['layouts']['landscape']
++        with self.assertRaises(c.StateError): c.validate(self.s)
++
++    def test_bad_events(self):
++        for event in ({'frame':1,'op':'dance'}, {'frame':96,'op':'reroll','loop':'loop-1'}, {'frame':0,'op':'reroll','loop':'missing'}, {'frame':0,'op':'swap','loops':['loop-1','loop-1']}, {'frame':0,'op':'hold','loop':'loop-1','value':1}):
++            s=copy.deepcopy(self.s); s['events']=[event]
++            with self.assertRaises(c.StateError): c.validate(s)
++
++    def test_unsorted_events_fail(self):
++        self.s['events'].reverse()
++        with self.assertRaises(c.StateError): c.validate(self.s)
++
++    def test_duplicate_media_requires_explicit_reuse(self):
++        s=copy.deepcopy(self.s); s['events']=[]
++        s['loops'][1]['bank']=s['loops'][0]['bank'][:]
++        for l in s['loops'][:2]: l['source']=s['loops'][0]['bank'][0]
++        with self.assertRaises(c.StateError): c.validate(s)
++        s['allow_source_reuse']=True; c.validate(s)
++        self.assertNotEqual(s['loops'][0]['id'],s['loops'][1]['id'])
++
++    def test_trims_fit_all_candidates(self):
++        self.s['sources'][1]['duration']=[1,1]
++        with self.assertRaises(c.StateError): c.validate(self.s)
++
++    def test_viewport_and_resource_limits_fail_without_panel_drops(self):
++        with self.assertRaises(c.StateError): c.pixel_boxes(self.s['layouts']['portrait'],2,2)
++        with self.assertRaises(c.StateError): c.pixel_boxes(self.s['layouts']['portrait'],391,843)
++        self.s['frames']=c.MAX_FRAMES+1
++        with self.assertRaises(c.StateError): c.validate(self.s)
++
++    def test_nearby_mobile_desktop_sizes_every_loop_present(self):
++        for n in range(3,7):
++            s=fixture.make_state(n,fake_sources())
++            for w,h in ((390,844),(430,932),(768,1024),(1024,768),(1366,768),(1920,1080),(1080,1920)):
++                layout=s['layouts'][c.orientation_for(w,h)]
++                boxes=c.pixel_boxes(layout,w,h)
++                self.assertEqual(len(boxes),n)
++                self.assertTrue(all(b[2]>0 and b[3]>0 for b in boxes.values()))
++
++    def test_media_missing_corruption_and_escape(self):
++        with tempfile.TemporaryDirectory() as d:
++            root=Path(d)
++            with self.assertRaisesRegex(c.StateError,'Missing media'): c.validate(self.s,root)
++            p=root/'media/source-1.mp4'; p.parent.mkdir(); p.write_bytes(b'not-the-source')
++            with self.assertRaisesRegex(c.StateError,'hash mismatch'): c.validate(self.s,root)
++            self.s['sources'][0]['path']='../escape.mp4'
++            with self.assertRaisesRegex(c.StateError,'escapes'): c.validate(self.s,root)
++
++    def test_json_duplicate_key_rejected(self):
++        with tempfile.TemporaryDirectory() as d:
++            path=Path(d)/'state.json'; path.write_text('{"schema":1,"schema":2}')
++            with self.assertRaisesRegex(c.StateError,'Duplicate'): c.load(path,verify_media=False)
++
++    def test_compiler_uses_existing_segment_and_panel_classes(self):
++        with tempfile.TemporaryDirectory() as d:
++            root=Path(d); (root/'media').mkdir()
++            for s in self.s['sources']:
++                p=root/s['path']; p.write_bytes(s['id'].encode()); s['sha256']=c.hash_file(p)
++            segments=c.compile_segments(self.s,root,'portrait',540,960)
++            self.assertTrue(all(isinstance(seg,renderer.Segment) for seg in segments))
++            self.assertTrue(all(isinstance(p,renderer.Panel) for seg in segments for p in seg.panels))
++            self.assertEqual(sum(round(seg.duration*24) for seg in segments),96)
++            self.assertEqual(segments[0].start,0)
++            for a,b in zip(segments,segments[1:]): self.assertAlmostEqual(a.end,b.start)
++            for seg in segments:
++                f=round(seg.start*24); snap=c.snapshot(self.s,f)
++                for p in seg.panels:
++                    self.assertAlmostEqual(p.source_offset,float(Fraction(*snap['loops'][p.name]['source_time'])))
++                    self.assertEqual(p.held,snap['loops'][p.name]['held'])
++
++    def test_state_save_is_canonical_replay_not_mutation(self):
++        before=copy.deepcopy(self.s)
++        with tempfile.TemporaryDirectory() as d:
++            path=Path(d)/'state.json'; c.save(self.s,path)
++            self.assertEqual(c.load(path,verify_media=False),self.s)
++        self.assertEqual(self.s,before)
++
++    def test_malformed_nested_values_are_clear_state_errors(self):
++        for path,value in ((('loops',0,'source'),[]),(('layouts','portrait','placements',0,'loop'),{})):
++            s=copy.deepcopy(self.s); node=s
++            for part in path[:-1]: node=node[part]
++            node[path[-1]]=value
++            with self.assertRaises(c.StateError): c.validate(s)
++
++    def test_encoded_media_duration_is_checked(self):
++        class Result:
++            stdout=json.dumps({'streams':[{'width':320,'height':240}], 'format':{'duration':'0.5'}})
++        with patch.object(c.subprocess,'run',return_value=Result()):
++            with self.assertRaisesRegex(c.StateError,'duration exceeds'): c.verify_media_streams(self.s,ROOT)
++
++
++
++class LegacyCompatibilityTests(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        path=ROOT/'work/baseline/render_triptych.py.original'
++        if path.exists():
++            source=path.read_bytes()
++        else:
++            try:
++                source=subprocess.check_output(['git','cat-file','blob','6155fa1b8c9d5284c3deda0eaf56b342e47cf1bc'],cwd=ROOT)
++            except (OSError,subprocess.CalledProcessError):
++                raise AssertionError('Stage the verified legacy reference from the reproduction bundle or full Git history')
++        if hashlib.sha1(b'blob '+str(len(source)).encode()+b'\0'+source).hexdigest()!='6155fa1b8c9d5284c3deda0eaf56b342e47cf1bc':
++            raise AssertionError('Unverified legacy reference')
++        cls.old=types.ModuleType('legacy_reference'); cls.old.__file__=str(ROOT/'render_triptych.py')
++        sys.modules[cls.old.__name__]=cls.old; exec(compile(source,'legacy_reference','exec'),cls.old.__dict__)
++
++    def settings(self,module,*args):
++        with patch.object(sys,'argv',['render_triptych.py',*args]):
++            return module.build_settings(module.parse_args())
++
++    def test_defaults_remain_identical(self):
++        a,b=self.settings(self.old),self.settings(renderer)
++        for k,v in vars(a).items(): self.assertEqual(v,getattr(b,k),k)
++
++    def test_legacy_still_rejection_unchanged(self):
++        with tempfile.TemporaryDirectory(dir=ROOT/'work') as d:
++            p=Path(d)/'still.png'; p.write_bytes(b'not-a-video')
++            for module in (self.old,renderer):
++                with self.assertRaises(SystemExit): module.collect_video_paths(self.settings(module,str(p.parent)))
++
++    def test_schedules_commands_audio_effects_order_and_layout_unchanged(self):
++        cases=0
++        for timing,mode,direction,layout,tone,order in itertools.product(
++            ('clip','fixed'),('none','panel','mix'),('forward','reverse','pingpong'),
++            ('story','left','middle','right'),('none','normalize','histeq'),itertools.permutations(renderer.PANEL_NAMES)):
++            args=['--timing',timing,'--audio',mode,'--direction',direction,'--layout',layout,'--tone',tone,'--panel-order',','.join(order),'--width','240','--height','426','--fps','10']
++            def commands(module):
++                settings=self.settings(module,*args)
++                clips=[module.Clip(i,ROOT/f'source-{i}.mp4',d,True) for i,d in enumerate((.4,.6,.8))]
++                segs=module.build_segments(clips,settings)
++                collected=[]
++                with patch.object(module,'run',side_effect=lambda cmd:collected.append(cmd)):
++                    for seg in segs: module.render_segment(ROOT/'work/compat.mp4',seg,settings)
++                schedule=[(s.start,s.duration,[(p.name,p.source_index,p.source_offset) for p in s.panels]) for s in segs]
++                return schedule,collected
++            self.assertEqual(commands(self.old),commands(renderer),args)
++            cases+=1
++        self.assertEqual(cases,1296)
++
++    def test_silent_sources_and_nondefault_audio_gains_unchanged(self):
++        args=['--audio','mix','--audio-panel','right','--audio-left-gain','0.2','--audio-middle-gain','1.5','--audio-right-gain','0','--audio-gain','0.3','--audio-fade','0.1']
++        result=[]
++        for module in (self.old,renderer):
++            settings=self.settings(module,*args)
++            clips=[module.Clip(0,ROOT/'source.mp4',1,False)]
++            commands=[]
++            with patch.object(module,'run',side_effect=lambda cmd:commands.append(cmd)):
++                for seg in module.build_segments(clips,settings):
++                    module.render_segment(ROOT/'work/silence.mp4',seg,settings)
++            result.append(commands)
++        self.assertEqual(*result)
++
++
++
++if __name__=='__main__':
++    unittest.main(verbosity=2)
+diff --git a/incubator/triptych-video-canon/verify_artifact_001.py b/incubator/triptych-video-canon/verify_artifact_001.py
+new file mode 100644
+index 0000000..3a71b1b
+--- /dev/null
++++ b/incubator/triptych-video-canon/verify_artifact_001.py
+@@ -0,0 +1,109 @@
++"""Verify actual decoded output, stable holds, moving voices and legacy regression."""
++import copy
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++import numpy as np
++from PIL import Image, ImageDraw
++import composition as c
++import make_artifact_001 as make
++ROOT=Path(__file__).resolve().parent
++OUT=make.OUT
++if hasattr(os,'sched_setaffinity'):
++    os.sched_setaffinity(0,set(sorted(os.sched_getaffinity(0))[:4]))
++
++
++def run(cmd):
++    return subprocess.run(cmd,check=True,capture_output=True,timeout=90)
++
++
++def decode(path,width,height):
++    data=run(['ffmpeg','-v','error','-i',str(path),'-vf',f'scale={width}:{height}', '-f','rawvideo','-pix_fmt','rgb24','-']).stdout
++    return np.frombuffer(data,dtype=np.uint8).reshape(-1,height,width,3)
++
++
++def crop(frame,box,inset=2):
++    x,y,w,h=box
++    return frame[y+inset:y+h-inset,x+inset:x+w-inset].astype(float)
++
++
++def diff(a,b):
++    return float(np.abs(a-b).mean())
++
++
++def main():
++    results=[]
++    for count in range(3,7):
++        state=c.load(OUT/f'state-{count}.json')
++        for orientation in c.ORIENTATIONS:
++            name=f'{count}-{orientation}'
++            path=OUT/'renders'/f'{name}.mp4'
++            facts=make.facts(path)
++            video=[s for s in facts['probe']['streams'] if s['codec_type']=='video'][0]
++            dims=(1080,1920) if orientation=='portrait' else (1920,1080)
++            assert (video['width'],video['height'])==dims,name
++            assert video['nb_frames']=='96' and video['r_frame_rate']=='24/1',name
++            assert abs(float(video['duration'])-4)<.001,name
++            assert not any(s['codec_type']=='audio' for s in facts['probe']['streams']),name
++            small=(216,384) if orientation=='portrait' else (384,216)
++            frames=decode(path,*small); assert len(frames)==96,name
++            boxes=c.pixel_boxes(state['layouts'][orientation],*small)
++            hold_box=boxes['loop-1']
++            held_diffs=[diff(crop(frames[18],hold_box),crop(frames[f],hold_box)) for f in range(19,30)]
++            assert max(held_diffs)<2.0,(name,'hold',held_diffs)
++            motion={lid:diff(crop(frames[0],b),crop(frames[12],b)) for lid,b in boxes.items()}
++            assert min(motion.values())>2.0,(name,'moving loops',motion)
++            presence={lid:float(crop(frames[48],b).mean()) for lid,b in boxes.items()}
++            assert min(presence.values())>15.0,(name,'black/missing aperture',presence)
++            min_presence=255.0
++            for f in range(96):
++                frame_boxes=c.pixel_boxes(c.snapshot(state,f)['layouts'][orientation],*small)
++                min_presence=min(min_presence,min(float(crop(frames[f],b).mean()) for b in frame_boxes.values()))
++            assert min_presence>15.0,(name,'unexpected black panel in timeline',min_presence)
++            results.append({'minimum_panel_mean_rgb_all_96_frames':min_presence,'file':name,'decoded_frames':96,'dimensions':dims,'sha256':facts['sha256'],
++                            'held_loop_max_mean_absolute_rgb_difference_18_to_29':max(held_diffs),
++                            'loop_motion_mean_absolute_rgb_difference_0_to_12':motion,
++                            'panel_presence_mean_rgb_frame_48':presence})
++    # Actual still adapter: first aperture is stationary while the two video apertures move.
++    frames=decode(OUT/'renders/still-adapter.mp4',240,426)
++    assert len(frames)==24
++    still_diff=diff(frames[0,2:-2,2:78].astype(float),frames[20,2:-2,2:78].astype(float))
++    moving_diff=diff(frames[0,2:-2,82:158].astype(float),frames[20,2:-2,82:158].astype(float))
++    assert still_diff<2 and moving_diff>2,(still_diff,moving_diff)
++    # Exact old CLI outputs are re-rendered using the refactor on the same toolchain.
++    baseline=json.loads((ROOT/'work/baseline/receipt.json').read_text())
++    if hasattr(os,'sched_setaffinity'):
++        os.sched_setaffinity(0,set(baseline['execution_cpu_affinity']))
++    old=ROOT/'work/baseline'; regression=ROOT/'work/regression'; regression.mkdir(exist_ok=True)
++    legacy=[]
++    for stem in ('clip-none','clip-panel','clip-mix','fixed-none'):
++        output=regression/(stem+'.mp4')
++        cmd=[sys.executable,'render_triptych.py','--manifest',str(old/'manifest.json'), '--output',str(output)]
++        if stem.startswith('clip-'): cmd+=['--audio',stem.split('-')[1]]
++        else: cmd+=['--timing','fixed','--phrase','0.4']
++        result=run(cmd)
++        (regression/(stem+'.log')).write_bytes(result.stdout+b'\nSTDERR\n'+result.stderr)
++        old_hash=baseline['facts'][stem+'.mp4']['sha256']; new_hash=c.hash_file(output)
++        assert old_hash==new_hash,(stem,'legacy byte regression',old_hash,new_hash)
++        legacy.append({'name':stem,'sha256':new_hash,'byte_identical_same_toolchain':True,'argv':cmd})
++    report={'status':'passed','rendered_checks':results,'still_adapter':{'frames':24,'static_diff':still_diff,'moving_diff':moving_diff},
++            'legacy_outputs':legacy,'scope':'Offline render/model checks only; no live-browser or historical reconstruction claim.'}
++    (OUT/'verification.json').write_text(json.dumps(report,indent=2)+'\n')
++    (OUT/'outputs.json').write_text(json.dumps([make.facts(p) for p in sorted((OUT/'renders').glob('*.mp4'))],indent=2)+'\n')
++    # Review sheets contain labels only OUTSIDE the actual exported artwork.
++    for f in (0,24,48,80):
++        sheet=Image.new('RGB',(1260,1220),'#eeeeee'); draw=ImageDraw.Draw(sheet)
++        for row,count in enumerate(range(3,7)):
++            for col,orientation in enumerate(c.ORIENTATIONS):
++                path=OUT/'stills'/f'{count}-{orientation}-f{f:03d}.png'
++                if not path.exists():
++                    run(['ffmpeg','-v','error','-y','-i',str(OUT/'renders'/f'{count}-{orientation}.mp4'),'-vf',f'select=eq(n\\,{f})','-frames:v','1',str(path)])
++                im=Image.open(path); im.thumbnail((550,265))
++                x=col*630+(630-im.width)//2; y=row*305+30
++                sheet.paste(im,(x,y)); draw.text((col*630+25,row*305+10),f'{count} loops | {orientation} | frame {f}',fill='black')
++        sheet.save(OUT/f'inspection-f{f:03d}.jpg',quality=90)
++    print('PASS: eight 96-frame videos; stable holds; every loop moves; still adapter; four byte-identical legacy outputs.')
++
++if __name__=='__main__': main()
