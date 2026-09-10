@@ -1,0 +1,6 @@
+# CODEOWNERS for SIMVLTANEA
+*       @4444J99
+/core/  @4444J99
+/tools/ @4444J99
+editions.json @4444J99
+docs/   @4444J99

@@ -11,9 +11,10 @@ from typing import Any
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_EDITIONS = SCRIPT_DIR / "editions.example.json"
-DEFAULT_SITE_DIR = SCRIPT_DIR / "site"
-DEFAULT_PACKAGE_DIR = SCRIPT_DIR / "packages" / "triptych-video-canon-site"
+REPO_ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name == "tools" else SCRIPT_DIR
+DEFAULT_EDITIONS = REPO_ROOT / "editions.json"
+DEFAULT_SITE_DIR = REPO_ROOT / "site"
+DEFAULT_PACKAGE_DIR = REPO_ROOT / "packages" / "triptych-video-canon-site"
 PUBLIC_MANIFEST_SCHEMA = "triptych.public-release-manifest.v1"
 
 
@@ -48,7 +49,8 @@ def path_inside(path: Path, parent: Path) -> bool:
 def resolve_inside(path: Path, label: str) -> Path:
     expanded = path.expanduser()
     resolved = expanded.resolve() if expanded.is_absolute() else (SCRIPT_DIR / expanded).resolve()
-    if not path_inside(resolved, SCRIPT_DIR):
+    # Also allow repo-root-relative paths like ../editions.json or absolute repo-root paths.
+    if not path_inside(resolved, SCRIPT_DIR) and not path_inside(resolved, REPO_ROOT):
         raise SystemExit(f"{label} must stay inside the SIMVLTANEA repository root.")
     return resolved
 
@@ -91,7 +93,9 @@ def resolve_project_output(project_base: Path, raw_path: Any) -> Path | None:
         return None
     path = Path(raw_path).expanduser()
     resolved = path if path.is_absolute() else (project_base / path).resolve()
-    return resolved if path_inside(resolved, SCRIPT_DIR) else None
+    if path_inside(resolved, SCRIPT_DIR) or path_inside(resolved, REPO_ROOT):
+        return resolved
+    return None
 
 
 def visual_sketch_state(project: dict[str, Any] | None, project_base: Path) -> str:

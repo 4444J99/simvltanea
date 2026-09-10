@@ -36,3 +36,11 @@ jobs:
       - name: Verify Local Lifecycle Cleanliness
         run: |
           python3 tools/verify_local_lifecycle.py
+
+      - name: Verify Edition Presets
+        run: |
+          python3 tools/verify_editions.py
+
+      - name: Report Edition Status
+        run: |
+          python3 tools/edition_status.py

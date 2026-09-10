@@ -37,6 +37,7 @@
         "work_title": "SIMVLTANEA Inaugural Pass",
         "family": "simultaneous_field",
         "arrangement_model_role": "Configurable N-loop rational clock matrix with independent phase offsets and zero-restart orientation switching.",
+        "panel_arrangement_role": "Inaugural field arranges independent loop identities across paired portrait and landscape relational grids without filler or duplication.",
         "language": [
           "simultaneity",
           "independent loops",
@@ -48,6 +49,7 @@
       "source": {
         "type": "folder",
         "folder": "samples/inaugural",
+        "source_dir": "samples/inaugural",
         "order": "name",
         "motion": "forward",
         "width": 1080,

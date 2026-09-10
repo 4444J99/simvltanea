@@ -13,8 +13,9 @@ from typing import Any
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_EDITIONS = SCRIPT_DIR / "editions.example.json"
-DEFAULT_SITE_DIR = SCRIPT_DIR / "site"
+REPO_ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name == "tools" else SCRIPT_DIR
+DEFAULT_EDITIONS = REPO_ROOT / "editions.json"
+DEFAULT_SITE_DIR = REPO_ROOT / "site"
 SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 PANEL_NAMES = {"left", "middle", "right"}
 SOURCE_TYPES = {"photos_album", "photos_visual_album", "folder"}
@@ -54,7 +55,8 @@ def path_inside(path: Path, parent: Path) -> bool:
 def resolve_inside(path: Path, label: str) -> Path:
     expanded = path.expanduser()
     resolved = expanded.resolve() if expanded.is_absolute() else (SCRIPT_DIR / expanded).resolve()
-    if not path_inside(resolved, SCRIPT_DIR):
+    # Also allow repo-root-relative paths like ../editions.json or absolute repo-root paths.
+    if not path_inside(resolved, SCRIPT_DIR) and not path_inside(resolved, REPO_ROOT):
         raise SystemExit(f"{label} must stay inside the SIMVLTANEA repository root.")
     return resolved
 
@@ -149,9 +151,9 @@ def validate_source(errors: list[str], slug: str, source: Any) -> None:
         ):
             add(errors, slug, "Photos source requires source.album or source.albums")
     if source_type == "folder":
-        source_dir = source.get("source_dir")
+        source_dir = source.get("source_dir") or source.get("folder")
         if not isinstance(source_dir, str) or not source_dir.strip():
-            add(errors, slug, "folder source requires source.source_dir")
+            add(errors, slug, "folder source requires source.source_dir (or source.folder)")
     for key in ("limit", "offset", "model_limit", "width", "height", "fps"):
         validate_positive_int(errors, slug, f"source.{key}", source.get(key))
     for key in ("min_duration", "max_duration", "duration_seconds"):
@@ -179,7 +181,10 @@ def validate_audio(errors: list[str], slug: str, settings: dict[str, Any]) -> No
     if panel is not None and panel not in PANEL_NAMES:
         add(errors, slug, f"settings.audio.panel {panel!r} is invalid")
     for key in ("gain", "fade_seconds"):
-        validate_positive_number(errors, slug, f"settings.audio.{key}", audio.get(key))
+        val = audio.get(key)
+        if val is not None:
+            if not is_number(val) or float(val) < 0:
+                add(errors, slug, f"settings.audio.{key} must be a non-negative number")
     panel_gains = audio.get("panel_gains")
     if panel_gains is not None:
         if not isinstance(panel_gains, dict):
@@ -318,7 +323,7 @@ def validate_visual_sketch(errors: list[str], slug: str, value: Any) -> tuple[st
         if isinstance(output_file, str) and output_file:
             output_path = Path(output_file).expanduser()
             resolved = output_path if output_path.is_absolute() else (SCRIPT_DIR / output_path).resolve()
-            if not path_inside(resolved, SCRIPT_DIR):
+            if not path_inside(resolved, SCRIPT_DIR) and not path_inside(resolved, REPO_ROOT):
                 add(errors, slug, f"{prefix}.output_file escapes incubator")
         for key in ("width", "height", "fps", "duration", "slices", "source_count"):
             validate_positive_number(errors, slug, f"{prefix}.{key}", sketch.get(key))
