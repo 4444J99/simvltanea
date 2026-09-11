@@ -16,7 +16,9 @@ from make_artifact_001 import probe
 from make_runtime_fixture import prepare
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE / 'runtime-proof'
+REPO = HERE.parent
+ROOT = REPO / 'runtime-proof'
+RENDER_CLI = (HERE / 'render_triptych.py') if (HERE / 'render_triptych.py').exists() else (REPO / 'core' / 'render_triptych.py')
 
 
 def render_family() -> list[dict]:
@@ -25,12 +27,12 @@ def render_family() -> list[dict]:
     for count in (3, 4, 5, 6, 7):
         for orientation, width, height in (('portrait', 360, 640), ('landscape', 640, 360)):
             output = ROOT / 'renders' / f'labeled-{count}-{orientation}.mp4'
-            command = ['python3', 'render_triptych.py', '--state', f'runtime-proof/state-{count}.json',
+            command = ['python3', str(RENDER_CLI), '--state', str(ROOT / f'state-{count}.json'),
                        '--orientation', orientation, '--width', str(width), '--height', str(height),
-                       '--preset', 'ultrafast', '--crf', '18', '--output', str(output.relative_to(HERE))]
+                       '--preset', 'ultrafast', '--crf', '18', '--output', str(output)]
             start = time.monotonic()
             with (ROOT / 'evidence' / f'render-{count}-{orientation}.log').open('w') as log:
-                subprocess.run(command, cwd=HERE, stdout=log, stderr=subprocess.STDOUT, check=True)
+                subprocess.run(command, cwd=str(REPO), stdout=log, stderr=subprocess.STDOUT, check=True)
             elapsed = time.monotonic() - start
             facts = probe(output)
             video = facts['streams'][0]
@@ -56,10 +58,10 @@ def verify_portable_reproduction() -> list[dict]:
     receipts = []
     for orientation, width, height in (('portrait', 360, 640), ('landscape', 640, 360)):
         output = ROOT / 'renders' / f'portable-7-{orientation}.mp4'
-        command = ['python3', 'render_triptych.py', '--state', 'runtime-proof/preview-7/state.json',
+        command = ['python3', str(RENDER_CLI), '--state', str(ROOT / 'preview-7' / 'state.json'),
                    '--orientation', orientation, '--width', str(width), '--height', str(height),
-                   '--preset', 'ultrafast', '--crf', '18', '--output', str(output.relative_to(HERE))]
-        subprocess.run(command, cwd=HERE, check=True, capture_output=True, text=True)
+                   '--preset', 'ultrafast', '--crf', '18', '--output', str(output)]
+        subprocess.run(command, cwd=str(REPO), check=True, capture_output=True, text=True)
         digest = c.sha256_file(output)
         reference = c.sha256_file(ROOT / 'renders' / f'labeled-7-{orientation}.mp4')
         c.require(digest == reference, 'portable state did not reproduce identical bytes')

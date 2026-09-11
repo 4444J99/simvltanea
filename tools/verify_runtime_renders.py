@@ -15,7 +15,7 @@ from PIL import Image, ImageChops, ImageStat
 import composition as c
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE / 'runtime-proof'
+ROOT = (HERE.parent / 'runtime-proof') if (HERE.parent / 'runtime-proof').exists() else HERE / 'runtime-proof'
 CHECK_FRAMES = (12, 48, 120)
 
 
