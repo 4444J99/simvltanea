@@ -22,9 +22,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
+          # Ensure system Chrome with H.264 codecs is present for native video decode (playwright's chromium lacks proprietary codecs)
+          if ! which google-chrome-stable >/dev/null 2>&1 && ! which google-chrome >/dev/null 2>&1; then
+            echo "installing google-chrome-stable for H.264 decode"
+            sudo apt-get install -y google-chrome-stable || echo "chrome install failed — will fallback to playwright chromium"
+          fi
           ffmpeg -version | head -1
           ffprobe -version | head -1
-          google-chrome --version 2>&1 || chromium --version 2>&1 || echo "no system chrome found — playwright chromium will be used"
+          echo "== browser diagnostics =="
+          which google-chrome 2>&1; which google-chrome-stable 2>&1; which chromium 2>&1; which chromium-browser 2>&1
+          ls -l /usr/bin/*chrome* 2>&1 || echo "no /usr/bin/*chrome*"
+          google-chrome --version 2>&1 || google-chrome-stable --version 2>&1 || chromium --version 2>&1 || echo "no system chrome found — playwright chromium will be used"
 
       - name: Install Python Dependencies
         run: |
@@ -59,8 +67,20 @@ jobs:
         env:
           PORTVS_BROWSER_TRANSPORT: in-memory
         run: |
-          export PLAYWRIGHT_CHROMIUM_PATH=$(python3 -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()" 2>/dev/null || echo "")
-          if [ -n "$PLAYWRIGHT_CHROMIUM_PATH" ]; then echo "PLAYWRIGHT_CHROMIUM_PATH=$PLAYWRIGHT_CHROMIUM_PATH"; ls -l "$PLAYWRIGHT_CHROMIUM_PATH" || true; fi
+          echo "== browser selection =="
+          SYSTEM_CHROME=$(which google-chrome-stable 2>/dev/null || which google-chrome 2>/dev/null || which chromium 2>/dev/null || which chromium-browser 2>/dev/null || echo "")
+          if [ -n "$SYSTEM_CHROME" ]; then
+            echo "SYSTEM_CHROME=$SYSTEM_CHROME"
+            ls -l "$SYSTEM_CHROME" || true
+            "$SYSTEM_CHROME" --version 2>&1 || true
+            export PORTVS_BROWSER_EXECUTABLE="$SYSTEM_CHROME"
+            echo "PORTVS_BROWSER_EXECUTABLE=$PORTVS_BROWSER_EXECUTABLE"
+          else
+            PW_CHROME=$(python3 -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()" 2>/dev/null || echo "")
+            echo "PLAYWRIGHT_CHROME=$PW_CHROME"
+            ls -l "$PW_CHROME" || true
+            if [ -n "$PW_CHROME" ]; then export PORTVS_BROWSER_EXECUTABLE="$PW_CHROME"; echo "PORTVS_BROWSER_EXECUTABLE=$PORTVS_BROWSER_EXECUTABLE (playwright)"; fi
+          fi
           python3 -m unittest discover -s tests -v
 
       - name: Verify Local Lifecycle Cleanliness
