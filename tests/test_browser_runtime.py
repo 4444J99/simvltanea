@@ -52,6 +52,19 @@ def browser_executable() -> str:
                      '/Applications/Chromium.app/Contents/MacOS/Chromium'):
         if Path(app_path).is_file() and os.access(app_path, os.X_OK):
             return app_path
+    # Fallback to Playwright's bundled Chromium (installed via `playwright install --with-deps chromium`)
+    # when no system chrome is on PATH (e.g. ubuntu-latest without google-chrome-stable).
+    try:
+        from playwright.sync_api import sync_playwright
+        pw = sync_playwright().start()
+        try:
+            exe = pw.chromium.executable_path
+            if exe and Path(exe).is_file() and os.access(exe, os.X_OK):
+                return exe
+        finally:
+            pw.stop()
+    except Exception:
+        pass
     raise RuntimeError(
         'Installed Chromium/Chrome is required; set PORTVS_BROWSER_EXECUTABLE '
         'to an absolute executable path (no download or skip substituted)')

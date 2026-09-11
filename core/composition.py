@@ -265,13 +265,17 @@ def media_paths(state: dict, root: Path, verify: bool = True) -> dict[str, Path]
         if verify:
             require(sha256_file(path) == src["sha256"], f"media hash mismatch: {src['id']}")
             probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
-                                    "-show_entries", "stream=width,height,codec_name,duration", "-of", "json", str(path)],
+                                    "-show_entries", "stream=width,height,codec_name,pix_fmt,duration", "-of", "json", str(path)],
                                    check=True, capture_output=True, text=True)
             streams = json.loads(probe.stdout).get("streams", [])
             require(bool(streams) and streams[0].get("width", 0) > 0, f"no video/image stream: {src['id']}")
             if src["kind"] == "still":
                 require(streams[0].get("codec_name") in ("png", "mjpeg"), "still codec must be PNG/JPEG")
-            elif streams[0].get("duration") not in (None, "N/A"):
+            else:
+                pix_fmt = streams[0].get("pix_fmt")
+                if pix_fmt is not None:
+                    require(pix_fmt == "yuv420p", f"browser preview requires 8-bit yuv420p H.264, got pix_fmt={pix_fmt!r} for {src['id']} (see BRANCHES green gate)")
+            if src["kind"] != "still" and streams[0].get("duration") not in (None, "N/A"):
                 actual = Fraction(streams[0]["duration"])
                 require(abs(actual - rational(src["duration"], "duration")) <= Fraction(1, state["fps"]),
                         f"declared video duration disagrees with probe: {src['id']}")

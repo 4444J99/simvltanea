@@ -22,21 +22,45 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+          google-chrome --version 2>&1 || chromium --version 2>&1 || echo "no system chrome found — playwright chromium will be used"
 
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pillow playwright
+          pip install -r requirements-runtime-proof.txt
           playwright install --with-deps chromium
+          python3 -c "import PIL, playwright; print(f'Pillow {PIL.__version__}'); print(f'playwright {playwright.__version__}')"
+          python3 -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()"
 
       - name: Generate runtime-proof fixtures
         run: |
           python3 core/make_runtime_fixture.py
           python3 core/make_artifact_001.py --draft || python3 core/make_artifact_001.py
 
-      - name: Run Full Test Suite
+      - name: Verify media pix_fmt (yuv420p H.264)
         run: |
-          python3 -m unittest discover -s tests
+          echo "== ffprobe pix_fmt gate =="
+          for f in runtime-proof/media/*.mp4 artifact-001/media/*.mp4; do
+            [ -f "$f" ] || continue
+            echo "== $f =="
+            ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,pix_fmt,profile,width,height,avg_frame_rate -of default=noprint_wrappers=1 "$f"
+            pix=$(ffprobe -v error -select_streams v:0 -show_entries stream=pix_fmt -of default=noprint_wrappers=1:nokey=1 "$f" | tr -d '[:space:]')
+            if [ "$pix" != "yuv420p" ]; then
+              echo "pix_fmt not yuv420p ($pix): $f" >&2
+              ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,pix_fmt -of json "$f"
+              exit 1
+            fi
+          done
+
+      - name: Run Full Test Suite
+        env:
+          PORTVS_BROWSER_TRANSPORT: in-memory
+        run: |
+          export PLAYWRIGHT_CHROMIUM_PATH=$(python3 -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()" 2>/dev/null || echo "")
+          if [ -n "$PLAYWRIGHT_CHROMIUM_PATH" ]; then echo "PLAYWRIGHT_CHROMIUM_PATH=$PLAYWRIGHT_CHROMIUM_PATH"; ls -l "$PLAYWRIGHT_CHROMIUM_PATH" || true; fi
+          python3 -m unittest discover -s tests -v
 
       - name: Verify Local Lifecycle Cleanliness
         run: |
@@ -45,6 +69,10 @@ jobs:
       - name: Verify Edition Presets
         run: |
           python3 tools/verify_editions.py
+
+      - name: Verify Layouts
+        run: |
+          python3 tools/verify_layouts.py --examples
 
       - name: Report Edition Status
         run: |
