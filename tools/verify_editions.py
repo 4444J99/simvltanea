@@ -215,6 +215,50 @@ def validate_effects(errors: list[str], slug: str, settings: dict[str, Any]) -> 
             add(errors, slug, f"settings.effects.tone.mode {tone.get('mode')!r} is invalid")
 
 
+def validate_slice_config(errors: list[str], slug: str, settings: dict[str, Any]) -> None:
+    cfg = settings.get("slice")
+    if cfg is None:
+        return
+    if not isinstance(cfg, dict):
+        add(errors, slug, "settings.slice must be an object")
+        return
+    enabled = cfg.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        add(errors, slug, "settings.slice.enabled must be boolean")
+    for key in ("width", "height"):
+        val = cfg.get(key)
+        if val is not None:
+            if not is_number(val) or not (0 < float(val) < 1):
+                add(errors, slug, f"settings.slice.{key} must be in (0,1)")
+    w = cfg.get("width", 0.5)
+    h = cfg.get("height", 0.66)
+    if is_number(w) and is_number(h) and float(w) * float(h) >= 1 and cfg.get("enabled"):
+        add(errors, slug, "settings.slice area must be <1")
+
+
+def validate_seam_config(errors: list[str], slug: str, settings: dict[str, Any]) -> None:
+    cfg = settings.get("seam")
+    if cfg is None:
+        return
+    if not isinstance(cfg, dict):
+        add(errors, slug, "settings.seam must be an object")
+        return
+    enabled = cfg.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        add(errors, slug, "settings.seam.enabled must be boolean")
+    w = cfg.get("width")
+    if w is not None:
+        if not is_number(w) or not (0 < float(w) <= 0.15):
+            add(errors, slug, "settings.seam.width must be in (0,0.15]")
+    mode = cfg.get("mode")
+    if mode is not None and mode not in ("blur", "feather", "morph"):
+        add(errors, slug, f"settings.seam.mode {mode!r} invalid")
+    sigma = cfg.get("sigma")
+    if sigma is not None:
+        if not is_number(sigma) or not (0 < float(sigma) <= 0.1):
+            add(errors, slug, "settings.seam.sigma must be in (0,0.1]")
+
+
 def normalize_panel_order(value: Any) -> list[str] | None:
     if isinstance(value, str):
         names = [name.strip() for name in value.split(",") if name.strip()]
@@ -410,6 +454,8 @@ def validate_payload(payload: dict[str, Any], site_dir: Path) -> tuple[list[str]
         if isinstance(settings, dict):
             validate_audio(errors, slug, settings)
             validate_effects(errors, slug, settings)
+            validate_slice_config(errors, slug, settings)
+            validate_seam_config(errors, slug, settings)
 
         preset_count, default_preset = validate_control_presets(errors, slug, edition.get("control_presets"))
         visual_map, cell_count = validate_visual_sketch(errors, slug, edition.get("visual_sketch"))

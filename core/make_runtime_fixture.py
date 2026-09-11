@@ -11,6 +11,7 @@ import copy
 import json
 import math
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -44,9 +45,14 @@ def _get_font(name: str, size: int):
     return ImageFont.load_default()
 
 
-def prepare(root: Path = ROOT) -> list[Path]:
+def prepare(root: Path = ROOT, slice_width: float = 0.5, slice_height: float = 0.66, seam_width: float = 0.036, seam_mode: str = "feather", seam_sigma: float = 0.005) -> list[Path]:
     root = root.resolve()
     c.require(root.is_relative_to(REPO_ROOT), 'fixture output must remain inside repository')
+    # Allow all knobs via args (configurable)
+    _slice_w = str(Fraction(str(slice_width)).limit_denominator(1000))
+    _slice_h = str(Fraction(str(slice_height)).limit_denominator(1000))
+    _seam_w = str(Fraction(str(seam_width)).limit_denominator(1000))
+    _seam_s = str(Fraction(str(seam_sigma)).limit_denominator(1000))
     (root / 'media').mkdir(parents=True, exist_ok=True)
     (root / 'evidence').mkdir(exist_ok=True)
     (root / 'renders').mkdir(exist_ok=True)
@@ -98,17 +104,17 @@ def prepare(root: Path = ROOT) -> list[Path]:
                 for i,rect in enumerate(rects)]) for orientation,rects in SEVEN.items()}
         path=root/f'state-{count}.json';c.save_state(state,path);states.append(path)
         build_preview(path,root/f'preview-{count}')
-    # Seamed slice field: N=2 with deterministic random crops + seam blur/merge
+    # Seamed slice field: N=2 with deterministic random crops + seam blur/merge (all configurable via CLI)
     slice_state = copy.deepcopy(c.load_state(root / 'state-2.json'))
-    slice_state['slice'] = {"enabled": True, "width": "1/2", "height": "2/3"}
-    slice_state['seam'] = {"enabled": True, "width": "1/28", "mode": "feather", "sigma": "1/180"}
-    # Opposing crops: width 1/2 ensures no full frame ever revealed; seam merges sides
+    slice_state['slice'] = {"enabled": True, "width": _slice_w, "height": _slice_h}
+    slice_state['seam'] = {"enabled": True, "width": _seam_w, "mode": seam_mode, "sigma": _seam_s}
+    # Opposing crops: width <1 ensures no full frame ever revealed; seam merges sides
     c.save_state(slice_state, root / 'state-slice.json')
     build_preview(root / 'state-slice.json', root / 'preview-slice')
-    # Morph variant for N=3
+    # Morph variant for N=3 (uses same slice width, half seam width for variety)
     slice3 = copy.deepcopy(c.load_state(root / 'state-3.json'))
-    slice3['slice'] = {"enabled": True, "width": "1/2", "height": "3/5"}
-    slice3['seam'] = {"enabled": True, "width": "1/32", "mode": "morph", "sigma": "1/150"}
+    slice3['slice'] = {"enabled": True, "width": _slice_w, "height": "3/5"}
+    slice3['seam'] = {"enabled": True, "width": _seam_w, "mode": "morph", "sigma": _seam_s}
     c.save_state(slice3, root / 'state-slice-3.json')
     build_preview(root / 'state-slice-3.json', root / 'preview-slice-3')
     control=copy.deepcopy(c.load_state(root / 'state-3.json'))
@@ -130,5 +136,11 @@ def prepare(root: Path = ROOT) -> list[Path]:
 
 
 if __name__ == '__main__':
-    parser=argparse.ArgumentParser(description=__doc__);parser.parse_args()
-    prepare()
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--slice-width", type=float, default=0.5, help="Slice width fraction configurable (0..1)")
+    parser.add_argument("--slice-height", type=float, default=0.66, help="Slice height fraction")
+    parser.add_argument("--seam-width", type=float, default=0.036, help="Seam width fraction")
+    parser.add_argument("--seam-mode", choices=("blur","feather","morph"), default="feather", help="Seam mode")
+    parser.add_argument("--seam-sigma", type=float, default=0.005, help="Seam sigma")
+    args=parser.parse_args()
+    prepare(slice_width=args.slice_width, slice_height=args.slice_height, seam_width=args.seam_width, seam_mode=args.seam_mode, seam_sigma=args.seam_sigma)

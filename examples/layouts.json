@@ -1,0 +1,11 @@
+{
+  "_comment": "Override AUTHORED layouts for N=2..6. Keys are counts as strings, values have portrait/landscape rect arrays [x,y,w,h] in 0..1 (see core/artifact001_layouts.py). Drop this file to use defaults. All layout geometry is configurable.",
+  "2": {
+    "portrait": [[0.04, 0.03, 0.92, 0.44], [0.04, 0.52, 0.92, 0.44]],
+    "landscape": [[0.03, 0.05, 0.46, 0.90], [0.51, 0.05, 0.46, 0.90]]
+  },
+  "3": {
+    "portrait": [[0.04, 0.03, 0.92, 0.42], [0.04, 0.48, 0.44, 0.49], [0.52, 0.48, 0.44, 0.49]],
+    "landscape": [[0.03, 0.05, 0.46, 0.90], [0.52, 0.05, 0.21, 0.90], [0.76, 0.05, 0.21, 0.90]]
+  }
+}

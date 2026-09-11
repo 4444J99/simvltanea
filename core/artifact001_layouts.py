@@ -14,7 +14,8 @@ def p(loop_id: str, x: float, y: float, w: float, h: float, z: int = 0, fit: str
 
 # Geometry is intentionally authored per count/orientation rather than generated
 # by a generic grid. Negative space and hierarchy vary across the matrix.
-AUTHORED = {
+# All entries are configurable via external JSON: core/layouts.json (if present) merges/overrides this table.
+_AUTHORED_DEFAULT = {
     2: {
         "portrait": ((0.04, 0.03, 0.92, 0.44), (0.04, 0.52, 0.92, 0.44)),
         "landscape": ((0.03, 0.05, 0.46, 0.90), (0.51, 0.05, 0.46, 0.90)),
@@ -36,6 +37,31 @@ AUTHORED = {
         "landscape": ((.03, .05, .29, .42), (.03, .53, .29, .42), (.36, .05, .28, .90), (.68, .05, .29, .27), (.68, .365, .29, .27), (.68, .68, .29, .27)),
     },
 }
+
+def _load_authored():
+    import json
+    from pathlib import Path
+    base = _AUTHORED_DEFAULT.copy()
+    cfg = Path(__file__).with_name("layouts.json")
+    if cfg.is_file():
+        try:
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    try:
+                        count = int(k)
+                        if isinstance(v, dict) and "portrait" in v and "landscape" in v:
+                            base[count] = {
+                                "portrait": tuple(tuple(x) for x in v["portrait"]),
+                                "landscape": tuple(tuple(x) for x in v["landscape"]),
+                            }
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+    return base
+
+AUTHORED = _load_authored()
 
 
 def build_artifact001(count: int) -> Composition:

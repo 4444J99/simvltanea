@@ -31,5 +31,16 @@
       "strength": 0.35,
       "smoothing": 50
     }
+  },
+  "slice": {
+    "enabled": false,
+    "width": 0.5,
+    "height": 0.66
+  },
+  "seam": {
+    "enabled": false,
+    "width": 0.036,
+    "mode": "feather",
+    "sigma": 0.005
   }
 }

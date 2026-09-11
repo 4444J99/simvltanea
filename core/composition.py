@@ -517,6 +517,59 @@ def render_from_args(args: Any) -> int:
         require(args.orientation is not None, "--state export requires explicit --orientation")
         state_path = args.state.resolve()
         state = load_state(state_path)
+        # Configurable slice/seam overrides for --state mode (all knobs)
+        slice_over = {}
+        if getattr(args, "slice_enabled", None) is not None:
+            slice_over["enabled"] = args.slice_enabled == "true"
+        if getattr(args, "slice_width", None) is not None:
+            slice_over["width"] = str(Fraction(str(args.slice_width)).limit_denominator(1000))
+        if getattr(args, "slice_height", None) is not None:
+            slice_over["height"] = str(Fraction(str(args.slice_height)).limit_denominator(1000))
+        seam_over = {}
+        if getattr(args, "seam_enabled", None) is not None:
+            seam_over["enabled"] = args.seam_enabled == "true"
+        if getattr(args, "seam_width", None) is not None:
+            seam_over["width"] = str(Fraction(str(args.seam_width)).limit_denominator(1000))
+        if getattr(args, "seam_mode", None) is not None:
+            seam_over["mode"] = str(args.seam_mode)
+        if getattr(args, "seam_sigma", None) is not None:
+            seam_over["sigma"] = str(Fraction(str(args.seam_sigma)).limit_denominator(1000))
+        if getattr(args, "config", None) is not None:
+            cfg = Path(args.config).expanduser()
+            if cfg.is_file():
+                try:
+                    data = json.loads(cfg.read_text(encoding="utf-8"))
+                    if isinstance(data.get("slice"), dict):
+                        slice_over.update(data["slice"])
+                    if isinstance(data.get("seam"), dict):
+                        seam_over.update(data["seam"])
+                except Exception:
+                    pass
+        def _coerce_rational(val):
+            if isinstance(val, (int, float)):
+                return str(Fraction(str(val)).limit_denominator(1000))
+            return val
+        if slice_over:
+            base = state.get("slice", {"enabled": False, "width": "1/2", "height": "1/2"})
+            merged = {**base, **slice_over}
+            # coerce enabled bool if string
+            if isinstance(merged.get("enabled"), str):
+                merged["enabled"] = merged["enabled"].lower() == "true"
+            for k in ("width", "height"):
+                if k in merged and isinstance(merged[k], (int, float)):
+                    merged[k] = _coerce_rational(merged[k])
+            state["slice"] = merged
+        if seam_over:
+            base = state.get("seam", {"enabled": False, "width": "1/40", "mode": "feather", "sigma": "1/200"})
+            merged = {**base, **seam_over}
+            if isinstance(merged.get("enabled"), str):
+                merged["enabled"] = merged["enabled"].lower() == "true"
+            for k in ("width", "sigma"):
+                if k in merged and isinstance(merged[k], (int, float)):
+                    merged[k] = _coerce_rational(merged[k])
+            state["seam"] = merged
+        if slice_over or seam_over:
+            validate_state(state)
         require((args.width is None) == (args.height is None), "provide both width and height")
         width, height = ((1080, 1920) if args.orientation == "portrait" else (1920, 1080))
         if args.width is not None:

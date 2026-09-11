@@ -1,0 +1,32 @@
+{
+  "_comment": "All seamed-slice knobs are configurable — drop this file as --config or merge into manifest/project/editions. Copy to core/layouts.json to override N layouts, or pass via CLI.",
+  "slice": {
+    "enabled": true,
+    "width": 0.5,
+    "height": 0.66,
+    "_note": "width/height in (0,1), area <1 so no source ever reveals its full frame; x/y are deterministic random per loop per period via sha256-counter-v1"
+  },
+  "seam": {
+    "enabled": true,
+    "width": 0.036,
+    "mode": "feather",
+    "sigma": 0.005,
+    "_note": "width in (0,0.15] fraction of canvas; mode blur|feather|morph; sigma in (0,0.1] fraction of min(width,height) for boxblur radius"
+  },
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 24
+  },
+  "N": {
+    "min": 2,
+    "max": 6,
+    "supported": [2, 3, 4, 5, 6],
+    "note": "Each count has authored portrait+landscape pair in core/artifact001_layouts.py — override via core/layouts.json or examples/layouts.json"
+  },
+  "cli": {
+    "slice": "--slice-width 0.5 --slice-height 0.66 --slice-enabled true",
+    "seam": "--seam-width 0.036 --seam-mode feather --seam-sigma 0.005 --seam-enabled true",
+    "state_override": "python3 core/render_triptych.py --state runtime-proof/state-2.json --orientation portrait --slice-width 0.4 --seam-mode morph --config examples/slice-seam-config.json"
+  }
+}

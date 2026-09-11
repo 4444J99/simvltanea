@@ -70,6 +70,13 @@ class Settings:
     panel_order: tuple[str, str, str]
     media_fit: str = "cover"
     focal: tuple[float, float] = (0.5, 0.5)
+    slice_enabled: bool = False
+    slice_width: float = 0.5
+    slice_height: float = 0.66
+    seam_enabled: bool = False
+    seam_width: float = 0.036
+    seam_mode: str = "feather"
+    seam_sigma: float = 0.005
 
 
 @dataclass(frozen=True)
@@ -216,6 +223,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Keep temporary segment files under work/ after rendering.",
     )
+    # Seamed slice field — all configurable
+    parser.add_argument("--slice-enabled", choices=("true", "false"), help="Enable slice field (never full-frame).")
+    parser.add_argument("--slice-width", type=float, help="Slice width fraction 0..1 (e.g. 0.5).")
+    parser.add_argument("--slice-height", type=float, help="Slice height fraction 0..1 (e.g. 0.66).")
+    parser.add_argument("--seam-enabled", choices=("true", "false"), help="Enable seam blur/merge/morph.")
+    parser.add_argument("--seam-width", type=float, help="Seam width fraction 0..0.15.")
+    parser.add_argument("--seam-mode", choices=("blur", "feather", "morph"), help="Seam mode.")
+    parser.add_argument("--seam-sigma", type=float, help="Seam blur sigma fraction 0..0.1.")
+    parser.add_argument("--config", type=Path, help="JSON config file for slice/seam/layout (overrides manifest).")
     return parser.parse_args()
 
 
@@ -310,11 +326,23 @@ def parse_panel_order(value: Any) -> tuple[str, str, str]:
 
 def build_settings(args: argparse.Namespace) -> Settings:
     manifest, manifest_base = load_manifest(args.manifest)
+    # Optional external JSON config (all knobs configurable)
+    if getattr(args, "config", None):
+        cfg_path = Path(args.config).expanduser()
+        if cfg_path.is_file():
+            try:
+                cfg_data = json.loads(cfg_path.read_text(encoding="utf-8"))
+                if isinstance(cfg_data, dict):
+                    manifest = {**manifest, **cfg_data}
+            except Exception as exc:
+                raise SystemExit(f"config {cfg_path}: {exc}") from exc
     canvas = manifest.get("canvas", {})
     render = manifest.get("render", {})
     audio = manifest.get("audio", {})
     effects = manifest.get("effects", {})
     tone = effects.get("tone", {}) if isinstance(effects.get("tone"), dict) else {}
+    slice_cfg = manifest.get("slice", {}) if isinstance(manifest.get("slice"), dict) else {}
+    seam_cfg = manifest.get("seam", {}) if isinstance(manifest.get("seam"), dict) else {}
     panel_order_value = args.panel_order
     if panel_order_value is None:
         panel_order_value = manifest.get("panel_order")
@@ -383,6 +411,13 @@ def build_settings(args: argparse.Namespace) -> Settings:
         if args.tone_smoothing is not None
         else int(tone.get("smoothing", effects.get("tone_smoothing", 50))),
         panel_order=parse_panel_order(panel_order_value),
+        slice_enabled=(args.slice_enabled == "true") if getattr(args, "slice_enabled", None) is not None else bool(slice_cfg.get("enabled", False)),
+        slice_width=float(args.slice_width) if getattr(args, "slice_width", None) is not None else float(slice_cfg.get("width", 0.5)),
+        slice_height=float(args.slice_height) if getattr(args, "slice_height", None) is not None else float(slice_cfg.get("height", 0.66)),
+        seam_enabled=(args.seam_enabled == "true") if getattr(args, "seam_enabled", None) is not None else bool(seam_cfg.get("enabled", False)),
+        seam_width=float(args.seam_width) if getattr(args, "seam_width", None) is not None else float(seam_cfg.get("width", 0.036)),
+        seam_mode=str(args.seam_mode) if getattr(args, "seam_mode", None) is not None else str(seam_cfg.get("mode", "feather")),
+        seam_sigma=float(args.seam_sigma) if getattr(args, "seam_sigma", None) is not None else float(seam_cfg.get("sigma", 0.005)),
     )
 
     validate_settings(settings)
@@ -431,6 +466,19 @@ def validate_settings(settings: Settings) -> None:
         raise SystemExit("output_file must stay inside the SIMVLTANEA repository root.")
     if not path_inside(settings.work_dir, REPO_ROOT):
         raise SystemExit("work_dir must stay inside the SIMVLTANEA repository root.")
+    # Slice/Seam configurability — every knob validated
+    if not 0 < settings.slice_width < 1:
+        raise SystemExit("slice_width must be in (0,1)")
+    if not 0 < settings.slice_height < 1:
+        raise SystemExit("slice_height must be in (0,1)")
+    if settings.slice_enabled and settings.slice_width * settings.slice_height >= 1:
+        raise SystemExit("slice area must be <1 (never full-frame)")
+    if not 0 < settings.seam_width <= 0.15:
+        raise SystemExit("seam_width must be in (0,0.15]")
+    if settings.seam_mode not in ("blur", "feather", "morph"):
+        raise SystemExit("seam_mode must be blur|feather|morph")
+    if not 0 < settings.seam_sigma <= 0.1:
+        raise SystemExit("seam_sigma must be in (0,0.1]")
 
 
 def require_tool(name: str) -> None:
