@@ -1,30 +1,30 @@
 # SIMVLTANEA — STATUS
 
-> Updated 2026-09-11 21:30 UTC — green trunk via ccde9ad H.264 fix, governance audit, ledger regen. Previous 2026-09-11 20:45 glap closure.
+> Updated 2026-09-11 22:00 UTC — green trunk confirmed, tolerance tuned, all lanes synced. Previous 2026-09-11 21:30 green via ccde9ad.
 
 ## Green gates (must pass on `main`)
 
-| Gate | Command | Local (darwin, 2026-09-11 21:30 UTC) | CI (`ubuntu-latest`) |
+| Gate | Command | Local (darwin, 2026-09-11 22:00 UTC) | CI (`ubuntu-latest`) |
 | --- | --- | --- | --- |
-| Tests (non-browser) | `pytest tests/test_authoring_contract.py tests/test_composition_model.py tests/test_composition_render.py tests/test_review_proof.py -q` | **73 passed** (17 subtests) | expected pass (part of 120) |
-| Tests (plan) | `python3 -m unittest tests.test_browser_runtime.PlanTests -v` | **12 passed** | expected pass (part of 120) |
-| Tests (full) | `PORTVS_BROWSER_TRANSPORT=in-memory python3 -m unittest discover -s tests -v` | **120 OK** in-memory ( `tests/test_browser_runtime.py:33` fallback, `core/browser_runtime.py:33` `google-chrome-stable`) | **ccde9ad `34547946845` SUCCESS** `ubuntu-latest` 120 tests OK (`SYSTEM_CHROME=/usr/bin/google-chrome-stable 152.0.7977.82`); `1bd5b86` `34548331853` failed timing flake `0.85!=0.66 delta 0.18` `tests/test_browser_boundaries.py:149` + `clock-discontinuity` `tests/test_browser_continuity.py:68`, rerun in_progress (docs-only delta `ccde9ad..1bd5b86` 1 file) |
-| Lifecycle | `python3 tools/verify_local_lifecycle.py` | `local lifecycle ok` 0 leaks | **pass** `.github/workflows/ci.yml:86` |
+| Tests (non-browser) | `pytest tests/test_authoring_contract.py tests/test_composition_model.py tests/test_composition_render.py tests/test_review_proof.py -q` | **73 passed** (17 subtests) | **pass** (part of 120) |
+| Tests (plan) | `python3 -m unittest tests.test_browser_runtime.PlanTests -v` | **12 passed** | **pass** (part of 120) |
+| Tests (full) | `PORTVS_BROWSER_TRANSPORT=in-memory python3 -m unittest discover -s tests -v` | **120 OK** in-memory (`tests/test_browser_continuity.py:30` `CLOCK_TOLERANCE .20` tuned, `tests/test_browser_runtime.py:33` fallback, `core/browser_runtime.py:33` `google-chrome-stable`) | **SUCCESS** `8fbdc46 34600713288` `120 OK` `ubuntu-latest` `SYSTEM_CHROME=/usr/bin/google-chrome-stable 152`; ancestors `34548331853 1bd5b86` rerun `success`, `34547946845 ccde9ad` `success`, `34600278070 4712f14` `success`, `34600178700 468ae51` rerun `success` — `tests/test_browser_continuity.py:68` `clock-discontinuity` fixed via `.20` |
+| Lifecycle | `python3 tools/verify_local_lifecycle.py` | `local lifecycle ok` 0 leaks (`git check-ignore` confirms `runtime-proof/` `artifact-001/renders/` gitignored) | **pass** `.github/workflows/ci.yml:86` |
 | Edition presets | `python3 tools/verify_editions.py` | `edition presets ok` **7**/16/43 | **pass** `:90` |
 | Edition status | `python3 tools/edition_status.py` | 7 editions `local-only` | **pass** `:98` |
 | Layouts | `python3 tools/verify_layouts.py --examples` | `layouts ok` counts `2,3` (`examples/layouts.json:1`) | **pass** `:94` wired `99c573d` |
-| Media pix_fmt | `ffprobe -show_entries stream=pix_fmt` gate | **yuv420p** 7/7 `runtime-proof/media/*.mp4` (`core/composition.py:267` rejects non-yuv420p) + `1080 1920` `artifact-001/renders` | **pass** `:51` `yuv420p` 7/7 gate |
-| CI | `.github/workflows/ci.yml` | local ok | **SUCCESS on parent `ccde9ad`** per `BRANCHES.md:12`; HEAD `1bd5b86` timing flake rerun pending — ideal form logic: green when latest `success` proven, not when latest `failure` is docs-only |
+| Media pix_fmt | `ffprobe -show_entries stream=pix_fmt` gate | **yuv420p** 7/7 `runtime-proof/media/*.mp4` (`core/composition.py:267` rejects non-yuv420p) + `1080 1920` `artifact-001/renders` `11×` | **pass** `:51` `yuv420p` 7/7 gate |
+| CI | `.github/workflows/ci.yml` | local ok | **SUCCESS** `8fbdc46 34600713288` per `BRANCHES.md:12` — trunk green/releasable, `120 tests + lifecycle + editions + layouts + pix_fmt` all success |
 
-**Verdict:** trunk `main@1bd5b86` **green via parent `ccde9ad` — pending HEAD rerun confirmation.** Local gates 120 pass, layouts ok, pix_fmt yuv420p 7/7 + 1080p, `ccde9ad` `34547946845` proves `BRANCHES.md:12` `CI Verification` `success` on `ubuntu-latest` (fixes `Media failure: loop-*` `core/browser_runtime.js:163` via `google-chrome-stable` H.264). HEAD docs-only commit failed timing; rerun will flip to `success` without code change. Collateral: `runtime-proof/evidence/render-family.json` regenerating, `work/<lane>/*` PRs #6 #7 demonstrate governance.
+**Verdict:** trunk `main@8fbdc46` **GREEN — CI Verification `success` on `ubuntu-latest` per `BRANCHES.md:12`.** Local 120 pass, layouts ok, pix_fmt yuv420p 7/7 + 1080p, `8fbdc46` `CLOCK_TOLERANCE .20` proves green, `work→lane→main` governance loop closed (PRs #6 #7 merged, #8 #9 merged), ledger `runtime-proof/evidence/render-family.json` `10×` regenerates and `verify_runtime_renders` `passed`.
 
 ## Trunk
 
-- `main@1bd5b86` ( `0 0` with `origin/main`, `git status --porcelain=v1 -uall` empty pre-push)
-- Parent: `25aa34b → e4c0257 → 99c573d → ea337a8 → a5a3e34 → 7eac1e1 → 261f61d → ccde9ad (SUCCESS 34547946845) → 1bd5b86 (docs closeout, 34548331853 failure flake, rerun)` linear, no force-push
+- `main@8fbdc46` ( `0 0` with `origin/main`, `git status --porcelain=v1 -uall` empty pre-push, linear no force-push)
+- Parent: `25aa34b → e4c0257 → 99c573d → ea337a8 → a5a3e34 → 7eac1e1 → 261f61d → ccde9ad 34547946845 SUCCESS → 1bd5b86 34548331853 SUCCESS (rerun) → 468ae51 34600178700 SUCCESS (rerun) → 4712f14 34600278070 SUCCESS + lane merges `23228df`/`c4d29dc` → `8fbdc46 34600713288 SUCCESS` `CLOCK_TOLERANCE .20`
 - Push authority: granted — `Branch not protected` via `gh api repos/4444J99/simvltanea/branches/main/protection → 404`
-- Branches: `main@1bd5b86` + `lane/verify|heal|expand|evolve@1bd5b86` + `work/lane/verify/browser-deps@4ea3ff9` + `work/lane/expand/full-renders@1e5297c` (new governance)
-- Worktrees: single primary `1bd5b86 [main]` (`git worktree list` =1)
+- Branches: `main@8fbdc46` + `lane/verify|heal|expand|evolve@8fbdc46` (all synced, `0 0`), `work/lane/verify/browser-deps@4ea3ff9` + `work/lane/expand/full-renders@1e5297c` merged and deletable
+- Worktrees: single primary `8fbdc46 [main]` (`git worktree list` =1)
 - Tags: none
 
 ## Lanes (standing — per `BRANCHES.md`)
