@@ -31,7 +31,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-runtime-proof.txt
           playwright install --with-deps chromium
-          python3 -c "import PIL, playwright; print(f'Pillow {PIL.__version__}'); print(f'playwright {playwright.__version__}')"
+          python3 -c "import PIL; print(f'Pillow {PIL.__version__}')"
+          python3 -c "import importlib.metadata; print(f'playwright {importlib.metadata.version(\"playwright\")}')"
           python3 -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()"
 
       - name: Generate runtime-proof fixtures
