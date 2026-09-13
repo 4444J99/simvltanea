@@ -201,11 +201,15 @@ remain valid silent contributors. Browser soundtracks are bounded to 600 seconds
 and mono/stereo decoding to limit PCM memory. The offline path keeps its wider
 media support. Declared soundtrack duration is authoritative within the verified
 one-frame media tolerance: decoded PCM is padded or trimmed to that duration so
-repeated playback does not drift between browser and export.
+repeated playback does not drift between browser and export. The PCM period is
+rounded to the nearest 48 kHz sample (ties round up), with a minimum of one sample for any
+positive declared duration; browser looping and seeks use that normalized period.
 
 Loop selection and source discontinuities remain addressed at composition-frame
 boundaries, as in the visual model. Between those boundaries native video and
-offline spans consume continuous audio. A fractional trim or wrap falling between
-frames is applied on the next resolved frame; this is not a claim of subframe
+offline spans consume continuous audio. Native spatial videos loop at physical EOF;
+offline spans that cross EOF use independent looped inputs until the next compiled
+boundary. The historical silent-v1 playback path is unchanged. A fractional trim
+or wrap falling between frames is applied on the next resolved frame; this is not a claim of subframe
 sample-exact loop switching. Output PCM length and global soundtrack looping are
 separate sample-count guarantees.

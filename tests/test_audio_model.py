@@ -53,6 +53,13 @@ class AudioModelTests(unittest.TestCase):
         self.assertEqual(historical["audio"], dict(mode="none", routing=None, generative=None))
         self.assertEqual(c.audio_at(historical, 24, "portrait"), {"mode": "none"})
 
+    def test_explicit_silent_v1_preserves_historical_authoring_bytes(self):
+        authored = build_artifact001(3)
+        explicit = replace(authored, audio=SilentAudio())
+        explicit.validate()
+        self.assertEqual(explicit.to_dict(), authored.to_dict())
+        self.assertEqual(explicit.to_json(), authored.to_json())
+
     def test_audio_requires_explicit_authoring_and_compiled_version(self):
         for audio in (soundtrack(), SpatialLoopsAudio()):
             with self.subTest(mode=audio.mode):
@@ -152,7 +159,7 @@ class AudioModelTests(unittest.TestCase):
         current = state(SpatialLoopsAudio(master_volume="7/10", per_loop={"loop-1": LoopAudio(gain="4/5")}))
         landscape = c.audio_at(current, 13, "landscape")["loops"]
         portrait = c.audio_at(current, 13, "portrait")["loops"]
-        for track, centered, cell in zip(landscape, portrait, current["layouts"]["landscape"]["cells"]):
+        for track, centered, cell in zip(landscape, portrait, current["layouts"]["landscape"]["cells"], strict=True):
             x, _, width, _ = map(Fraction, cell["rect"])
             self.assertEqual(Fraction(track["pan"]), 2 * x + width - 1)
             self.assertEqual(centered["pan"], "0")

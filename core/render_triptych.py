@@ -1327,7 +1327,8 @@ def render_composition_audio(segments: list[Segment], settings: Settings, output
         if settings.soundtrack_path is None:
             raise ValueError("soundtrack has no verified source")
         command += ["-i", str(settings.soundtrack_path)]
-        track_samples = max(1, round(float(Fraction(config["duration"])) * 48000))
+        # Match JavaScript Math.round for positive half-sample durations.
+        track_samples = max(1, math.floor(float(Fraction(config["duration"])) * 48000 + 0.5))
         chain = ["aresample=48000:first_pts=0"]
         if probe_audio_channels(settings.soundtrack_path) == 1:
             # A global mono master uses the browser's unity speaker upmix. Only
@@ -1357,14 +1358,24 @@ def render_composition_audio(segments: list[Segment], settings: Settings, output
         filters.append("[0:a:0]" + ",".join(chain) + "[outa]")
     elif config["mode"] == "spatial_loops":
         tracks = spatial_audio_spans(segments)
-        # Each physical source is decoded once; asplit feeds independent clocks.
+        # Share finite decodes; EOF-crossing spans need independent looped inputs.
+        # Sharing an infinite input through asplit/concat can starve later spans.
         uses: dict[Path, list[str]] = {}
+        looped: dict[str, Path] = {}
+        physical_durations: dict[Path, float] = {}
         for track_index, spans in enumerate(tracks.values()):
             for span_index, span in enumerate(spans):
                 panel = span.panel
                 if (panel.source_has_audio and not panel.held and panel.source_kind == "video"
                         and panel.audio_gain > 0 and panel.source_path is not None):
-                    uses.setdefault(panel.source_path, []).append(f"[src{track_index}_{span_index}]")
+                    label = f"[src{track_index}_{span_index}]"
+                    if panel.source_path not in physical_durations:
+                        physical_durations[panel.source_path] = probe_duration(panel.source_path)
+                    if (panel.source_offset + span.duration * panel.playback_rate
+                            > physical_durations[panel.source_path] + 1e-9):
+                        looped[label] = panel.source_path
+                    else:
+                        uses.setdefault(panel.source_path, []).append(label)
         for source_index, (path, labels) in enumerate(uses.items()):
             command += ["-i", str(path)]
             # Keep delayed audio aligned with source/video time before trimming.
@@ -1373,6 +1384,9 @@ def render_composition_audio(segments: list[Segment], settings: Settings, output
                 filters.append(prefix + f",asplit={len(labels)}" + "".join(labels))
             else:
                 filters.append(prefix + labels[0])
+        for source_index, (label, path) in enumerate(looped.items(), start=len(uses)):
+            command += ["-stream_loop", "-1", "-i", str(path)]
+            filters.append(f"[{source_index}:a:0]aresample=48000:first_pts=0{label}")
         outputs = []
         for track_index, spans in enumerate(tracks.values()):
             # Fade at the authored hold, even if a source wrap splits its last 50ms.
@@ -1386,7 +1400,7 @@ def render_composition_audio(segments: list[Segment], settings: Settings, output
                 # Round absolute boundaries, not each duration, to avoid drift.
                 count = round(span.end * 48000) - round(span.start * 48000)
                 source_label = f"[src{track_index}_{span_index}]"
-                if panel.source_path in uses and source_label in uses[panel.source_path]:
+                if source_label in looped or source_label in uses.get(panel.source_path, []):
                     chain = [f"atrim=start={seconds(panel.source_offset)}:"
                              f"duration={seconds(span.duration * panel.playback_rate)}",
                              "asetpts=PTS-STARTPTS"]
