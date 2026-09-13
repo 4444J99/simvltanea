@@ -77,6 +77,10 @@ class Settings:
     seam_width: float = 0.036
     seam_mode: str = "feather"
     seam_sigma: float = 0.005
+    # Versioned audio is opt-in and rendered once against the composition clock.
+    # Legacy --audio none/panel/mix continues to use the fields above unchanged.
+    composition_audio: dict[str, Any] | None = None
+    soundtrack_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +112,9 @@ class Panel:
     held: bool = False
     clocked: bool = False
     source_crop: tuple[float, float, float, float] | None = None
+    audio_pan: float = 0.0
+    audio_gain: float = 1.0
+    source_audio_channels: int = 0
 
 
 @dataclass(frozen=True)
@@ -532,6 +539,18 @@ def probe_has_audio(path: Path) -> bool:
     ]
     completed = subprocess.run(command, check=True, capture_output=True, text=True)
     return bool(completed.stdout.strip())
+
+
+def probe_audio_channels(path: Path) -> int:
+    """An absent source stream is silence, not recovered or synthesized audio."""
+    require_tool("ffprobe")
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+         "stream=channels", "-of", "json", str(path)],
+        check=True, capture_output=True, text=True,
+    )
+    streams = json.loads(result.stdout).get("streams", [])
+    return int(streams[0].get("channels", 0)) if streams else 0
 
 
 def collect_video_paths(settings: Settings) -> list[Path]:
@@ -1223,6 +1242,200 @@ def concat_segments(segment_paths: list[Path], output_file: Path, concat_file: P
     run(command)
 
 
+@dataclass(frozen=True)
+class AudioSpan:
+    """One loop's continuous audio interval, independent of video segmentation."""
+
+    start: float
+    duration: float
+    panel: Panel
+
+    @property
+    def end(self) -> float:
+        return self.start + self.duration
+
+
+def spatial_audio_spans(segments: list[Segment]) -> dict[str, list[AudioSpan]]:
+    """Do not reset a sibling's samples/tempo because another loop changed."""
+    tracks: dict[str, list[AudioSpan]] = {}
+    for segment in segments:
+        for panel in segment.panels:
+            spans = tracks.setdefault(panel.name, [])
+            previous = spans[-1] if spans else None
+            same = previous is not None and all(
+                getattr(previous.panel, key) == getattr(panel, key)
+                for key in ("source_path", "source_kind", "source_has_audio", "held",
+                            "playback_rate", "audio_pan", "audio_gain", "source_audio_channels")
+            )
+            if same:
+                delta = 0 if panel.held or panel.source_kind == "still" else previous.duration * panel.playback_rate
+                same = (math.isclose(previous.end, segment.start, abs_tol=1e-7)
+                        and math.isclose(previous.panel.source_offset + delta,
+                                         panel.source_offset, abs_tol=1e-7))
+            if same:
+                spans[-1] = replace(previous, duration=segment.end - previous.start)
+            else:
+                spans.append(AudioSpan(segment.start, segment.duration, panel))
+    return tracks
+
+
+def tempo_filters(rate: float) -> list[str]:
+    """Match native video's default pitch-preserving playbackRate, including <0.5."""
+    filters = []
+    while rate < 0.5:
+        filters.append("atempo=0.5")
+        rate *= 2
+    while rate > 2:
+        filters.append("atempo=2")
+        rate /= 2
+    if not math.isclose(rate, 1):
+        filters.append(f"atempo={rate:.12g}")
+    return filters
+
+
+def spatial_pan_filter(pan: float, channels: int) -> str:
+    """Equal-power mono/stereo law used by Web Audio's StereoPannerNode."""
+    if channels == 1:
+        angle = (pan + 1) * math.pi / 4
+        return f"pan=stereo|c0={math.cos(angle):.12g}*c0|c1={math.sin(angle):.12g}*c0"
+    if pan <= 0:
+        angle = (pan + 1) * math.pi / 2
+        return ("aformat=channel_layouts=stereo,pan=stereo|"
+                f"c0=c0+{math.cos(angle):.12g}*c1|c1={math.sin(angle):.12g}*c1")
+    angle = pan * math.pi / 2
+    return ("aformat=channel_layouts=stereo,pan=stereo|"
+            f"c0={math.cos(angle):.12g}*c0|c1=c1+{math.sin(angle):.12g}*c0")
+
+
+def render_composition_audio(segments: list[Segment], settings: Settings, output: Path) -> None:
+    """Render exact-length PCM first; the final mux encodes AAC only once.
+
+    All new audio behavior is reachable only with an explicit v1.1 config.
+    Silent/still loop sources remain silent. Authored holds fade during the
+    preceding 50ms and are silent at the hold boundary; release has no catch-up.
+    """
+    from fractions import Fraction
+    config = settings.composition_audio
+    if config is None or config["mode"] == "none":
+        raise ValueError("composition audio requires an explicit audible mode")
+    duration = segments[-1].end
+    total_samples = round(duration * 48000)
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
+               "-filter_complex_threads", "1"]
+    filters: list[str] = []
+    if config["mode"] == "soundtrack":
+        if settings.soundtrack_path is None:
+            raise ValueError("soundtrack has no verified source")
+        command += ["-i", str(settings.soundtrack_path)]
+        track_samples = max(1, round(float(Fraction(config["duration"])) * 48000))
+        chain = ["aresample=48000:first_pts=0"]
+        if probe_audio_channels(settings.soundtrack_path) == 1:
+            # A global mono master uses the browser's unity speaker upmix. Only
+            # spatial mono sources use the panner's equal-power center gain.
+            chain.append("pan=stereo|c0=c0|c1=c0")
+        chain += ["aformat=sample_fmts=fltp:channel_layouts=stereo",
+                 f"apad=whole_len={track_samples}", f"atrim=end_sample={track_samples}",
+                 "asetpts=N/SR/TB"]
+        if config["loop"]:
+            chain += [f"aloop=loop=-1:size={track_samples}:start=0"]
+        chain += [f"apad=whole_len={total_samples}", f"atrim=end_sample={total_samples}",
+                  "asetpts=N/SR/TB"]
+        fade_in = float(Fraction(config["fade_in_seconds"]))
+        fade_out = float(Fraction(config["fade_out_seconds"]))
+        fade_end = duration if config["loop"] else min(duration, track_samples / 48000)
+        envelopes = ["1"]
+        if fade_in > 0:
+            envelopes.append(f"t/{fade_in:.12g}")
+        if fade_out > 0:
+            envelopes.append(f"max(0,({fade_end:.12g}-t)/{fade_out:.12g})")
+        envelope = envelopes.pop()
+        for other in envelopes:
+            envelope = f"min({other},{envelope})"
+        gain = float(Fraction(config["volume"]))
+        expression = f"{gain:.12g}*({envelope})"
+        chain.append(f"aeval=exprs='val(0)*{expression}|val(1)*{expression}':channel_layout=stereo")
+        filters.append("[0:a:0]" + ",".join(chain) + "[outa]")
+    elif config["mode"] == "spatial_loops":
+        tracks = spatial_audio_spans(segments)
+        # Each physical source is decoded once; asplit feeds independent clocks.
+        uses: dict[Path, list[str]] = {}
+        for track_index, spans in enumerate(tracks.values()):
+            for span_index, span in enumerate(spans):
+                panel = span.panel
+                if (panel.source_has_audio and not panel.held and panel.source_kind == "video"
+                        and panel.audio_gain > 0 and panel.source_path is not None):
+                    uses.setdefault(panel.source_path, []).append(f"[src{track_index}_{span_index}]")
+        for source_index, (path, labels) in enumerate(uses.items()):
+            command += ["-i", str(path)]
+            # Keep delayed audio aligned with source/video time before trimming.
+            prefix = f"[{source_index}:a:0]aresample=48000:first_pts=0"
+            if len(labels) > 1:
+                filters.append(prefix + f",asplit={len(labels)}" + "".join(labels))
+            else:
+                filters.append(prefix + labels[0])
+        outputs = []
+        for track_index, spans in enumerate(tracks.values()):
+            # Fade at the authored hold, even if a source wrap splits its last 50ms.
+            holds = [span.start for i, span in enumerate(spans)
+                     if span.panel.held and (i == 0 or not spans[i - 1].panel.held)]
+            chunks = []
+            for span_index, span in enumerate(spans):
+                panel = span.panel
+                label = f"[chunk{track_index}_{span_index}]"
+                chunks.append(label)
+                # Round absolute boundaries, not each duration, to avoid drift.
+                count = round(span.end * 48000) - round(span.start * 48000)
+                source_label = f"[src{track_index}_{span_index}]"
+                if panel.source_path in uses and source_label in uses[panel.source_path]:
+                    chain = [f"atrim=start={seconds(panel.source_offset)}:"
+                             f"duration={seconds(span.duration * panel.playback_rate)}",
+                             "asetpts=PTS-STARTPTS"]
+                    if not math.isclose(panel.playback_rate, 1):
+                        # Supply silence to flush the tempo filter's final analysis window.
+                        chain += ["apad=pad_dur=0.1", *tempo_filters(panel.playback_rate)]
+                    chain += [spatial_pan_filter(panel.audio_pan, panel.source_audio_channels),
+                              f"volume={panel.audio_gain:.12g}", f"apad=whole_len={count}",
+                              f"atrim=end_sample={count}", "asetpts=N/SR/TB"]
+                    impending = next((at for at in holds if span.start < at
+                                      and at - 0.05 < span.end), None)
+                    if impending is not None:
+                        remaining = impending - span.start
+                        if remaining < 0.05:
+                            chain.append(f"volume={remaining / 0.05:.12g}")
+                        chain.append(f"afade=t=out:st={seconds(max(0, remaining - 0.05))}:"
+                                     f"d={seconds(min(0.05, remaining))}")
+                    filters.append(source_label + ",".join(chain) + label)
+                else:
+                    filters.append(f"anullsrc=r=48000:cl=stereo,atrim=end_sample={count},"
+                                   f"asetpts=N/SR/TB{label}")
+            track_label = f"[track{track_index}]"
+            outputs.append(track_label)
+            if len(chunks) == 1:
+                filters.append(f"{chunks[0]}anull{track_label}")
+            else:
+                filters.append("".join(chunks) + f"concat=n={len(chunks)}:v=0:a=1{track_label}")
+        if len(outputs) == 1:
+            filters.append(f"{outputs[0]}anull[outa]")
+        else:
+            filters.append("".join(outputs) + f"amix=inputs={len(outputs)}:duration=longest:"
+                           f"dropout_transition=0:normalize=0,atrim=end_sample={total_samples},"
+                           "asetpts=N/SR/TB[outa]")
+    else:
+        raise ValueError(f"unsupported composition audio mode: {config['mode']}")
+    graph_path = output.with_suffix(".ffgraph")
+    graph_path.write_text(";\n".join(filters) + "\n", encoding="utf-8")
+    command += ["-filter_complex_script", str(graph_path), "-map", "[outa]", "-vn",
+                "-ar", "48000", "-ac", "2", "-c:a", "pcm_f32le", str(output)]
+    run(command)
+
+
+def mux_composition_audio(video: Path, audio: Path, output: Path, duration: float) -> None:
+    run(["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y", "-i", str(video),
+         "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+         "-c:a", "aac", "-b:a", "160k", "-t", seconds(duration), "-movflags", "+faststart",
+         str(output)])
+
+
 def render(segments: list[Segment], settings: Settings) -> None:
     require_tool("ffmpeg")
     settings.output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1234,14 +1447,21 @@ def render(segments: list[Segment], settings: Settings) -> None:
     segment_paths: list[Path] = []
 
     try:
+        audible = settings.composition_audio is not None and settings.composition_audio["mode"] != "none"
+        visual_settings = replace(settings, audio_mode="none") if audible else settings
         for segment in segments:
             segment_path = session_dir / f"segment-{segment.index:03d}.mp4"
             print(f"rendering {segment_path.name}")
-            render_segment(segment_path, segment, settings)
+            render_segment(segment_path, segment, visual_settings)
             segment_paths.append(segment_path)
 
         concat_file = session_dir / "concat.ffconcat"
-        concat_segments(segment_paths, settings.output_file, concat_file)
+        video_output = session_dir / "visual-field.mp4" if audible else settings.output_file
+        concat_segments(segment_paths, video_output, concat_file)
+        if audible:
+            audio_output = session_dir / "composition-audio.wav"
+            render_composition_audio(segments, settings, audio_output)
+            mux_composition_audio(video_output, audio_output, settings.output_file, segments[-1].end)
     finally:
         if settings.keep_work:
             print(f"kept work files: {session_dir}")

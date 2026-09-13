@@ -23,7 +23,7 @@ SURFACES = {"canon", "sketch"}
 DIRECTIONS = {"forward", "reverse", "pingpong"}
 START_MODES = {"oldest", "random"}
 SKETCH_STYLES = {"slices", "score", "serial", "fracture", "signal"}
-AUDIO_MODES = {"none", "panel", "mix"}
+AUDIO_MODES = {"none", "panel", "mix", "soundtrack", "spatial_loops"}
 TONE_MODES = {"none", "normalize", "histeq"}
 FORBIDDEN_TEXT = (
     "/Users/",
@@ -175,6 +175,18 @@ def validate_audio(errors: list[str], slug: str, settings: dict[str, Any]) -> No
         add(errors, slug, "settings.audio must be an object")
         return
     mode = audio.get("mode")
+    if mode in ("soundtrack", "spatial_loops"):
+        # Edition presets declare controls; the state compiler separately checks
+        # actual loop identities, media bytes, and the explicit v1.1 schema.
+        core = str(REPO_ROOT / "core")
+        if core not in sys.path:
+            sys.path.insert(0, core)
+        from composition import StateError, validate_audio as validate_composition_audio
+        try:
+            validate_composition_audio(audio)
+        except StateError as error:
+            add(errors, slug, f"settings.{error}")
+        return
     if mode is not None and mode not in AUDIO_MODES:
         add(errors, slug, f"settings.audio.mode {mode!r} is invalid")
     panel = audio.get("panel")

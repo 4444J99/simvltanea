@@ -457,6 +457,7 @@ def render_command(
     render = project.get("render", {})
     audio = dict(project.get("audio", {}))
     audio.update(export.get("audio", {}))
+    require_legacy_audio(audio)
     effects = dict(project.get("effects", {}))
     effects.update(export.get("effects", {}))
     output_default = SCRIPT_DIR / "renders" / f"{export['name']}.mp4"
@@ -2998,18 +2999,31 @@ def landing_html(payload: dict[str, Any]) -> str:
 """
 
 
+def require_legacy_audio(audio: dict[str, Any]) -> None:
+    """Keep edition metadata from implying a v1.1-capable historical player."""
+    if audio.get("mode") in ("soundtrack", "spatial_loops"):
+        raise SystemExit(
+            "Audio v1.1 requires a hashed composition state: use "
+            "core/render_triptych.py --state STATE --orientation portrait|landscape "
+            "or core/browser_runtime.py; this historical project exporter uses none/panel/mix."
+        )
+
+
 def main() -> int:
     args = parse_args()
     if args.draft_videos <= 0:
         raise SystemExit("--draft-videos must be positive.")
     project, project_path = load_project(args.project)
     apply_audio_overrides(project, args)
+    require_legacy_audio(project.get("audio", {}))
     apply_effect_overrides(project, args)
     append_prompts(project, project_path, args.add_prompt or [])
     exports = selected_exports(
         export_definitions(project, include_disabled=bool(args.only)),
         args.only,
     )
+    for export in exports:
+        require_legacy_audio(export.get("audio", {}))
     if args.draft:
         exports = draft_exports(exports, args.draft_videos)
 

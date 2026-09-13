@@ -2,7 +2,7 @@ name: CI Verification
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'work/evolve/audio-*' ]
   pull_request:
     branches: [ main ]
 
@@ -86,6 +86,16 @@ jobs:
       - name: Verify Local Lifecycle Cleanliness
         run: |
           python3 tools/verify_local_lifecycle.py
+
+      - name: Verify Historical Decoded Audio and Video
+        run: python3 tools/verify_legacy_decoded.py
+
+      - name: Preserve Historical Audio Verification Receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-audio-verification-${{ github.sha }}
+          path: runtime-proof/legacy-regression/run-*/receipt.json
+          if-no-files-found: error
 
       - name: Verify Edition Presets
         run: |
