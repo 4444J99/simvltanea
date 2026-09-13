@@ -87,14 +87,16 @@ SIMVLTANEA/
 
 ## Rendering Model
 
-- Schema: `visual-form-composition/v1`
+- Schema: silent `visual-form-composition/v1`; opt-in audio `visual-form-composition/v1.1`
 - Authoring model: [`core/composition_model.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/composition_model.py)
 - Compiler / state: [`core/composition.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/composition.py)
 - FFmpeg renderer: [`core/render_triptych.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/render_triptych.py) (legacy three-panel path plus compiled N-loop placements)
-- Browser preview: [`core/browser_runtime.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/browser_runtime.py) / [`core/browser_runtime.js`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/browser_runtime.js) (bounded, silent)
+- Browser preview: [`core/browser_runtime.py`](core/browser_runtime.py) / [`core/browser_runtime.js`](core/browser_runtime.js) (bounded; v1.1 audio opt-in)
 
-New schema-1 loop exports are silent. Legacy `none` / `panel` / `mix` audio
-routing is preserved on the historical three-panel path.
+Schema-1 loop exports remain silent. Explicit v1.1 states support a synchronized
+soundtrack or spatial loop mix. Legacy `none` / `panel` / `mix` audio routing is
+preserved on the historical three-panel path. See [Audio architecture](docs/AUDIO_ARCHITECTURE.md)
+for the version contract, synthetic examples, and verification boundaries.
 
 ## Verify
 
@@ -153,4 +155,3 @@ Historical ChatGPT transcripts, execution handoffs, receipts, telemetry traces, 
 
 - **[Project Manifest & Annotated Bibliography](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/PROJECT_MANIFEST.md)** (`archive/PROJECT_MANIFEST.md`)
 - **[Classified Archive Directory](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/chatgpt/)** (`archive/chatgpt/`)
-
