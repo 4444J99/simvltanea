@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 import subprocess
 from dataclasses import replace
@@ -17,6 +18,8 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 ENGINE_VERSION = "1.0.0"
+AUDIO_SCHEMA_VERSION = "1.1"
+AUDIO_ENGINE_VERSION = "1.1.0"
 RNG = "sha256-counter-v1"
 ORIENTATIONS = ("portrait", "landscape")
 MAX_FRAMES = 14400
@@ -52,6 +55,93 @@ def rational(value: Any, where: str) -> Fraction:
         raise StateError(f"{where}: invalid rational") from exc
     require(abs(result) <= 10**9 and result.denominator <= 10**9, f"{where}: out of bounds")
     return result
+
+
+def audio_rational(value: Any, where: str) -> Fraction:
+    """Permit the specification's decimal controls without binary-float clocks.
+
+    Media duration and loop clocks still use ``rational``'s stricter wire format.
+    JSON decimal gain/fade controls are converted by their decimal spelling.
+    """
+    if type(value) is float:
+        require(math.isfinite(value), f"{where} must be finite")
+        value = str(value)
+    return rational(value, where)
+
+
+def validate_audio(value: Any, loop_ids: set[str] | None = None,
+                   version: int | str = AUDIO_SCHEMA_VERSION) -> None:
+    silent = {"mode": "none", "routing": None, "generative": None}
+    require((type(version) is int and version == SCHEMA_VERSION) or
+            (type(version) is str and version == AUDIO_SCHEMA_VERSION), "unsupported audio schema version")
+    require(isinstance(value, dict), "audio must be an object")
+    if version == SCHEMA_VERSION:
+        require(value == silent,
+                "versioned loop exports are silent in v1; legacy CLI retains none/panel/mix audio; "
+                "Audio v1.1 requires schema_version=\"1.1\"")
+        return
+    mode = value.get("mode")
+    if mode == "none":
+        require(value == silent, "silent audio must retain null routing/generative boundaries")
+    elif mode == "soundtrack":
+        keys(value, {"mode", "source", "sha256", "duration", "volume", "loop", "fade_in_seconds", "fade_out_seconds"},
+             {"mode", "source", "sha256", "duration"}, "audio")
+        path = value["source"]
+        require(isinstance(path, str) and bool(path), "soundtrack source path is required")
+        require(not Path(path).is_absolute() and ".." not in Path(path).parts and ":" not in path
+                and "\\" not in path and "\x00" not in path,
+                "soundtrack source must be a relative local path without traversal or URLs")
+        require(isinstance(value["sha256"], str) and bool(re.fullmatch(r"[0-9a-f]{64}", value["sha256"])),
+                "soundtrack sha256 must be a lowercase digest")
+        require(0 < rational(value["duration"], "soundtrack.duration") <= MAX_FRAMES,
+                "soundtrack duration must be positive and within the 14400-second resource guard")
+        require(0 <= audio_rational(value.get("volume", 1), "audio.volume") <= 1,
+                "audio.volume must be in 0..1")
+        require(type(value.get("loop", True)) is bool, "audio.loop must be boolean")
+        for field in ("fade_in_seconds", "fade_out_seconds"):
+            require(0 <= audio_rational(value.get(field, 0), f"audio.{field}") <= MAX_FRAMES,
+                    f"audio.{field} must be in 0..14400 seconds")
+    elif mode == "spatial_loops":
+        keys(value, {"mode", "master_volume", "spatial_panning", "per_loop"}, {"mode"}, "audio")
+        require(0 <= audio_rational(value.get("master_volume", 1), "audio.master_volume") <= 1,
+                "audio.master_volume must be in 0..1")
+        require(type(value.get("spatial_panning", True)) is bool, "audio.spatial_panning must be boolean")
+        per_loop = value.get("per_loop", {})
+        require(isinstance(per_loop, dict), "audio.per_loop must be an object")
+        if loop_ids is not None:
+            require(set(per_loop) <= loop_ids, "audio.per_loop references absent loop")
+        for loop_id, control in per_loop.items():
+            identifier(loop_id, "audio.per_loop loop ID")
+            keys(control, {"gain", "mute_on_hold"}, set(), f"audio.per_loop.{loop_id}")
+            require(0 <= audio_rational(control.get("gain", 1), f"audio.per_loop.{loop_id}.gain") <= 1,
+                    "audio loop gain must be in 0..1")
+            require(control.get("mute_on_hold", True) is True,
+                    "mute_on_hold:false is unsupported; held audio ramps to silence in 50ms")
+    else:
+        raise StateError("unsupported audio mode; v1.1 implements none, soundtrack, spatial_loops")
+
+
+def audio_config(state: dict) -> dict:
+    """Return explicit defaults and canonical control rationals for both runtimes."""
+    value = state["audio"]
+    validate_audio(value, {loop["id"] for loop in state["loops"]}, state["schema_version"])
+    mode = value["mode"]
+    if mode == "none":
+        return dict(mode="none", routing=None, generative=None)
+    if mode == "soundtrack":
+        return dict(mode=mode, source=value["source"], sha256=value["sha256"],
+                    duration=str(rational(value["duration"], "soundtrack.duration")),
+                    volume=str(audio_rational(value.get("volume", 1), "audio.volume")),
+                    loop=value.get("loop", True),
+                    fade_in_seconds=str(audio_rational(value.get("fade_in_seconds", 0), "audio.fade_in_seconds")),
+                    fade_out_seconds=str(audio_rational(value.get("fade_out_seconds", 0), "audio.fade_out_seconds")))
+    controls = value.get("per_loop", {})
+    return dict(mode=mode,
+                master_volume=str(audio_rational(value.get("master_volume", 1), "audio.master_volume")),
+                spatial_panning=value.get("spatial_panning", True),
+                per_loop={loop["id"]: dict(gain=str(audio_rational(controls.get(loop["id"], {}).get("gain", 1),
+                                                               "audio.per_loop.gain")), mute_on_hold=True)
+                          for loop in state["loops"]})
 
 
 def integer(value: Any, low: int, high: int, where: str) -> None:
@@ -163,23 +253,22 @@ def validate_state(state: dict) -> None:
     fields = {"schema_version", "engine_version", "rng", "seed", "fps", "frames", "sources",
               "loops", "layouts", "events", "audio", "allow_source_reuse", "slice", "seam"}
     # slice / seam are optional for backward compat
+    require(isinstance(state, dict), "state must be an object")
     present = set(state.keys())
     require(present <= fields, f"state: unsupported fields {sorted(present - fields)}")
     require({"schema_version", "engine_version", "rng", "seed", "fps", "frames", "sources",
              "loops", "layouts", "events", "audio", "allow_source_reuse"} <= present,
             "state: missing required fields")
-    require(type(state["schema_version"]) is int and state["schema_version"] == SCHEMA_VERSION,
-            "unsupported schema_version")
-    require(state["engine_version"] == ENGINE_VERSION, "unsupported engine_version")
+    version = state["schema_version"]
+    legacy = type(version) is int and version == SCHEMA_VERSION
+    require(legacy or (type(version) is str and version == AUDIO_SCHEMA_VERSION), "unsupported schema_version")
+    require(state["engine_version"] == (ENGINE_VERSION if legacy else AUDIO_ENGINE_VERSION),
+            "unsupported engine_version")
     require(state["rng"] == RNG, "unsupported randomness algorithm")
     require(type(state["seed"]) in (str, int), "seed must be a string or integer")
     integer(state["fps"], 1, 60, "fps")
     integer(state["frames"], 1, MAX_FRAMES, "frames")
     require(type(state["allow_source_reuse"]) is bool, "allow_source_reuse must be boolean")
-    keys(state["audio"], {"mode", "routing", "generative"}, {"mode", "routing", "generative"}, "audio")
-    require(state["audio"] == {"mode": "none", "routing": None, "generative": None},
-            "versioned loop exports are silent in v1; legacy CLI retains none/panel/mix audio; "
-            "generative audio and routing are not implemented")
     require(isinstance(state["sources"], list) and bool(state["sources"]), "sources must be a nonempty array")
     sources = {}
     for src in state["sources"]:
@@ -221,6 +310,7 @@ def validate_state(state: dict) -> None:
             require(0 <= low < high, "trim must have positive duration")
             require(all(high <= rational(sources[s]["duration"], "duration") for s in loop["bank"]),
                     "trim exceeds a bank source duration")
+    validate_audio(state["audio"], loop_ids, version)
     validate_layouts(state["layouts"], loop_ids)
     if "slice" in state:
         validate_slice(state["slice"])
@@ -281,6 +371,38 @@ def media_paths(state: dict, root: Path, verify: bool = True) -> dict[str, Path]
                         f"declared video duration disagrees with probe: {src['id']}")
         paths[src["id"]] = path
     return paths
+
+
+def soundtrack_path(state: dict, root: Path, verify: bool = True) -> Path | None:
+    """Bind a declared soundtrack to local, hashed, probed audio bytes.
+
+    ``verify=False`` is for explicit dry compilation of already verified bindings;
+    it still enforces path containment and file existence, just like media_paths.
+    """
+    config = audio_config(state)
+    if config["mode"] != "soundtrack":
+        return None
+    root = root.resolve()
+    path = (root / config["source"]).resolve()
+    require(path.is_relative_to(root), "soundtrack symlink escapes state root")
+    require(path.is_file(), "absent soundtrack media")
+    if verify:
+        require(sha256_file(path) == config["sha256"], "soundtrack media hash mismatch")
+        result = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
+                                 "-show_entries", "stream=duration,sample_rate,channels:format=duration",
+                                 "-of", "json", str(path)], check=True, capture_output=True, text=True)
+        metadata = json.loads(result.stdout)
+        streams = metadata.get("streams", [])
+        require(bool(streams) and int(streams[0].get("channels", 0)) > 0,
+                "soundtrack has no audio stream")
+        duration = streams[0].get("duration")
+        if duration in (None, "N/A"):
+            duration = metadata.get("format", {}).get("duration")
+        require(duration not in (None, "N/A"), "soundtrack duration cannot be verified")
+        actual = rational(duration, "probed soundtrack duration")
+        require(abs(actual - Fraction(config["duration"])) <= Fraction(1, state["fps"]),
+                "declared soundtrack duration disagrees with probe")
+    return path
 
 
 def local_time(loop: dict, frame: int, fps: int) -> Fraction:
@@ -390,6 +512,48 @@ def presentation_at(state: dict, frame: int, width: int, height: int) -> dict:
             "layout": resolved["layouts"][orientation_for(width, height)]}
 
 
+def audio_at(state: dict, frame: int, orientation: str, snapshot: dict | None = None) -> dict:
+    """Resolve audio targets from the same rational composition/loop clocks.
+
+    Held targets are silence; runtime/render adapters implement the 50ms transition
+    envelope. Geometry affects pan only and cannot change any source clock.
+    """
+    integer(frame, 0, state["frames"], "frame")
+    require(orientation in ORIENTATIONS, "unknown audio orientation")
+    config = audio_config(state)
+    if config["mode"] == "none":
+        return {"mode": "none"}
+    if config["mode"] == "soundtrack":
+        clock = Fraction(frame, state["fps"])
+        duration = Fraction(config["duration"])
+        end = Fraction(state["frames"], state["fps"])
+        if not config["loop"]:
+            end = min(end, duration)
+        playing = clock < end
+        offset = clock % duration if config["loop"] else min(clock, duration)
+        fade_in = Fraction(config["fade_in_seconds"])
+        fade_out = Fraction(config["fade_out_seconds"])
+        gain = Fraction(config["volume"]) if playing else Fraction(0)
+        envelope = Fraction(1)
+        if fade_in:
+            envelope = min(envelope, clock / fade_in)
+        if fade_out:
+            envelope = min(envelope, max(Fraction(0), (end - clock) / fade_out))
+        gain *= envelope
+        return dict(mode="soundtrack", source_offset=str(offset), gain=str(gain), playing=playing)
+    resolved = resolve_at(state, frame) if snapshot is None else snapshot
+    cells = {cell["loop"]: cell for cell in resolved["layouts"][orientation]["cells"]}
+    tracks = []
+    for loop in resolved["loops"]:
+        x, _, width, _ = rect_values(cells[loop["id"]]["rect"])
+        pan = 2 * x + width - 1 if config["spatial_panning"] and orientation == "landscape" else Fraction(0)
+        gain = Fraction(config["master_volume"]) * Fraction(config["per_loop"][loop["id"]]["gain"])
+        if loop["held"] or loop["kind"] == "still" or frame == state["frames"]:
+            gain = Fraction(0)
+        tracks.append(dict(loop, gain=str(gain), pan=str(pan)))
+    return dict(mode="spatial_loops", loops=tracks)
+
+
 def pixel_placements(layout: dict, width: int, height: int) -> tuple:
     from render_triptych import Placement
     def edge(value: Fraction, dimension: int) -> int:
@@ -422,7 +586,7 @@ def continuous(previous: dict, current: dict, fps: int, orientation: str) -> boo
 
 def compile_segments(state: dict, root: Path, orientation: str, width: int, height: int,
                      verify_media: bool = True) -> list:
-    from render_triptych import Panel, Segment
+    from render_triptych import Panel, Segment, probe_audio_channels
     validate_state(state)
     require(orientation in ORIENTATIONS, "unknown orientation")
     require(orientation_for(width, height) == orientation, "export dimensions disagree with orientation")
@@ -430,6 +594,10 @@ def compile_segments(state: dict, root: Path, orientation: str, width: int, heig
     require(width * height <= 3840 * 2160, "export exceeds the 4K pixel resource guard")
     paths = media_paths(state, root, verify_media)
     sources = {src["id"]: src for src in state["sources"]}
+    audio = audio_config(state)
+    spatial = audio["mode"] == "spatial_loops"
+    channels = {source_id: probe_audio_channels(path) if spatial and sources[source_id]["kind"] == "video" else 0
+                for source_id, path in paths.items()}
     starts = [(0, resolve_at(state, 0))]
     previous = starts[0][1]
     for frame in range(1, state["frames"]):
@@ -443,14 +611,18 @@ def compile_segments(state: dict, root: Path, orientation: str, width: int, heig
     for index, (frame, snapshot) in enumerate(starts):
         end = starts[index + 1][0] if index + 1 < len(starts) else state["frames"]
         panels = []
+        audio_loops = {item["id"]: item for item in audio_at(state, frame, orientation, snapshot)["loops"]} if spatial else {}
         for loop in snapshot["loops"]:
             src = sources[loop["source"]]
             crop = loop.get("slice_rect")
             crop_tuple = tuple(float(Fraction(v)) for v in crop) if crop else None
             panels.append(Panel(loop["id"], None, paths[loop["source"]], float(Fraction(loop["source_offset"])),
-                             float(Fraction(src["duration"])), False,
+                             float(Fraction(src["duration"])), channels[loop["source"]] > 0,
                              loop["kind"], float(Fraction(loop["rate"])), loop["held"], True,
-                             source_crop=crop_tuple))
+                             source_crop=crop_tuple,
+                             audio_pan=float(Fraction(audio_loops[loop["id"]]["pan"])) if spatial else 0,
+                             audio_gain=float(Fraction(audio["master_volume"]) * Fraction(audio["per_loop"][loop["id"]]["gain"])) if spatial else 1,
+                             source_audio_channels=channels[loop["source"]]))
         # seam config is global; attach to segment for render pass
         seg = Segment(index, frame / state["fps"], (end - frame) / state["fps"], tuple(panels),
                                 pixel_placements(snapshot["layouts"][orientation], width, height))
@@ -474,6 +646,7 @@ def from_authoring_model(composition: Any, source_map: dict[str, dict], frames: 
     old implicit random.Random bank selection or an already-applied event history.
     Such requests fail rather than silently claim replay compatibility.
     """
+    from composition_model import AUDIO_SCHEMA_VERSION as AUTHORING_AUDIO_SCHEMA, audio_to_dict
     composition.validate()
     require(composition.engine_version == "0.1.0", "unsupported authoring model version")
     require(not composition.event_history, "authoring adapter requires an initial snapshot without event history")
@@ -500,10 +673,14 @@ def from_authoring_model(composition: Any, source_map: dict[str, dict], frames: 
         layouts[layout.orientation] = dict(name=layout.id, cells=[
             dict(loop=p.loop_id, rect=[exact(v) for v in (p.x,p.y,p.width,p.height)],
                  fit=p.fit, focal=[exact(p.focal_x),exact(p.focal_y)]) for p in ordered])
-    state = dict(schema_version=SCHEMA_VERSION,engine_version=ENGINE_VERSION,rng=RNG,
+    audio_version = composition.schema_version == AUTHORING_AUDIO_SCHEMA
+    state = dict(schema_version=AUDIO_SCHEMA_VERSION if audio_version else SCHEMA_VERSION,
+                 engine_version=AUDIO_ENGINE_VERSION if audio_version else ENGINE_VERSION,rng=RNG,
                  seed=composition.seed,fps=fps,frames=frames,allow_source_reuse=False,
                  sources=list(sources.values()),loops=loops,layouts=layouts,events=[],
-                 audio=dict(mode="none",routing=None,generative=None))
+                 audio=audio_to_dict(composition.audio))
+    if audio_version:
+        state["audio"] = audio_config(state)
     validate_state(state)
     return state
 
@@ -585,10 +762,14 @@ def render_from_args(args: Any) -> int:
         output = args.output.resolve() if args.output else state_path.parent / f"{state_path.stem}-{args.orientation}.mp4"
         root_dir = getattr(engine, "REPO_ROOT", engine.SCRIPT_DIR)
         require(engine.path_inside(output, root_dir), "output must remain inside the incubator")
-        settings = replace(settings, width=width, height=height, fps=state["fps"], output_file=output)
+        audio = audio_config(state)
+        soundtrack = soundtrack_path(state, state_path.parent)
+        settings = replace(settings, width=width, height=height, fps=state["fps"], output_file=output,
+                           composition_audio=audio if audio["mode"] != "none" else None,
+                           soundtrack_path=soundtrack)
         segments = compile_segments(state, state_path.parent, args.orientation, width, height)
         if args.dry_run:
-            print(canonical_json({"schema_version": SCHEMA_VERSION, "engine_version": ENGINE_VERSION,
+            print(canonical_json({"schema_version": state["schema_version"], "engine_version": state["engine_version"],
                                   "segments": len(segments), "frames": state["frames"],
                                   "loops": len(state["loops"]), "orientation": args.orientation}))
             return 0

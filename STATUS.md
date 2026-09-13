@@ -1,5 +1,7 @@
 # SIMVLTANEA — STATUS
 
+> Audio v1.1 implementation update, 2026-09-13: `work/evolve/audio-v1.1` continues issue #2 from `main`/`lane/evolve` at `1b855c5beb19d56d39e199f6d8d9159f651f12b3`. The base has successful CI run [34602226349](https://github.com/4444J99/simvltanea/actions/runs/34602226349) and 120 locally passing baseline tests. The branch implements opt-in soundtrack/spatial audio; see [Audio architecture](docs/AUDIO_ARCHITECTURE.md) for executable examples and boundaries. This supersedes the historical "parked, no code" entry for issue #2 below; integration is tracked by its linked implementation PR. The September 11 tables are retained as historical receipts, not a refreshed claim about every lane.
+
 > Updated 2026-09-11 22:00 UTC — green trunk confirmed, tolerance tuned, all lanes synced. Previous 2026-09-11 21:30 green via ccde9ad.
 
 ## Green gates (must pass on `main`)

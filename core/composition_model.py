@@ -6,16 +6,82 @@ state from presentation geometry so orientation changes cannot mutate loop state
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 import json
 import math
 import random
 from typing import Any
 
 SCHEMA_VERSION = "visual-form-composition/v1"
+AUDIO_SCHEMA_VERSION = "visual-form-composition/v1.1"
 ENGINE_VERSION = "0.1.0"
 ORIENTATIONS = ("portrait", "landscape")
 FIT_MODES = {"cover", "contain"}
+AudioControl = int | float | str
+
+
+@dataclass(frozen=True)
+class SilentAudio:
+    mode: str = "none"
+    routing: None = None
+    generative: None = None
+
+
+@dataclass(frozen=True)
+class SoundtrackAudio:
+    source: str
+    sha256: str
+    duration: str | int
+    volume: AudioControl = 1.0
+    loop: bool = True
+    fade_in_seconds: AudioControl = 0.0
+    fade_out_seconds: AudioControl = 0.0
+    mode: str = "soundtrack"
+
+
+@dataclass(frozen=True)
+class LoopAudio:
+    gain: AudioControl = 1.0
+    mute_on_hold: bool = True
+
+
+@dataclass(frozen=True)
+class SpatialLoopsAudio:
+    master_volume: AudioControl = 1.0
+    spatial_panning: bool = True
+    per_loop: dict[str, LoopAudio] = field(default_factory=dict)
+    mode: str = "spatial_loops"
+
+
+Audio = SilentAudio | SoundtrackAudio | SpatialLoopsAudio
+
+
+def audio_to_dict(value: Audio | None) -> dict[str, Any]:
+    if value is None:
+        return asdict(SilentAudio())
+    if not isinstance(value, (SilentAudio, SoundtrackAudio, SpatialLoopsAudio)):
+        raise ValueError("audio must be a typed audio specification")
+    expected = {SilentAudio: "none", SoundtrackAudio: "soundtrack", SpatialLoopsAudio: "spatial_loops"}
+    if value.mode != expected[type(value)]:
+        raise ValueError("audio type and mode disagree")
+    if isinstance(value, SpatialLoopsAudio) and (not isinstance(value.per_loop, dict) or
+                                               not all(isinstance(v, LoopAudio) for v in value.per_loop.values())):
+        raise ValueError("spatial per_loop entries must be typed LoopAudio controls")
+    return asdict(value)
+
+
+def audio_from_dict(value: Any) -> Audio | None:
+    if value is None:
+        return None
+    from composition import validate_audio
+    validate_audio(value)
+    mode = value["mode"]
+    if mode == "none":
+        return SilentAudio(**value)
+    if mode == "soundtrack":
+        return SoundtrackAudio(**value)
+    return SpatialLoopsAudio(**dict(value, per_loop={key: LoopAudio(**control)
+                                                    for key, control in value.get("per_loop", {}).items()}))
 
 
 @dataclass(frozen=True)
@@ -119,13 +185,14 @@ class Composition:
     event_history: tuple[dict[str, Any], ...] = ()
     schema_version: str = SCHEMA_VERSION
     engine_version: str = ENGINE_VERSION
+    audio: Audio | None = None
 
     @property
     def loop_ids(self) -> tuple[str, ...]:
         return tuple(loop.id for loop in self.loops)
 
     def validate(self) -> None:
-        if self.schema_version != SCHEMA_VERSION:
+        if self.schema_version not in (SCHEMA_VERSION, AUDIO_SCHEMA_VERSION):
             raise ValueError(f"unsupported schema version: {self.schema_version}")
         if self.engine_version != ENGINE_VERSION:
             raise ValueError(f"unsupported engine version: {self.engine_version}")
@@ -135,6 +202,9 @@ class Composition:
             loop.validate()
         if len(self.loop_ids) != len(set(self.loop_ids)):
             raise ValueError("loop ids must be unique")
+        from composition import validate_audio
+        validate_audio(audio_to_dict(self.audio), set(self.loop_ids),
+                       1 if self.schema_version == SCHEMA_VERSION else "1.1")
         orientations = {layout.orientation for layout in self.layouts}
         if orientations != set(ORIENTATIONS) or len(self.layouts) != len(ORIENTATIONS):
             raise ValueError("composition requires authored portrait and landscape layouts")
@@ -200,7 +270,7 @@ class Composition:
         return ordered_bank[rng.randrange(len(ordered_bank))]
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "schema_version": self.schema_version,
             "engine_version": self.engine_version,
             "id": self.id,
@@ -209,6 +279,10 @@ class Composition:
             "layouts": [{"id": l.id, "orientation": l.orientation, "placements": [p.__dict__ for p in l.placements]} for l in self.layouts],
             "event_history": list(self.event_history),
         }
+        # Keep historical v1 serialized snapshots byte-compatible in structure.
+        if self.schema_version == AUDIO_SCHEMA_VERSION or self.audio is not None:
+            result["audio"] = audio_to_dict(self.audio)
+        return result
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, sort_keys=True)
@@ -222,6 +296,7 @@ class Composition:
             event_history=tuple(raw.get("event_history", ())),
             schema_version=raw.get("schema_version", SCHEMA_VERSION),
             engine_version=raw.get("engine_version", ENGINE_VERSION),
+            audio=audio_from_dict(raw.get("audio")),
         )
         comp.validate()
         return comp
