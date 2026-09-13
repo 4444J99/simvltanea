@@ -96,7 +96,7 @@ function startSoundtrack() {
   if (runtime.audio.mode!=='soundtrack') return;
   stopSoundtrack();
   const {context,buffer,gain}=runtime.audio, config=runtime.plan.audio;
-  const now=context.currentTime, time=runtime.position, duration=number(config.duration);
+  const now=context.currentTime, time=runtime.position, duration=buffer.duration;
   const end=Math.min(runtime.plan.frames/runtime.plan.fps,config.loop ? Infinity : duration);
   const param=gain.gain, volume=number(config.volume);
   const fadeIn=number(config.fade_in_seconds), fadeOut=number(config.fade_out_seconds);
@@ -256,6 +256,8 @@ async function activate(node, span, frame, initial = false) {
     node.box.append(node.media); node.kind = span.kind;
     if (span.kind === 'video') {
       node.media.muted = true; node.media.defaultMuted = true;
+      // Native EOF may precede the next frame-addressed source boundary.
+      node.media.loop = runtime.audio.mode === 'spatial_loops';
       node.media.playsInline = true; node.media.preload = 'auto';
       node.media.preservesPitch = true;
       node.media.addEventListener('loadstart', () => record('loadstart', node.id));
@@ -550,7 +552,7 @@ async function initialize() {
         throw new Error('Decoded soundtrack duration differs from verified duration');
       // Probe tolerance permits a partial video frame discrepancy. Pad/trim the
       // decoded PCM to the declared sample count so every loop still uses T.
-      const decoded=runtime.audio.buffer, length=Math.round(duration*decoded.sampleRate);
+      const decoded=runtime.audio.buffer, length=Math.max(1,Math.round(duration*decoded.sampleRate));
       if (length!==decoded.length) {
         const normalized=runtime.audio.context.createBuffer(decoded.numberOfChannels,length,decoded.sampleRate);
         for(let channel=0;channel<decoded.numberOfChannels;channel++)

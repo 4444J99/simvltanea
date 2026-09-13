@@ -280,7 +280,7 @@ class Composition:
             "event_history": list(self.event_history),
         }
         # Keep historical v1 serialized snapshots byte-compatible in structure.
-        if self.schema_version == AUDIO_SCHEMA_VERSION or self.audio is not None:
+        if self.schema_version == AUDIO_SCHEMA_VERSION:
             result["audio"] = audio_to_dict(self.audio)
         return result
 

@@ -171,6 +171,7 @@ class NativeAudioTests(unittest.TestCase):
         page.click('#stage', position={'x': 4, 'y': 4})
         page.wait_for_timeout(250)
         self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every(n=>n.media.muted)'))
+        self.assertFalse(page.evaluate('[...compositionRuntime.nodes.values()].some(n=>n.media.loop)'))
         self.assertEqual(page.evaluate('compositionRuntime.audio.mode'), 'none')
         self.assertIsNone(page.evaluate('compositionRuntime.audio.context'))
 
@@ -205,7 +206,7 @@ class NativeAudioTests(unittest.TestCase):
         config = json.loads((ROOT / 'preview-audio-spatial/plan.json').read_text())
         cells = config['layout_keyframes'][0]['layouts']['landscape']['cells']
         from fractions import Fraction
-        for loop, cell in zip(landscape['snapshot']['loops'], cells):
+        for loop, cell in zip(landscape['snapshot']['loops'], cells, strict=True):
             x, _, width, _ = map(Fraction, cell['rect'])
             self.assertAlmostEqual(loop['audio']['pan'], float(2*(x+width/2)-1), delta=.001)
         self.assertFalse([event for event in page.evaluate('compositionRuntime.events')[event_count:]
@@ -281,6 +282,53 @@ class NativeAudioTests(unittest.TestCase):
                 self.assertIsNone(observation['snapshot']['error'])
                 page.close()
         (ROOT / 'evidence/audio-rate-extremes.json').write_text(json.dumps(observations, indent=2)+'\n')
+
+    def test_fractional_native_eof_loops_before_next_compiled_frame(self):
+        state = c.load_state(ROOT / 'state-audio-spatial.json')
+        target = ROOT / 'media/audio-fractional.mp4'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
+            'color=c=blue:s=64x64:r=10:d=1.1', '-f', 'lavfi', '-i',
+            'sine=frequency=440:sample_rate=48000:duration=1.1',
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-t', '1.1', str(target)],
+            check=True, capture_output=True)
+        state.update(fps=1, frames=4, events=[])
+        state['sources'][0].update(path=str(target.relative_to(ROOT)),
+                                  sha256=c.sha256_file(target), duration='11/10')
+        state['loops'][0].update(offset='0', rate='1', period='8')
+        c.save_state(state, ROOT / 'state-audio-fractional.json')
+        build_preview(ROOT / 'state-audio-fractional.json', ROOT / 'preview-audio-fractional')
+        page = self.open_preview('audio-fractional'); self.attach_meters(page)
+        page.click('#stage', position={'x': 4, 'y': 4})
+        page.wait_for_timeout(1450)
+        observation = page.evaluate("""() => {
+          const n=compositionRuntime.nodes.get('loop-1');
+          return {loop:n.media.loop,ended:n.media.ended,time:n.media.currentTime,
+                  levels:readLevels(),snapshot:compositionRuntime.snapshot()};
+        }""")
+        self.assertTrue(observation['loop'])
+        self.assertFalse(observation['ended'])
+        self.assertGreater(max(observation['levels']['loop-1']), .001)
+        self.proof('fractional-native-wrap', page, [observation])
+
+    def test_positive_subsample_soundtrack_uses_one_pcm_sample(self):
+        state = c.load_state(ROOT / 'state-audio-soundtrack.json')
+        target = ROOT / 'media/audio-one-sample.wav'
+        with wave.open(str(target), 'wb') as stream:
+            stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(48000)
+            stream.writeframes(struct.pack('<h', 1000))
+        for duration, count in (("1/200000", 1), ("1/19200", 3)):
+            with self.subTest(duration=duration):
+                state['audio'].update(source=str(target.relative_to(ROOT)), sha256=c.sha256_file(target),
+                                      duration=duration, fade_in_seconds=0, fade_out_seconds=0)
+                c.save_state(state, ROOT / 'state-audio-subsample.json')
+                build_preview(ROOT / 'state-audio-subsample.json', ROOT / 'preview-audio-subsample')
+                page = self.open_preview('audio-subsample')
+                self.assertEqual(page.evaluate('compositionRuntime.audio.buffer.length'), count)
+                page.click('#stage', position={'x': 4, 'y': 4}); page.wait_for_timeout(100)
+                self.assertAlmostEqual(page.evaluate('compositionRuntime.audio.source.loopEnd'), count / 48000)
+                self.assertTrue(page.evaluate('compositionRuntime.running'))
+                self.assertIsNone(page.evaluate('compositionRuntime.error'))
+                page.close()
 
     def test_nonloop_end_and_declared_duration_normalization(self):
         state = c.load_state(ROOT / 'state-audio-soundtrack.json')

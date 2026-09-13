@@ -129,6 +129,24 @@ class AudioRenderTests(unittest.TestCase):
         r.render_composition_audio(segments, settings, output)
         return decoded(output)
 
+    def test_fractional_source_eof_stays_audible_until_compiled_wrap(self):
+        path = self.root / "fractional.mov"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=blue:s=64x64:r=40:d=0.975", "-i", str(self.root / "sibling.wav"),
+                        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                        "-c:a", "pcm_s16le", "-t", "0.975", str(path)], check=True, capture_output=True)
+        for declared in ("39/40", "1"):
+            with self.subTest(declared=declared):
+                state = self.state()
+                state["sources"][0].update(path=path.name, sha256=c.sha256_file(path), duration=declared)
+                left, _ = self.render_audio(state)
+                self.assertEqual(len(left), 4 * RATE)
+                # Physical EOF is at .975, before the frame-20 compiled wrap.
+                # A declaration within one frame of actual EOF must also work.
+                self.assertGreater(rms(left, .980, .995), .05)
+                self.assertGreater(rms(left, 1.955, 1.970), .05)
+                self.assertGreater(rms(left, 2.930, 2.945), .05)
+
     def test_soundtrack_global_loop_fades_and_segment_independence(self):
         state = self.state()
         self.soundtrack(state)
@@ -141,6 +159,23 @@ class AudioRenderTests(unittest.TestCase):
         self.assertEqual(segmented[RATE:2 * RATE], segmented[2 * RATE:3 * RATE])
         self.assertLess(rms(segmented, 0, 0.02), rms(segmented, 0.3, 0.4) * 0.12)
         self.assertLess(rms(segmented, 3.98, 4), rms(segmented, 3.3, 3.4) * 0.12)
+
+    def test_positive_subsample_soundtrack_loops_one_pcm_sample(self):
+        state = self.state()
+        target = self.root / "one-sample.wav"
+        with wave.open(str(target), "wb") as stream:
+            stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(RATE)
+            stream.writeframes(array.array("h", [1000]).tobytes())
+        self.soundtrack(state)
+        for duration, count in (("1/200000", 1), ("1/19200", 3)):
+            with self.subTest(duration=duration):
+                state["audio"].update(source=target.name, sha256=c.sha256_file(target), duration=duration,
+                                      volume=1, fade_in_seconds=0, fade_out_seconds=0)
+                left, right = self.render_audio(state)
+                self.assertEqual(len(left), 4 * RATE)
+                self.assertEqual(left, right)
+                self.assertTrue(all(value == (1000 / 32768 if i % count == 0 else 0)
+                                    for i, value in enumerate(left)))
 
     def test_nonloop_fade_ends_at_source_end_and_then_exact_silence(self):
         state = self.state()
