@@ -15,7 +15,9 @@ EXPECTED_FORMAT = "MP4 Video (H.264, 360x640, 6 seconds; no audio stream)"
 
 
 class ArchiveMediaProvenanceTests(unittest.TestCase):
+    """Check the catalogue against the unchanged, experimental portrait media."""
     def setUp(self):
+        """Isolate the unique MEDA-002 entry before each assertion."""
         manifest = (ROOT / "archive" / "PROJECT_MANIFEST.md").read_text(encoding="utf-8")
         entries = re.findall(
             r"^### \[`MEDA-002`\].*?(?=^---|\Z)", manifest, re.MULTILINE | re.DOTALL
@@ -24,6 +26,7 @@ class ArchiveMediaProvenanceTests(unittest.TestCase):
         self.entry = entries[0]
 
     def test_manifest_matches_pinned_metadata(self):
+        """Require the corrected metadata and retain the experimental boundary."""
         metadata = re.findall(
             r"^- \*\*Size\*\*: ([\d,]+) bytes \| \*\*SHA-256\*\*: `([0-9a-f]{64})`$",
             self.entry,
@@ -35,16 +38,19 @@ class ArchiveMediaProvenanceTests(unittest.TestCase):
         self.assertIn("experimental $N=7$ vertical layout", self.entry)
 
     def test_manifest_uses_portable_file_links(self):
+        """Require both catalogue links to address the repository-relative file."""
         links = re.findall(r"\]\(([^)]+)\)", self.entry)
         self.assertEqual(links, [RELATIVE_MEDIA, RELATIVE_MEDIA])
 
     def test_retained_media_bytes(self):
+        """Reject a replaced, modified, missing or symlinked media artifact."""
         self.assertFalse(MEDIA.is_symlink())
         payload = MEDIA.read_bytes()
         self.assertEqual(len(payload), 517743)
         self.assertEqual(hashlib.sha256(payload).hexdigest(), EXPECTED_SHA256)
 
     def test_retained_media_streams(self):
+        """Probe the actual file for its sole video stream and six-second duration."""
         result = subprocess.run(
             [
                 "ffprobe", "-v", "error", "-show_entries",
@@ -61,6 +67,7 @@ class ArchiveMediaProvenanceTests(unittest.TestCase):
         self.assertAlmostEqual(float(probe["format"]["duration"]), 6.0, places=3)
 
     def test_retained_media_decodes(self):
+        """Decode the complete retained video, failing on any FFmpeg error."""
         subprocess.run(
             [
                 "ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i", str(MEDIA),
