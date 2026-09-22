@@ -293,10 +293,10 @@ archive/
 
 ---
 
-### [`MEDA-002`](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/chatgpt/media/MEDA-002_visual-form-canon-7-portrait.mp4): Experimental 7-Loop Portrait Render MP4
-- **File**: [`archive/chatgpt/media/MEDA-002_visual-form-canon-7-portrait.mp4`](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/chatgpt/media/MEDA-002_visual-form-canon-7-portrait.mp4)
-- **Size**: 517,743 bytes | **SHA-256**: `a5b117f70486a4ba2ecbca81cbb47926189ea7296ff951cc4b62f741517441fc`
-- **Format**: MP4 Video (H.264 / AAC)
+### [`MEDA-002`](chatgpt/media/MEDA-002_visual-form-canon-7-portrait.mp4): Experimental 7-Loop Portrait Render MP4
+- **File**: [`archive/chatgpt/media/MEDA-002_visual-form-canon-7-portrait.mp4`](chatgpt/media/MEDA-002_visual-form-canon-7-portrait.mp4)
+- **Size**: 517,743 bytes | **SHA-256**: `a5b117f704863d27e6db7bf30f40c70a9ad0cda84bb74b121c48541f5a4d6f46`
+- **Format**: MP4 Video (H.264, 360x640, 6 seconds; no audio stream)
 - **Tags**: `#experimental-7-loop`, `#portrait-render`, `#video-mp4`
 - **Annotation**: Moving video export demonstrating the experimental $N=7$ vertical layout.
 
