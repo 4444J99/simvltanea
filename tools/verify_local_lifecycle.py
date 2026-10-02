@@ -13,22 +13,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+if __package__:
+    from .verify_repository_structure import (
+        ALLOWED_LANE_PLACEHOLDERS, GENERATED_LANES, git_paths, is_generated_path,
+    )
+else:
+    from verify_repository_structure import (
+        ALLOWED_LANE_PLACEHOLDERS, GENERATED_LANES, git_paths, is_generated_path,
+    )
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name == "tools" else SCRIPT_DIR
 REPO = ROOT if (ROOT / ".git").exists() else ROOT.parents[1]
-
-GENERATED_LANES = {
-    "packages",
-    "renders",
-    "samples",
-    "site",
-    "work",
-}
-
-ALLOWED_LANE_PLACEHOLDERS = {
-    f"{lane}/.gitkeep" for lane in GENERATED_LANES
-}
 
 
 def run_git(*args: str) -> str:
@@ -55,20 +52,22 @@ def incubator_relative(repo_path: str) -> str | None:
 
 def visible_untracked_paths() -> list[str]:
     target = "." if ROOT == REPO else str(ROOT.relative_to(REPO))
-    output = run_git("ls-files", "--others", "--exclude-standard", target)
-    return [line for line in output.splitlines() if line]
+    return git_paths(REPO, "ls-files", "--others", "--exclude-standard", "--", target)
+
+
+def indexed_paths() -> list[str]:
+    target = "." if ROOT == REPO else str(ROOT.relative_to(REPO))
+    return git_paths(REPO, "ls-files", "--cached", "--", target)
 
 
 def visible_modified_paths() -> list[str]:
     target = "." if ROOT == REPO else str(ROOT.relative_to(REPO))
-    output = run_git("diff", "--name-only", "--", target)
-    return [line for line in output.splitlines() if line]
+    return git_paths(REPO, "diff", "--name-only", "--", target)
 
 
 def visible_staged_paths() -> list[str]:
     target = "." if ROOT == REPO else str(ROOT.relative_to(REPO))
-    output = run_git("diff", "--cached", "--name-only", "--", target)
-    return [line for line in output.splitlines() if line]
+    return git_paths(REPO, "diff", "--cached", "--name-only", "--", target)
 
 
 def visible_status_entries() -> list[str]:
@@ -87,14 +86,7 @@ def is_generated_leak(repo_path: str) -> bool:
     rel = incubator_relative(repo_path)
     if rel is None:
         return False
-    parts = Path(rel).parts
-    if not parts:
-        return False
-    if rel in ALLOWED_LANE_PLACEHOLDERS:
-        return False
-    if parts[0] in GENERATED_LANES:
-        return True
-    return Path(rel).name in {".DS_Store"} or "__pycache__" in parts
+    return is_generated_path(rel)
 
 
 def text_line_count(repo_paths: list[str]) -> int:
@@ -138,7 +130,9 @@ def main(argv: list[str] | None = None) -> int:
     modified = visible_modified_paths()
     staged = visible_staged_paths()
     status_entries = visible_status_entries()
-    leaks = [path for path in untracked if is_generated_leak(path)]
+    leaks = sorted(
+        path for path in set(indexed_paths()) | set(untracked) if is_generated_leak(path)
+    )
     untracked_lines = text_line_count(untracked)
 
     print("Triptych local lifecycle")

@@ -1,0 +1,16 @@
+# CLI exclusions for retained history, vendor instructions, and local outputs.
+# The editor reads .markdownlint.json; these exclusions apply to the CLI.
+/.git/
+/archive/
+/docs/historical/
+/.github/instructions/mermaid.instructions.md
+/artifact-001/
+/packages/
+/renders/
+/runtime-proof/
+/samples/
+/site/
+/work/
+/.pytest_cache/
+/.venv/
+**/__pycache__/

@@ -13,24 +13,63 @@ Read `BRANCHES.md` before creating branches.
 ## Verify before PR
 
 ```bash
-# Full suite (120 tests across unit, ffmpeg render, browser runtime, continuity)
+set -o pipefail
+# Filename and directory governance (install from https://ls-lint.org first)
+ls-lint
+
+# Markdown in committed branch changes against main
+git diff --name-only --diff-filter=ACMR -z origin/main...HEAD -- '*.md' |
+  xargs -0 -r npx --yes markdownlint-cli@0.45.0 \
+    --config .markdownlint.json --ignore-path .markdownlintignore --
+
+# Repository placement, required paths, and generated-output boundaries
+python3 tools/verify_repository_structure.py    # must print "repository structure ok"
+
+# Full suite (unit, ffmpeg render, browser runtime, continuity)
 python3 -m pytest -q            # or: python3 -m unittest discover -s tests
 python3 tools/verify_local_lifecycle.py          # must print "local lifecycle ok"
 python3 tools/verify_editions.py                 # must print "edition presets ok"
 python3 tools/edition_status.py                  # inspect edition readiness
 ```
 
-CI (` .github/workflows/ci.yml`) runs the same two gates: `unittest discover -s tests` + `verify_local_lifecycle.py`.
+CI (`.github/workflows/ci.yml`) runs naming and structure checks, linting for
+changed Markdown, the full test suite (`unittest discover -s tests`), and the
+local lifecycle gate.
+The structure gate runs immediately after Python setup, before dependencies
+are installed.
+
+Markdown checks use Node.js 20 or newer and the pinned CLI shown above. CI lints
+entire added, copied, renamed, or modified `.md` files against the PR base (or
+the previous commit on a push). Unchanged documents retain their existing
+formatting. `.markdownlint.json` keeps MD041 (top-level title) and MD047 (final
+newline) enabled; `.markdownlintignore` excludes historical material, generated
+lanes, and the vendor Mermaid instructions from CLI checks. Before committing,
+check new or uncommitted Markdown by passing its paths directly to
+`npx --yes markdownlint-cli@0.45.0 --config .markdownlint.json --ignore-path .markdownlintignore`.
+
+See [repository structure governance](docs/STRUCTURE.md) for approved root
+entries, required paths, and folder roles. When changing the layout, update the
+named policy tables in `tools/verify_repository_structure.py` and the documented
+contract in the same PR. Keep new scripts under `tools/` or `core/`, according
+to their role; root-level scripts require an explicit contract change.
 
 ## Generated lanes
 
 These directories are gitignored and must never leak into a PR:
 
-```
+```text
 samples/  renders/  site/  packages/  work/  artifact-001/media  runtime-proof/
 ```
 
-Only `*/.gitkeep` placeholders and `artifact-001/baseline/` provenance are tracked. If your diff shows generated files, stop and run `tools/verify_local_lifecycle.py`.
+Only root `.gitkeep` placeholders in `samples`, `renders`, `site`, `packages`,
+and `work`, plus the two Artifact 001 baseline inputs
+(`artifact-001/baseline-manifest.json` and
+`artifact-001/baseline/render_triptych.original.py`), are exceptions.
+Visual-proof `media` and `renders` outputs must also remain local; approved
+inspected PNG frames belong in `evidence/visual-proof/frames/`.
+Ignored local outputs are allowed, but force-staged or committed outputs fail
+both the structure and lifecycle checks. If your diff shows generated files,
+run both verifiers and remove the unintended Git additions.
 
 To regenerate synthetic proofs without committing blobs:
 
@@ -57,7 +96,11 @@ Never commit credentials, production data, or raw photo-library paths. The verif
 ## PR checklist
 
 - [ ] Branch from correct lane (`BRANCHES.md`)
-- [ ] Tests pass (`pytest -q`, 120/120)
+- [ ] New files and directories pass `ls-lint`
+- [ ] Added or edited Markdown passes `markdownlint-cli@0.45.0`
+- [ ] `verify_repository_structure.py` prints `repository structure ok`
+- [ ] Intentional layout changes update the structure policy and documentation in this PR
+- [ ] Tests pass (`pytest -q`)
 - [ ] `verify_local_lifecycle.py` prints `local lifecycle ok`
 - [ ] `verify_editions.py` prints `edition presets ok` (if touching editions)
 - [ ] No generated lane files in diff (`git status --porcelain`)
