@@ -2,6 +2,8 @@
 """Build a named triptych edition from a small text preset."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
+from tools.paths import EDITIONS_FILE
 
 import argparse
 import copy
@@ -18,7 +20,7 @@ from tools.paths import EXAMPLES_DIR, REPO_ROOT, RENDERS_DIR, SAMPLES_DIR, SITE_
 
 
 SCRIPT_DIR = REPO_ROOT
-DEFAULT_EDITIONS = REPO_ROOT / "editions.json"
+DEFAULT_EDITIONS = EDITIONS_FILE
 DEFAULT_SOURCE_PROJECT = EXAMPLES_DIR / "project.example.json"
 PROJECT_KEYS = {
     "title",
@@ -117,7 +119,7 @@ def safe_slug(value: str) -> str:
 def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise SystemExit(f"JSON file not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return resolve_references(json.loads(path.read_text(encoding="utf-8")))
 
 
 def write_json(path: Path, payload: dict[str, Any], dry_run: bool) -> None:

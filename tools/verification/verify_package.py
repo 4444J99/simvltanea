@@ -2,6 +2,8 @@
 """Verify a generated triptych public-site package manifest and media gate."""
 
 from __future__ import annotations
+from tools.paths import lane_ref
+from tools.paths import resolve_references
 
 import argparse
 import hashlib
@@ -93,7 +95,7 @@ def tree_size(records: list[dict[str, Any]]) -> int:
 
 def load_manifest(path: Path) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = resolve_references(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"{path}: cannot read package manifest: {error}") from error
     if not isinstance(payload, dict):
@@ -194,7 +196,7 @@ def verify_custody(payload: dict[str, Any]) -> None:
         if custody.get(key) != expected:
             raise SystemExit(f"package manifest custody.{key} must be {expected!r}")
     forbidden_lanes = custody.get("forbidden_lanes")
-    if not isinstance(forbidden_lanes, list) or not {"work/", "samples/", "renders/"}.issubset(
+    if not isinstance(forbidden_lanes, list) or not {lane_ref('work', '') + "/", lane_ref('samples', '') + "/", lane_ref('renders', '') + "/"}.issubset(
         set(forbidden_lanes)
     ):
         raise SystemExit("package manifest custody.forbidden_lanes must include work/, samples/, renders/")

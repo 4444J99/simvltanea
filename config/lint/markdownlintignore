@@ -1,0 +1,8 @@
+# CLI exclusions resolved from the active layout manifest.
+/.git/
+/archive/
+/.github/instructions/mermaid.instructions.md
+/var/
+/.pytest_cache/
+/.venv/
+**/__pycache__/

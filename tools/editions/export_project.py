@@ -2,6 +2,8 @@
 """Text-driven export runner for the triptych video canon incubator."""
 
 from __future__ import annotations
+from tools.paths import lane_ref
+from tools.paths import resolve_references
 
 import argparse
 import hashlib
@@ -26,28 +28,28 @@ DEFAULT_EXPORTS = [
     {
         "name": "story-triptych",
         "layout": "story",
-        "output_file": "renders/story-triptych.mp4",
+        "output_file": lane_ref('renders', 'story-triptych.mp4'),
         "width": 1080,
         "height": 1920,
     },
     {
         "name": "reel-left",
         "layout": "left",
-        "output_file": "renders/reel-left.mp4",
+        "output_file": lane_ref('renders', 'reel-left.mp4'),
         "width": 1080,
         "height": 1920,
     },
     {
         "name": "reel-middle",
         "layout": "middle",
-        "output_file": "renders/reel-middle.mp4",
+        "output_file": lane_ref('renders', 'reel-middle.mp4'),
         "width": 1080,
         "height": 1920,
     },
     {
         "name": "reel-right",
         "layout": "right",
-        "output_file": "renders/reel-right.mp4",
+        "output_file": lane_ref('renders', 'reel-right.mp4'),
         "width": 1080,
         "height": 1920,
     },
@@ -133,7 +135,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep-work", action="store_true", help="Keep renderer temp files.")
     parser.add_argument("--skip-render", action="store_true", help="Only build the landing page.")
     parser.add_argument("--landing-only", action="store_true", help="Alias for --skip-render.")
-    parser.add_argument("--no-landing", action="store_true", help="Do not build site/index.html.")
+    parser.add_argument("--no-landing", action="store_true", help=f"Do not build {lane_ref('site')}/index.html.")
     return parser.parse_args()
 
 
@@ -167,7 +169,7 @@ def load_project(project_path: Path) -> tuple[dict[str, Any], Path]:
     if not path.exists():
         raise SystemExit(f"Project manifest not found: {path}")
     with path.open("r", encoding="utf-8") as handle:
-        project = json.load(handle)
+        project = resolve_references(json.load(handle))
     return project, path
 
 
@@ -429,7 +431,7 @@ def draft_exports(exports: list[dict[str, Any]], draft_videos: int) -> list[dict
     drafts = []
     for export in selected:
         name = f"draft-{export.get('name', export.get('layout', 'story'))}"
-        original_output = Path(str(export.get("output_file", f"renders/{export.get('name', 'story')}.mp4")))
+        original_output = Path(str(export.get("output_file", f"{lane_ref('renders')}/{export.get('name', 'story')}.mp4")))
         draft = dict(export)
         draft.update(
             {
@@ -467,7 +469,8 @@ def render_command(
 
     command = [
         sys.executable,
-        str(REPO_ROOT / "src/simvltanea/render_triptych.py"),
+        "-m",
+        "simvltanea.rendering.render_triptych",
         "--manifest",
         str(project_path),
         "--layout",

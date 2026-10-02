@@ -2,6 +2,8 @@
 """Summarize local/public status for configured triptych editions."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
+from tools.paths import EDITIONS_FILE
 
 import argparse
 import json
@@ -13,7 +15,7 @@ from tools.paths import PACKAGES_DIR, REPO_ROOT, SITE_DIR, WORK_DIR
 
 
 SCRIPT_DIR = REPO_ROOT
-DEFAULT_EDITIONS = REPO_ROOT / "editions.json"
+DEFAULT_EDITIONS = EDITIONS_FILE
 DEFAULT_SITE_DIR = SITE_DIR
 DEFAULT_PACKAGE_DIR = PACKAGES_DIR / "triptych-video-canon-site"
 PUBLIC_MANIFEST_SCHEMA = "triptych.public-release-manifest.v1"
@@ -50,7 +52,7 @@ def path_inside(path: Path, parent: Path) -> bool:
 def resolve_inside(path: Path, label: str) -> Path:
     expanded = path.expanduser()
     resolved = expanded.resolve() if expanded.is_absolute() else (SCRIPT_DIR / expanded).resolve()
-    # Also allow repo-root-relative paths like ../editions.json or absolute repo-root paths.
+    # Also allow repo-root-relative paths like ../editions/registry.json or absolute repo-root paths.
     if not path_inside(resolved, SCRIPT_DIR) and not path_inside(resolved, REPO_ROOT):
         raise SystemExit(f"{label} must stay inside the SIMVLTANEA repository root.")
     return resolved
@@ -59,7 +61,7 @@ def resolve_inside(path: Path, label: str) -> Path:
 def load_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    return resolve_references(json.loads(path.read_text(encoding="utf-8")))
 
 
 def safe_slug(value: str) -> str:

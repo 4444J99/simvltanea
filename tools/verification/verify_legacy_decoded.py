@@ -17,11 +17,11 @@ from pathlib import Path
 
 from tools.paths import ARTIFACT_FIXTURE_DIR, PROOFS_DIR, REPO_ROOT
 
-CORE = REPO_ROOT / 'src' / 'simvltanea'
-sys.path.insert(0, str(CORE))
+from simvltanea.rendering import render_triptych
+CORE = Path(render_triptych.__file__).resolve().parent
 
-import composition as c
-from make_artifact_001 import prepare, probe
+import simvltanea.authoring.composition as c
+from simvltanea.generators.make_artifact_001 import prepare, probe
 
 BASELINE = ARTIFACT_FIXTURE_DIR / 'baseline/render_triptych.original.py'
 MANIFEST = ARTIFACT_FIXTURE_DIR / 'baseline-manifest.json'

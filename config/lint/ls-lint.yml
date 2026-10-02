@@ -1,0 +1,30 @@
+# Active repository naming policy. Historical evidence is intentionally excluded;
+# see docs/governance/NAMING.md for the governance rationale and contributor guidance.
+ls:
+  .dir: kebab-case
+  .*: regex:[a-z0-9]+([_-][a-z0-9]+)*
+  .*.*: regex:[a-z0-9]+([_-][a-z0-9]+)*
+  .py: snake_case
+  .js: snake_case
+  .md: SCREAMING_SNAKE_CASE | kebab-case
+
+  docs/plans:
+    .md: regex:[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9]+(-[a-z0-9]+)* | regex:INDEX
+
+ignore:
+  - ".git"
+  - ".github"
+  - ".gitignore"
+  - "config/lint/ls-lint.yml"
+  - "config/lint/markdownlint.json"
+  - "config/lint/markdownlintignore"
+  - ".pytest_cache"
+  - ".venv"
+  - ".vscode"
+  - "**/*.egg-info"
+  - "build"
+  - "dist"
+  - "**/__pycache__"
+  - "archive"
+  - "fixtures/artifact-001/baseline"
+  - "var"

@@ -1,3 +1,4 @@
 {
-  "todo-tree.ripgrep.ripgrep": "/usr/bin/rg"
+  "todo-tree.ripgrep.ripgrep": "/usr/bin/rg",
+  "markdownlint.configFile": "./config/lint/markdownlint.json"
 }

@@ -4,7 +4,7 @@
   "original_reference": "https://www.youtube.com/watch?v=PHP7mOJT60I",
   "status": "incubating",
   "final_owner": "unresolved",
-  "input_dir": "../var/samples",
+  "input_dir": "@samples",
   "timing_mode": "clip",
   "phrase_seconds": 4.0,
   "canvas": {
@@ -53,7 +53,7 @@
   },
   "web_media": {
     "enabled": true,
-    "output_dir": "../var/site/media",
+    "output_dir": "@site/media",
     "proxy_limit": 72,
     "video_height": 540,
     "fps": 15,
@@ -151,7 +151,7 @@
     }
   ],
   "photos_catalog": {
-    "output_file": "../var/work/photos-catalog.json",
+    "output_file": "@work/photos-catalog.json",
     "metadata_only": true,
     "note": "Use catalog_photos.py for library-scale interaction without staging every source video."
   },
@@ -159,8 +159,8 @@
     "enabled": false,
     "library": "~/Pictures/Photos Library.photoslibrary",
     "mode": "symlink",
-    "output_dir": "../var/samples/photos-import",
-    "local_project": "../var/work/project.photos-local.json",
+    "output_dir": "@samples/photos-import",
+    "local_project": "@work/project.photos-local.json",
     "include_live_photos": true,
     "order": "oldest",
     "photos_export_missing": false,
@@ -169,7 +169,7 @@
     "random_seed": null,
     "start_date": null,
     "end_date": null,
-    "exclude_file": "../var/work/photos-exclude-uuids.txt",
+    "exclude_file": "@work/photos-exclude-uuids.txt",
     "max_duration": 45
   },
   "editor": {
@@ -181,7 +181,7 @@
     {
       "name": "story-triptych",
       "layout": "story",
-      "output_file": "../var/renders/story-triptych.mp4",
+      "output_file": "@renders/story-triptych.mp4",
       "width": 1080,
       "height": 1920,
       "enabled": true
@@ -189,7 +189,7 @@
     {
       "name": "reel-left",
       "layout": "left",
-      "output_file": "../var/renders/reel-left.mp4",
+      "output_file": "@renders/reel-left.mp4",
       "width": 1080,
       "height": 1920,
       "enabled": true
@@ -197,7 +197,7 @@
     {
       "name": "reel-middle",
       "layout": "middle",
-      "output_file": "../var/renders/reel-middle.mp4",
+      "output_file": "@renders/reel-middle.mp4",
       "width": 1080,
       "height": 1920,
       "enabled": true
@@ -205,7 +205,7 @@
     {
       "name": "reel-right",
       "layout": "right",
-      "output_file": "../var/renders/reel-right.mp4",
+      "output_file": "@renders/reel-right.mp4",
       "width": 1080,
       "height": 1920,
       "enabled": true
@@ -213,7 +213,7 @@
     {
       "name": "draft-story",
       "layout": "story",
-      "output_file": "../var/renders/draft-story.mp4",
+      "output_file": "@renders/draft-story.mp4",
       "width": 540,
       "height": 960,
       "fps": 15,
@@ -224,7 +224,7 @@
     }
   ],
   "landing_page": {
-    "output_file": "../var/site/index.html",
+    "output_file": "@site/index.html",
     "mode": "static-eternal-seed"
   },
   "promotion_candidates": [

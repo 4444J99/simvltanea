@@ -2,6 +2,7 @@
 """List, hide, and show clips in a triptych project manifest."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
 
 import argparse
 import json
@@ -58,7 +59,7 @@ def load_project(path: Path) -> dict[str, Any]:
         raise SystemExit("project must stay inside the SIMVLTANEA repository root.")
     if not project_path.exists():
         raise SystemExit(f"Project manifest not found: {project_path}")
-    return json.loads(project_path.read_text(encoding="utf-8"))
+    return resolve_references(json.loads(project_path.read_text(encoding="utf-8")))
 
 
 def require_inside(path: Path, parent: Path, label: str) -> None:

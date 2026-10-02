@@ -69,44 +69,50 @@ The seven-loop pair promotes the previously experimental Portvs geometry into
 the reviewed engineering family. Counts without an authored pair still fail
 explicitly; eight loops are currently unsupported.
 
-Layouts live in [`src/simvltanea/artifact001_layouts.py`](src/simvltanea/artifact001_layouts.py). They are synthetic engineering
+Layouts live in [`src/simvltanea/authoring/artifact001_layouts.py`](src/simvltanea/authoring/artifact001_layouts.py). They are synthetic engineering
 geometries, not artist-approved designs.
 
 ## Repository Layout
 
 ```text
 SIMVLTANEA/
-├── src/simvltanea/ # Composition compiler, authoring model, browser engine, FFmpeg renderer
-├── tools/        # Commands grouped into editions, media, publishing, preservation, verification
+├── .github/      # CI, templates, security, contributions, and ownership
+├── config/lint/  # Naming and Markdown lint policy
+├── src/simvltanea/ # Authoring, browser, rendering, and generator subpackages
+├── tools/        # Edition, media, publishing, preservation, and verification commands
+├── tests/        # Browser, render, model, edition, and governance suites
+├── editions/     # Production edition registry
+├── examples/     # Safe authoring templates
 ├── fixtures/     # Tracked regression inputs
-├── var/          # Ignored generated media, proofs, sites, packages, and scratch work
-├── examples/     # Example edition and project configuration files
-├── tests/        # Unit, media, browser, provenance, and governance verification
-├── docs/         # Canonical documentation (and historical incubation receipts in docs/historical/)
-├── archive/      # ChatGPT transcripts, research notes, and master project manifest
-├── editions.json # Production multi-edition registry
-└── pytest.ini    # Test runner configuration
+├── evidence/     # Reviewed proof ledgers and frames
+├── docs/         # Architecture, authoring, governance, provenance, and plans
+├── archive/      # Retained ChatGPT and incubation records
+├── var/          # Ignored generated and private local outputs
+└── pyproject.toml # Packaging, verification dependencies, and pytest settings
 ```
 
 ## Rendering Model
 
 - Schema: silent `visual-form-composition/v1`; opt-in audio `visual-form-composition/v1.1`
-- Authoring model: [`src/simvltanea/composition_model.py`](src/simvltanea/composition_model.py)
-- Compiler / state: [`src/simvltanea/composition.py`](src/simvltanea/composition.py)
-- FFmpeg renderer: [`src/simvltanea/render_triptych.py`](src/simvltanea/render_triptych.py)
-- Browser preview: [`src/simvltanea/browser_runtime.py`](src/simvltanea/browser_runtime.py) / [`src/simvltanea/browser_runtime.js`](src/simvltanea/browser_runtime.js)
+- Authoring model: [`src/simvltanea/authoring/composition_model.py`](src/simvltanea/authoring/composition_model.py)
+- Compiler / state: [`src/simvltanea/authoring/composition.py`](src/simvltanea/authoring/composition.py)
+- FFmpeg renderer: [`src/simvltanea/rendering/render_triptych.py`](src/simvltanea/rendering/render_triptych.py)
+- Browser preview: [`src/simvltanea/browser/browser_runtime.py`](src/simvltanea/browser/browser_runtime.py) / [`src/simvltanea/browser/browser_runtime.js`](src/simvltanea/browser/browser_runtime.js)
 
 Schema-1 loop exports remain silent. Explicit v1.1 states support a synchronized
 soundtrack or spatial loop mix. Legacy `none` / `panel` / `mix` audio routing is
-preserved on the historical three-panel path. See [Audio architecture](docs/AUDIO_ARCHITECTURE.md)
+preserved on the historical three-panel path. See [Audio architecture](docs/architecture/AUDIO_ARCHITECTURE.md)
 for the version contract, synthetic examples, and verification boundaries.
 
 ## Verify
 
-CI also enforces [file and directory naming](docs/NAMING.md),
-[repository structure](docs/STRUCTURE.md), and added or edited Markdown,
+Physical locations and placement policy use a [configurable layout](docs/governance/LAYOUT.md).
+Authoring templates refer to logical paths such as `@samples/inaugural`.
+
+CI also enforces [file and directory naming](docs/governance/NAMING.md),
+[repository structure](docs/governance/STRUCTURE.md), and added or edited Markdown,
 including MD041 titles and MD047 final newlines. See
-[Contributing](CONTRIBUTING.md#verify-before-pr) for pinned tools and local
+[Contributing](.github/CONTRIBUTING.md#verify-before-pr) for pinned tools and local
 governance commands.
 
 ```bash
@@ -145,7 +151,7 @@ abstraction of the same grammar.
 
 ## Naming
 
-See `docs/NAMING.md`. TripTicks remains the historical title.
+See `docs/governance/NAMING.md`. TripTicks remains the historical title.
 Triptych remains a configuration word.
 `organvm/visual-composition-engine` was a provisioning-pending extract name
 from Portvs PR #11 and was never created.
@@ -163,4 +169,4 @@ The Portvs incubator copy is not deleted.
 Historical ChatGPT transcripts, execution handoffs, receipts, telemetry traces, bundles, and media proofs are cataloged in the master annotated bibliography:
 
 - **[Project Manifest & Annotated Bibliography](archive/PROJECT_MANIFEST.md)** (`archive/PROJECT_MANIFEST.md`)
-- **[Classified Archive Directory](archive/chatgpt/)** (`archive/chatgpt/`)
+- **[Classified Archive Directory](archive/chatgpt)** (`archive/chatgpt/`)

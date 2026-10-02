@@ -38,8 +38,8 @@ count joins the supported 2–6 family.
    `Placement.focal_x/focal_y` default to `0.5` (`core/composition_model.py:142-143`).
 
 4. **It is already executed and evidenced.** `runtime-proof/state-7.json`,
-   `runtime-proof/preview-7/`, `tests/test_browser_runtime.py` N=7 continuity,
-   `tests/test_browser_continuity.py` N=7 continuity, the `counts-6-7` group in
+   `runtime-proof/preview-7/`, `tests/browser/test_browser_runtime.py` N=7 continuity,
+   `tests/browser/test_browser_continuity.py` N=7 continuity, the `counts-6-7` group in
    `tools/run_review_proof.py`, and two archived renders — `MEDA-002` (portrait) and
    `MEDA-003` (landscape) in `archive/chatgpt/media/`.
 
@@ -123,6 +123,6 @@ H.264/**AAC**, contradicting its actual silent stream. PR #11 repaired only the 
 entry. It is the same defect class and belongs in a separate `lane/heal` branch; it is not
 addressed by this plan.
 
-`tests/test_archive_media_provenance.py` is also untouched by design. It pins the
+`tests/governance/test_archive_media_provenance.py` is also untouched by design. It pins the
 `#experimental-7-loop` tag and the "experimental $N=7$" wording in the manifest, which
 describe the September 2026 experiment accurately. Rewriting them would rewrite provenance.

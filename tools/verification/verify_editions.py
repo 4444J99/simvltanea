@@ -2,6 +2,8 @@
 """Validate source edition presets before importing, rendering, or syncing."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
+from tools.paths import EDITIONS_FILE
 
 import argparse
 import json
@@ -15,7 +17,7 @@ from tools.paths import REPO_ROOT, SITE_DIR
 
 
 SCRIPT_DIR = REPO_ROOT
-DEFAULT_EDITIONS = REPO_ROOT / "editions.json"
+DEFAULT_EDITIONS = EDITIONS_FILE
 DEFAULT_SITE_DIR = SITE_DIR
 SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 PANEL_NAMES = {"left", "middle", "right"}
@@ -56,7 +58,7 @@ def path_inside(path: Path, parent: Path) -> bool:
 def resolve_inside(path: Path, label: str) -> Path:
     expanded = path.expanduser()
     resolved = expanded.resolve() if expanded.is_absolute() else (SCRIPT_DIR / expanded).resolve()
-    # Also allow repo-root-relative paths like ../editions.json or absolute repo-root paths.
+    # Also allow repo-root-relative paths like ../editions/registry.json or absolute repo-root paths.
     if not path_inside(resolved, SCRIPT_DIR) and not path_inside(resolved, REPO_ROOT):
         raise SystemExit(f"{label} must stay inside the SIMVLTANEA repository root.")
     return resolved
@@ -70,7 +72,7 @@ def safe_slug(value: Any) -> str:
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"{path}: cannot read JSON: {error}") from error
     if not isinstance(data, dict):

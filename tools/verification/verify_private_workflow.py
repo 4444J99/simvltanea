@@ -2,6 +2,8 @@
 """Verify private overnight workflow receipts without publishing them."""
 
 from __future__ import annotations
+from tools.paths import lane_ref
+from tools.paths import resolve_references
 
 import argparse
 import html as html_lib
@@ -126,7 +128,7 @@ def resolve_inside(path: Path, label: str) -> Path:
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as error:
         errors.append(f"{path}: cannot read JSON: {error}")
         return {}
@@ -175,7 +177,7 @@ def validate_focus_links(focus: dict[str, Any], errors: list[str]) -> None:
             errors.append(f"release-focus.focus[{index}] must be an object")
             continue
         href = item.get("href")
-        local_ref_exists(f"site/{href}" if isinstance(href, str) else href, errors, f"release-focus.focus[{index}].href")
+        local_ref_exists(f"{lane_ref('site')}/{href}" if isinstance(href, str) else href, errors, f"release-focus.focus[{index}].href")
         for ref_key in ("package_media_href", "release_board_href", "release_player_href"):
             local_ref_exists(item.get(ref_key), errors, f"release-focus.focus[{index}].{ref_key}")
         if item.get("product_shop_gate") != "deferred until explicit product review":
@@ -318,7 +320,7 @@ def validate_hosting_links(hosting: dict[str, Any], errors: list[str]) -> None:
             continue
         local_ref_exists(entry.get("href"), errors, f"static-hosting-handoff.entrypoints[{index}].href")
     never_upload = hosting.get("never_upload")
-    if not isinstance(never_upload, list) or not {"work/", "samples/", "renders/"}.issubset(set(never_upload)):
+    if not isinstance(never_upload, list) or not {lane_ref('work', '') + "/", lane_ref('samples', '') + "/", lane_ref('renders', '') + "/"}.issubset(set(never_upload)):
         errors.append("static-hosting-handoff.never_upload must include work/, samples/, renders/")
     if hosting.get("requires_secrets") is not False:
         errors.append("static-hosting-handoff.requires_secrets must be false")
@@ -346,7 +348,7 @@ def validate_hosting_html(hosting: dict[str, Any], hosting_html: Path, errors: l
             value = entry.get(text_key)
             if isinstance(value, str) and html_lib.escape(value, quote=True) not in text:
                 errors.append(f"{hosting_html}: entrypoint {index} missing {text_key}")
-    for token in ("work/", "samples/", "renders/"):
+    for token in (lane_ref('work', '') + "/", lane_ref('samples', '') + "/", lane_ref('renders', '') + "/"):
         if html_lib.escape(token, quote=True) not in text:
             errors.append(f"{hosting_html}: missing never-upload token {token}")
 
@@ -533,7 +535,7 @@ def validate_release_cadence_links(release_cadence: dict[str, Any], errors: list
             continue
         for ref_key in ("package_media_href", "release_player_href", "release_board_href", "render_queue_ref"):
             local_ref_exists(item.get(ref_key), errors, f"release-cadence-plan.sequence[{index}].{ref_key}")
-        if item.get("receipt_template") == "work/posting-receipt-template.html":
+        if item.get("receipt_template") == lane_ref('work', 'posting-receipt-template.html'):
             local_ref_exists(item.get("receipt_template"), errors, f"release-cadence-plan.sequence[{index}].receipt_template")
         if item.get("status") != "candidate-unposted":
             errors.append(f"release-cadence-plan.sequence[{index}].status must be candidate-unposted")
@@ -632,7 +634,7 @@ def validate_edition_slate_links(edition_slate: dict[str, Any], errors: list[str
         if package_page:
             local_ref_exists(package_page, errors, f"edition-refinement-slate.rows[{index}].package_page")
         surface = row.get("next_private_surface")
-        if isinstance(surface, str) and surface.startswith("work/"):
+        if isinstance(surface, str) and surface.startswith(lane_ref('work', '') + "/"):
             local_ref_exists(surface, errors, f"edition-refinement-slate.rows[{index}].next_private_surface")
         for item_index, item in enumerate(row.get("cadence_items") or [], start=1):
             if isinstance(item, dict):
@@ -677,7 +679,7 @@ def validate_edition_slate_html(edition_slate: dict[str, Any], edition_slate_htm
             if expected not in text:
                 errors.append(f"{edition_slate_html}: row {index} missing package page {expected}")
         surface = row.get("next_private_surface")
-        if isinstance(surface, str) and surface.startswith("work/"):
+        if isinstance(surface, str) and surface.startswith(lane_ref('work', '') + "/"):
             expected = html_lib.escape(f"../{surface}", quote=True)
             if expected not in text:
                 errors.append(f"{edition_slate_html}: row {index} missing private surface {expected}")
@@ -811,7 +813,7 @@ def validate_source_curation_links(source_curation: dict[str, Any], errors: list
         if "--photos-export-missing" in dry_run:
             errors.append(f"source-curation-plan.rows[{index}].dry_run_command must not export missing originals")
         surface = row.get("review_surface")
-        if isinstance(surface, str) and surface.startswith("work/"):
+        if isinstance(surface, str) and surface.startswith(lane_ref('work', '') + "/"):
             local_ref_exists(surface, errors, f"source-curation-plan.rows[{index}].review_surface")
     if source_curation.get("media_generation") != "none":
         errors.append("source-curation-plan.media_generation must be none")
@@ -1354,7 +1356,7 @@ def main() -> int:
         errors.extend(overnight_checkpoint.validate_dashboard_payload(dashboard))
         validate_dashboard_links(dashboard, errors)
         validate_dashboard_html(dashboard, dashboard_html, errors)
-    local_ref_exists("packages/triptych-video-canon-site/package-manifest.json", errors, "package manifest")
+    local_ref_exists(lane_ref('packages', 'triptych-video-canon-site/package-manifest.json'), errors, "package manifest")
     if not package_dir.exists():
         errors.append(f"{package_dir}: package dir missing")
     scan_private_tokens(

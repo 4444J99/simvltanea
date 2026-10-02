@@ -8,6 +8,15 @@ version = "0.1.0"
 description = "Configurable simultaneous video-loop compositions"
 requires-python = ">=3.12"
 
+[project.optional-dependencies]
+verification = ["Pillow==12.3.0", "playwright==1.57.0", "pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-p no:asyncio"
+pythonpath = ["src", "tools/editions", "tools/media", "tools/preservation", "tools/publishing", "tools/verification"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
@@ -15,4 +24,8 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-simvltanea = ["*.js", "py.typed"]
+simvltanea = ["py.typed", "layout.toml"]
+"simvltanea.browser" = ["*.js"]
+
+[tool.simvltanea]
+layout = "src/simvltanea/layout.toml"

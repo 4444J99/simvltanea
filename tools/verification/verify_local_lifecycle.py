@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tools.paths import REPO_ROOT
+from tools.paths import REPO_ROOT, load_layout
 
 if __package__:
     from .verify_repository_structure import (
@@ -88,7 +88,7 @@ def is_generated_leak(repo_path: str) -> bool:
     rel = incubator_relative(repo_path)
     if rel is None:
         return False
-    return is_generated_path(rel)
+    return is_generated_path(rel, load_layout(ROOT))
 
 
 def text_line_count(repo_paths: list[str]) -> int:

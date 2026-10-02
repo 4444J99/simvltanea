@@ -5,6 +5,7 @@ Mirrors core/composition.py rect_values / validate_layouts and
 core/artifact001_layouts.py _load_authored for the JSON override path.
 """
 from __future__ import annotations
+from tools.paths import resolve_references
 
 import argparse
 import json
@@ -12,11 +13,11 @@ import sys
 from fractions import Fraction
 from pathlib import Path
 
-from tools.paths import REPO_ROOT
+from tools.paths import REPO_ROOT, LAYOUT, EXAMPLES_DIR
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_CORE = REPO_ROOT / "src" / "simvltanea" / "layouts.json"
-DEFAULT_EXAMPLE = REPO_ROOT / "examples" / "layouts.json"
+DEFAULT_CORE = LAYOUT.path("package") / "layouts.json"
+DEFAULT_EXAMPLE = EXAMPLES_DIR / "layouts.json"
 
 
 def path_inside(path: Path, parent: Path) -> bool:
@@ -133,7 +134,7 @@ def main() -> int:
         return 0
 
     try:
-        data = json.loads(target.read_text(encoding="utf-8"))
+        data = resolve_references(json.loads(target.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as exc:
         msg = f"{target}: cannot read JSON: {exc}"
         if args.json:

@@ -11,91 +11,26 @@ import sys
 from pathlib import Path, PurePosixPath
 
 
-ROOT = Path(__file__).resolve().parents[2]
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-# Change these policy tables in the same PR as an intentional layout change.
-GENERATED_LANES = frozenset({"var"})
-ALLOWED_LANE_PLACEHOLDERS = frozenset({"var/.gitkeep"})
-ARTIFACT_BASELINE_FILES = frozenset({
-    "fixtures/artifact-001/baseline-manifest.json",
-    "fixtures/artifact-001/baseline/render_triptych.original.py",
-})
-RAW_INTAKE_FILES = frozenset({
-    "archive/raw/.gitkeep",
-    "archive/raw/README.md",
-    "archive/raw/PR9_review_proof_2026-09-06/README.md",
-})
-LOCAL_ONLY_ROOTS = frozenset({"var", ".venv", ".pytest_cache"})
-PROOF_OUTPUT_DIRECTORIES = frozenset({
-    "evidence/visual-proof/media",
-    "evidence/visual-proof/renders",
-})
+from tools.paths import LAYOUT, REPO_ROOT, Layout, load_layout
 
-APPROVED_ROOT_DIRECTORIES = frozenset({
-    ".github", ".vscode", "archive", "docs", "evidence", "examples",
-    "fixtures", "src", "tests", "tools", "var",
-}) | GENERATED_LANES
-APPROVED_ROOT_FILES = frozenset({
-    ".gitignore", ".ls-lint.yml", ".markdownlint.json", ".markdownlintignore",
-    "CODEOWNERS",
-    "CONTRIBUTING.md", "LICENSE", "README.md", "SECURITY.md",
-    "editions.json", "pyproject.toml", "pytest.ini", "requirements.txt",
-})
-REQUIRED_FILES = (
-    APPROVED_ROOT_FILES | ALLOWED_LANE_PLACEHOLDERS | ARTIFACT_BASELINE_FILES
-) | frozenset({
-    ".github/workflows/ci.yml",
-    "src/simvltanea/__init__.py",
-    "src/simvltanea/README.md",
-    "tools/README.md",
-    "tools/editions/__init__.py",
-    "tools/media/__init__.py",
-    "tools/preservation/__init__.py",
-    "tools/publishing/__init__.py",
-    "tools/verification/__init__.py",
-    "tests/README.md",
-    "examples/README.md",
-    "docs/NAMING.md",
-    "docs/BRANCHES.md",
-    "docs/STATUS.md",
-    "docs/STRUCTURE.md",
-    "docs/historical/README.md",
-    "docs/plans/INDEX.md",
-    "archive/PROJECT_MANIFEST.md",
-    "archive/chatgpt/README.md",
-    "archive/raw/README.md",
-    "evidence/visual-proof/README.md",
-    "evidence/visual-proof/ledger.json",
-})
-REQUIRED_DIRECTORIES = (APPROVED_ROOT_DIRECTORIES - {".vscode"}) | frozenset({
-    "archive/chatgpt", "archive/raw", "fixtures/artifact-001/baseline",
-    "src/simvltanea", "tools/editions", "tools/media", "tools/preservation",
-    "tools/publishing", "tools/verification",
-    "docs/plans", "docs/historical", "evidence/visual-proof",
-    "evidence/visual-proof/frames",
-})
+ROOT = REPO_ROOT
 
-SOURCE_EXTENSIONS = {
-    "src": frozenset({".py", ".js", ".md", ".typed"}),
-    "tools": frozenset({".py", ".md"}),
-    "examples": frozenset({".json", ".md"}),
-}
-SOURCE_FILE_EXCEPTIONS = frozenset({"src/simvltanea/layouts.json"})
-TEST_PYTHON_EXCEPTIONS = frozenset({"__init__.py", "conftest.py"})
-DOC_SUBDIRECTORIES = frozenset({"plans", "historical"})
-GITHUB_FOLDER_EXTENSIONS = {
-    "workflows": frozenset({".yml", ".yaml"}),
-    "ISSUE_TEMPLATE": frozenset({".md", ".yml", ".yaml"}),
-    "instructions": frozenset({".md"}),
-}
-ARCHIVE_CATEGORIES = frozenset({
-    "threads", "handoffs", "receipts", "research", "evidence", "logs",
-    "media", "bundles", "sessions", "prompts", "extracts",
-})
-PROOF_FILES = frozenset({
-    "evidence/visual-proof/README.md", "evidence/visual-proof/ledger.json",
-})
 
+def policy_values(layout: Layout) -> dict:
+    result = {}
+    for name, values in layout.policy.items():
+        if isinstance(values, dict):
+            result[name.upper()] = {layout.expand(key): frozenset(items) for key, items in values.items()}
+        else:
+            result[name.upper()] = layout.policy_paths(name)
+    return result
+
+
+# Public policy aliases preserve existing callers; verification resolves --root separately.
+globals().update(policy_values(LAYOUT))
 
 def run_git(root: Path, *args: str) -> bytes:
     result = subprocess.run(
@@ -112,74 +47,95 @@ def git_paths(root: Path, *args: str) -> list[str]:
     return [os.fsdecode(path) for path in output.split(b"\0") if path]
 
 
-def is_generated_path(path: str) -> bool:
-    """Shared structure/lifecycle boundary for generated or local-only paths."""
+def is_generated_path(path: str, layout: Layout = LAYOUT) -> bool:
+    """Classify output using the same configured roles as command defaults."""
+    policy = policy_values(layout)
     parts = PurePosixPath(path).parts
     if not parts:
         return False
     if ".DS_Store" in parts or "__pycache__" in parts:
         return True
-    if parts[0] in {"tools", "src", "core"} and any(
-        part in {"work", "samples", "renders", "site", "packages", "runtime-proof"}
-        for part in parts[1:-1]
-    ):
-        return True
-    if parts[0] in GENERATED_LANES:
-        return path not in ALLOWED_LANE_PLACEHOLDERS
-    if parts[0] in LOCAL_ONLY_ROOTS:
-        return True
-    if parts[0] == "fixtures" and parts[:2] == ("fixtures", "artifact-001"):
-        return path not in ARTIFACT_BASELINE_FILES
-    if parts[:2] == ("archive", "raw"):
-        return path not in RAW_INTAKE_FILES
-    return any(
-        path == directory or path.startswith(f"{directory}/")
-        for directory in PROOF_OUTPUT_DIRECTORIES
-    )
+    if path in policy["ALLOWED_LANE_PLACEHOLDERS"]:
+        return False
+    for base in policy["GENERATED_LANES"] | policy["LOCAL_ONLY_ROOTS"] | policy["PROOF_OUTPUT_DIRECTORIES"]:
+        if path == base or path.startswith(base + "/"):
+            return True
+    fixture = layout.relative("artifact_fixture")
+    if path == fixture or path.startswith(fixture + "/"):
+        return path not in policy["ARTIFACT_BASELINE_FILES"]
+    raw = layout.relative("archive") + "/raw"
+    if path == raw or path.startswith(raw + "/"):
+        return path not in policy["RAW_INTAKE_FILES"]
+    # Reject misplaced output trees as well as configured output locations.
+    lane_names = {PurePosixPath(layout.relative(role)).name for role in
+                  ("work", "samples", "renders", "site", "packages", "proofs", "artifact_output")}
+    lane_names |= {"work", "samples", "renders", "site", "packages", "runtime-proof"}
+    for role in ("source", "tools"):
+        base = layout.relative(role)
+        if path.startswith(base + "/") and any(part in lane_names for part in
+                                                PurePosixPath(path[len(base)+1:]).parts[:-1]):
+            return True
+    return False
 
 
-def path_violation(path: str) -> str | None:
+def path_violation(path: str, layout: Layout = LAYOUT) -> str | None:
     """Check placement; spelling and case remain governed by ls-lint."""
-    if is_generated_path(path):
-        return "generated/local-only path must stay out of Git; see docs/STRUCTURE.md"
+    policy = policy_values(layout)
+    if is_generated_path(path, layout):
+        return "generated/local-only path must stay out of Git; see docs/governance/STRUCTURE.md"
     entry = PurePosixPath(path)
     parts = entry.parts
     if len(parts) == 1:
-        if path in APPROVED_ROOT_FILES:
+        if path in policy["APPROVED_ROOT_FILES"]:
             return None
         return "unapproved root file; use an approved folder or update the policy"
     area = parts[0]
-    if area not in APPROVED_ROOT_DIRECTORIES:
+    if not any(path.startswith(base + "/") for base in policy["APPROVED_ROOT_DIRECTORIES"]):
         return "unapproved root directory; update the policy for an intentional addition"
-    if path in ALLOWED_LANE_PLACEHOLDERS or path in ARTIFACT_BASELINE_FILES:
+    if path in policy["ALLOWED_LANE_PLACEHOLDERS"] or path in policy["ARTIFACT_BASELINE_FILES"]:
         return None
-    if area in SOURCE_EXTENSIONS:
-        if path in SOURCE_FILE_EXCEPTIONS or entry.suffix in SOURCE_EXTENSIONS[area]:
+    if path.startswith(layout.relative("config") + "/"):
+        return None if path in policy["CONFIG_FILES"] else "config/ allows documented lint configuration files"
+    if path.startswith(layout.relative("editions") + "/"):
+        return None if path == layout.relative("registry") or path == layout.relative("editions") + "/README.md" else "editions/ allows the production registry and its guide"
+    source_role = next((base for base in policy["SOURCE_EXTENSIONS"] if path.startswith(base + "/")), None)
+    if source_role is not None:
+        area = source_role
+    if area in policy["SOURCE_EXTENSIONS"]:
+        if path in policy["SOURCE_FILE_EXCEPTIONS"] or entry.suffix in policy["SOURCE_EXTENSIONS"][area]:
             return None
-        extensions = ", ".join(sorted(SOURCE_EXTENSIONS[area]))
+        extensions = ", ".join(sorted(policy["SOURCE_EXTENSIONS"][area]))
         return f"{area}/ allows {extensions} files; put other material in its approved area"
+    for role, logical in (("tests", "tests"), ("docs", "docs"), ("github", ".github"),
+                          ("archive", "archive"), ("evidence", "evidence"),
+                          ("config", "config"), ("editions", "editions")):
+        base = layout.relative(role)
+        if path.startswith(base + "/"):
+            area = logical
+            parts = (logical, *PurePosixPath(path[len(base)+1:]).parts)
+            break
     if area == "tests":
         if entry.suffix == ".md":
             return None
         if entry.suffix == ".py" and (
-            entry.name.startswith("test_") or entry.name in TEST_PYTHON_EXCEPTIONS
+            entry.name.startswith("test_") or entry.name in policy["TEST_PYTHON_EXCEPTIONS"]
         ):
             return None
         return "tests/ allows test_*.py, __init__.py, conftest.py, and Markdown"
     if area == "docs":
-        if len(parts) > 2 and parts[1] not in DOC_SUBDIRECTORIES:
-            return "docs/ subdirectories must be plans/ or historical/"
-        if len(parts) > 2 and parts[1] == "historical":
-            return None
+        if len(parts) > 2 and parts[1] not in policy["DOC_SUBDIRECTORIES"]:
+            return "docs/ subdirectories must be documented topic groups"
         if entry.suffix == ".md":
             return None
-        return "active documentation must be Markdown; historical records belong in docs/historical/"
+        return "active documentation must be Markdown; historical records belong in archive/incubation/"
     if area == ".github":
+        if path in policy["GOVERNANCE_FILES"]:
+            return None
         if len(parts) == 2 and entry.suffix == ".md":
             return None
-        if len(parts) >= 3 and parts[1] in GITHUB_FOLDER_EXTENSIONS:
+        if len(parts) >= 3 and parts[1] in policy["GITHUB_FOLDER_EXTENSIONS"]:
             if (len(parts) == 3 or parts[1] == "instructions") and (
-                entry.suffix in GITHUB_FOLDER_EXTENSIONS[parts[1]]
+                entry.suffix in policy["GITHUB_FOLDER_EXTENSIONS"][parts[1]]
             ):
                 return None
         return ".github/ allows root Markdown, workflow YAML, issue templates, and instruction Markdown"
@@ -188,15 +144,17 @@ def path_violation(path: str) -> str | None:
             return None
         return ".vscode/ allows JSON configuration files directly inside the folder"
     if area == "archive":
-        if path == "archive/PROJECT_MANIFEST.md" or path in RAW_INTAKE_FILES:
+        if len(parts) >= 3 and parts[1] == "incubation":
             return None
-        if path == "archive/chatgpt/README.md":
+        if path == layout.relative("archive") + "/PROJECT_MANIFEST.md" or path in policy["RAW_INTAKE_FILES"]:
             return None
-        if len(parts) >= 4 and parts[1] == "chatgpt" and parts[2] in ARCHIVE_CATEGORIES:
+        if path == layout.relative("archive") + "/chatgpt/README.md":
+            return None
+        if len(parts) >= 4 and parts[1] == "chatgpt" and parts[2] in policy["ARCHIVE_CATEGORIES"]:
             return None
         return "archive/ material belongs in a documented archive/chatgpt/ category"
     if area == "evidence":
-        if path in PROOF_FILES:
+        if path in policy["PROOF_FILES"]:
             return None
         if (
             len(parts) >= 4 and parts[1:3] == ("visual-proof", "frames")
@@ -204,12 +162,14 @@ def path_violation(path: str) -> str | None:
         ):
             return None
         return "evidence/ allows visual-proof/README.md, ledger.json, and frames/*.png"
-    return "path is outside the approved folder role; see docs/STRUCTURE.md"
+    return "path is outside the approved folder role; see docs/governance/STRUCTURE.md"
 
 
 def verify_structure(root: Path) -> list[tuple[str, str]]:
     """Validate the index and Git-visible additions against the worktree layout."""
     root = root.resolve()
+    layout = load_layout(root)
+    policy = policy_values(layout)
     if run_git(root, "rev-parse", "--is-inside-work-tree") != b"true\n":
         raise RuntimeError("--root must name a Git worktree")
     if run_git(root, "rev-parse", "--show-prefix") != b"\n":
@@ -229,10 +189,10 @@ def verify_structure(root: Path) -> list[tuple[str, str]]:
     }
 
     for path in paths:
-        message = path_violation(path)
+        message = path_violation(path, layout)
         if message:
             violations.append((path, message))
-    for path in REQUIRED_FILES:
+    for path in policy["REQUIRED_FILES"]:
         if path in staged_deletions:
             violations.append((path, "required file is staged for deletion; restore it to the index"))
             continue
@@ -246,7 +206,7 @@ def verify_structure(root: Path) -> list[tuple[str, str]]:
         else:
             if not stat.S_ISREG(mode):
                 violations.append((path, "required path must be a regular file"))
-    for path in REQUIRED_DIRECTORIES:
+    for path in policy["REQUIRED_DIRECTORIES"]:
         if path not in directories:
             violations.append((path, "required directory needs Git-visible children"))
             continue
@@ -269,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         violations = verify_structure(args.root)
-    except (OSError, RuntimeError) as error:
+    except (OSError, RuntimeError, ValueError, KeyError) as error:
         print(f"repository structure error: {error}", file=sys.stderr)
         return 2
     if violations:

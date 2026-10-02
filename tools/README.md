@@ -23,5 +23,5 @@ Reusable engine behavior belongs in `src/simvltanea/`, not in command modules.
 Operational defaults come from `simvltanea.paths` through `tools.paths`; command
 files must not derive output roots from their own location.
 
-See [repository structure governance](../docs/STRUCTURE.md) and
-[contributing](../CONTRIBUTING.md#verify-before-pr) for the enforced contract.
+See [repository structure governance](../docs/governance/STRUCTURE.md) and
+[contributing](../.github/CONTRIBUTING.md#verify-before-pr) for the enforced contract.

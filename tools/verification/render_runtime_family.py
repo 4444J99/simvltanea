@@ -16,16 +16,13 @@ from tools.paths import PROOFS_DIR, REPO_ROOT
 
 HERE = Path(__file__).resolve().parent
 REPO = REPO_ROOT
-CORE = REPO / 'src' / 'simvltanea'
-if str(CORE) not in sys.path:
-    sys.path.insert(0, str(CORE))
 
-import composition as c
-from make_artifact_001 import probe
-from make_runtime_fixture import prepare
+import simvltanea.authoring.composition as c
+from simvltanea.generators.make_artifact_001 import probe
+from simvltanea.generators.make_runtime_fixture import prepare
 
 ROOT = PROOFS_DIR
-RENDER_CLI = REPO / 'src' / 'simvltanea' / 'render_triptych.py'
+RENDER_MODULE = 'simvltanea.rendering.render_triptych'
 
 
 def render_family() -> list[dict]:
@@ -34,7 +31,7 @@ def render_family() -> list[dict]:
     for count in (3, 4, 5, 6, 7):
         for orientation, width, height in (('portrait', 360, 640), ('landscape', 640, 360)):
             output = ROOT / 'renders' / f'labeled-{count}-{orientation}.mp4'
-            command = ['python3', str(RENDER_CLI), '--state', str(ROOT / f'state-{count}.json'),
+            command = [sys.executable, '-m', RENDER_MODULE, '--state', str(ROOT / f'state-{count}.json'),
                        '--orientation', orientation, '--width', str(width), '--height', str(height),
                        '--preset', 'ultrafast', '--crf', '18', '--output', str(output)]
             start = time.monotonic()
@@ -65,7 +62,7 @@ def verify_portable_reproduction() -> list[dict]:
     receipts = []
     for orientation, width, height in (('portrait', 360, 640), ('landscape', 640, 360)):
         output = ROOT / 'renders' / f'portable-7-{orientation}.mp4'
-        command = ['python3', str(RENDER_CLI), '--state', str(ROOT / 'preview-7' / 'state.json'),
+        command = [sys.executable, '-m', RENDER_MODULE, '--state', str(ROOT / 'preview-7' / 'state.json'),
                    '--orientation', orientation, '--width', str(width), '--height', str(height),
                    '--preset', 'ultrafast', '--crf', '18', '--output', str(output)]
         subprocess.run(command, cwd=str(REPO), check=True, capture_output=True, text=True)

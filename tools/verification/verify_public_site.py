@@ -2,6 +2,7 @@
 """Verify that the generated triptych site is safe and coherent to share."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
 
 import argparse
 import json
@@ -132,7 +133,7 @@ def public_ref(base_dir: Path, ref: str) -> Path | None:
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as error:
         errors.append(f"{path}: cannot read JSON: {error}")
         return None

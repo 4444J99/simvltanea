@@ -2,6 +2,7 @@
 """Render a lightweight visual-arrangement sketch from an edition project."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
 
 import argparse
 import json
@@ -137,7 +138,7 @@ def load_project(path: Path) -> tuple[dict[str, Any], Path]:
     project_path = path.expanduser().resolve()
     if not project_path.exists():
         raise SystemExit(f"Project manifest not found: {project_path}")
-    return json.loads(project_path.read_text(encoding="utf-8")), project_path.parent
+    return resolve_references(json.loads(project_path.read_text(encoding="utf-8"))), project_path.parent
 
 
 def normalize_panel_order(value: Any) -> tuple[str, str, str]:

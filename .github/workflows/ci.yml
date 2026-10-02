@@ -16,18 +16,29 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: ls-lint
-        uses: ls-lint/action@v2.3.1
-        with:
-          config: .ls-lint.yml
-
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
+      - name: Resolve lint paths from layout
+        id: layout
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          from tools.paths import LAYOUT
+          for key, name in (("naming", "ls-lint.yml"), ("markdown", "markdownlint.json"), ("markdown_ignore", "markdownlintignore")):
+              print(f"{key}={LAYOUT.relative('config')}/lint/{name}")
+          PY
+
+      - name: ls-lint
+        uses: ls-lint/action@v2.3.1
+        with:
+          config: ${{ steps.layout.outputs.naming }}
+
       - name: Verify Repository Structure
-        run: python3 -m tools.verification.verify_repository_structure
+        run: |
+          python3 -m tools.verification.sync_layout
+          python3 -m tools.verification.verify_repository_structure
 
       - name: Set up Node.js for Markdown linting
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -48,7 +59,7 @@ jobs:
           fi
           git diff --name-only --diff-filter=ACMR -z "$MARKDOWN_BASE" HEAD -- '*.md' |
             xargs -0 -r npx --yes markdownlint-cli@0.45.0 \
-              --config .markdownlint.json --ignore-path .markdownlintignore --
+              --config "${{ steps.layout.outputs.markdown }}" --ignore-path "${{ steps.layout.outputs.markdown_ignore }}" --
 
       - name: Install System Dependencies
         run: |
@@ -69,7 +80,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -e ".[verification]"
           playwright install --with-deps chromium
           python3 -c "import PIL; print(f'Pillow {PIL.__version__}')"
           python3 -c "import importlib.metadata; print(f'playwright {importlib.metadata.version(\"playwright\")}')"

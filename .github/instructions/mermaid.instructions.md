@@ -87,7 +87,7 @@ For diagrams updated by the Mermaid GitHub Sync app (or pre-commit regenerate):
 4. Prefer `@mermaid-chart` slash commands for complex generation.
 5. Create/edit requests may write `.mmd` files; preview-only requests stay
    read-only. Never return unvalidated Mermaid syntax. Tracked diagram paths
-   must follow `docs/STRUCTURE.md`; otherwise use ignored local output.
+   must follow `docs/governance/STRUCTURE.md`; otherwise use ignored local output.
 6. Warn the user before Repair (Mermaid AI credits).
 7. Cooperate with the Sync workflow — do not manually regenerate managed diagrams.
 

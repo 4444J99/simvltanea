@@ -16,12 +16,9 @@ from tools.paths import PROOFS_DIR, REPO_ROOT
 
 HERE = Path(__file__).resolve().parent
 REPO = REPO_ROOT
-CORE = REPO / 'src' / 'simvltanea'
-if str(CORE) not in sys.path:
-    sys.path.insert(0, str(CORE))
 
 from PIL import Image, ImageChops, ImageStat
-import composition as c
+import simvltanea.authoring.composition as c
 
 ROOT = PROOFS_DIR
 CHECK_FRAMES = (12, 48, 120)

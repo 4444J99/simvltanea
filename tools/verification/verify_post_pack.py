@@ -2,6 +2,7 @@
 """Verify rendered Story/Reel exports for a named edition post pack."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
 
 import argparse
 import json
@@ -61,7 +62,7 @@ def require_inside(path: Path, label: str) -> None:
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"{path}: cannot read JSON: {error}") from error
     if not isinstance(data, dict):

@@ -10,10 +10,10 @@
 <!-- Exact commands / evidence that prove the class is gone -->
 ```bash
 set -o pipefail
-ls-lint
+ls-lint --config config/lint/ls-lint.yml
 git diff --name-only --diff-filter=ACMR -z origin/main...HEAD -- '*.md' |
   xargs -0 -r npx --yes markdownlint-cli@0.45.0 \
-    --config .markdownlint.json --ignore-path .markdownlintignore --
+    --config config/lint/markdownlint.json --ignore-path config/lint/markdownlintignore --
 python3 -m tools.verification.verify_repository_structure
 python3 -m pytest -q
 python3 -m tools.verification.verify_local_lifecycle

@@ -2,6 +2,7 @@
 """Stage videos from a chosen filesystem folder into a triptych project."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
 
 import argparse
 import json
@@ -146,7 +147,7 @@ def normalize_export_paths(project: dict[str, Any], local_base: Path) -> None:
 def load_project(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise SystemExit(f"Base project manifest not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return resolve_references(json.loads(path.read_text(encoding="utf-8")))
 
 
 def staged_path(output_dir: Path, index: int, source_path: Path) -> Path:

@@ -1,6 +1,6 @@
 {
-  "input_dir": "../var/samples",
-  "output_file": "../var/renders/story-triptych.mp4",
+  "input_dir": "@samples",
+  "output_file": "@renders/story-triptych.mp4",
   "timing_mode": "clip",
   "phrase_seconds": 4.0,
   "layout": "story",

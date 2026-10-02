@@ -19,34 +19,34 @@ import time
 import unittest
 from pathlib import Path
 
-from tools.paths import PROOFS_DIR, REPO_ROOT
+from tools.paths import LAYOUT, PROOFS_DIR, REPO_ROOT
 
 HERE = Path(__file__).resolve().parent
 TESTS = REPO_ROOT / 'tests'
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 GROUPS = {
-    'model': ['test_review_proof', 'test_composition_model', 'test_authoring_contract',
-              'test_composition_render', 'test_browser_runtime.PlanTests',
-              'test_browser_boundaries.PlanBoundaryTests'],
-    'counts-3-5': [f'test_browser_runtime.BrowserTests.test_{n}_loop_native_continuity' for n in (3,4,5)],
-    'counts-6-7': ['test_browser_runtime.BrowserTests.test_6_loop_native_continuity',
-                   'test_browser_runtime.BrowserTests.test_7_loop_native_continuity'],
-    'load-resize': ['test_browser_runtime.BrowserTests.test_container_resize_without_viewport_change',
-                    'test_browser_runtime.BrowserTests.test_browser_rejects_altered_media_before_mounting',
-                    'test_browser_runtime.BrowserTests.test_resize_while_media_is_loading'],
-    'controls': ['test_browser_runtime.BrowserTests.test_native_controls_hold_release_swap_reroll_move',
-                 'test_browser_runtime.BrowserTests.test_native_trim_loop_boundaries'],
-    'invalid-input': ['test_browser_boundaries.NativeBoundaryTests.test_invalid_plan_rejected_before_media_io_or_mount',
-                      'test_browser_boundaries.NativeBoundaryTests.test_error_during_start_cannot_be_overwritten_by_playing'],
-    'shared-hidden': ['test_browser_boundaries.NativeBoundaryTests.test_explicit_source_reuse_preserves_independent_clocks_through_resize',
-                      'test_browser_boundaries.NativeBoundaryTests.test_zero_size_container_restores_without_reset'],
-    'hold-still': ['test_browser_boundaries.NativeBoundaryTests.test_hold_resize_release_and_finish_are_not_restarts',
-                   'test_browser_boundaries.NativeBoundaryTests.test_still_video_swap_preserves_loop_boxes_and_unrelated_video'],
-    'independent-a': ['test_browser_continuity.ContinuityTests.test_3', 'test_browser_continuity.ContinuityTests.test_4', 'test_browser_continuity.ContinuityTests.test_5', 'test_browser_continuity.ContinuityTests.test_6'],
-    'independent-b': ['test_browser_continuity.ContinuityTests.test_7', 'test_browser_continuity.ContinuityTests.test_container_only', 'test_browser_continuity.ContinuityTests.test_held_loop_survives_resize', 'test_browser_continuity.ContinuityTests.test_reject_wrong_layout'],
-    'independent-c': ['test_browser_continuity.ContinuityTests.test_reject_time_reset', 'test_browser_continuity.ContinuityTests.test_reject_same_source_reload', 'test_browser_continuity.ContinuityTests.test_reject_source_reroll', 'test_browser_continuity.ContinuityTests.test_reject_transient_duplicate'],
-    'independent-d': ['test_browser_continuity.ContinuityTests.test_reject_transient_removal', 'test_browser_continuity.ContinuityTests.test_reject_same_id_replacement', 'test_browser_continuity.ContinuityTests.test_reject_pause', 'test_browser_continuity.ContinuityTests.test_reject_rate_change'],
+    'model': ['tests.governance.test_review_proof', 'tests.model.test_composition_model', 'tests.model.test_authoring_contract',
+              'tests.render.test_composition_render', 'tests.browser.test_browser_runtime.PlanTests',
+              'tests.browser.test_browser_boundaries.PlanBoundaryTests'],
+    'counts-3-5': [f'tests.browser.test_browser_runtime.BrowserTests.test_{n}_loop_native_continuity' for n in (3,4,5)],
+    'counts-6-7': ['tests.browser.test_browser_runtime.BrowserTests.test_6_loop_native_continuity',
+                   'tests.browser.test_browser_runtime.BrowserTests.test_7_loop_native_continuity'],
+    'load-resize': ['tests.browser.test_browser_runtime.BrowserTests.test_container_resize_without_viewport_change',
+                    'tests.browser.test_browser_runtime.BrowserTests.test_browser_rejects_altered_media_before_mounting',
+                    'tests.browser.test_browser_runtime.BrowserTests.test_resize_while_media_is_loading'],
+    'controls': ['tests.browser.test_browser_runtime.BrowserTests.test_native_controls_hold_release_swap_reroll_move',
+                 'tests.browser.test_browser_runtime.BrowserTests.test_native_trim_loop_boundaries'],
+    'invalid-input': ['tests.browser.test_browser_boundaries.NativeBoundaryTests.test_invalid_plan_rejected_before_media_io_or_mount',
+                      'tests.browser.test_browser_boundaries.NativeBoundaryTests.test_error_during_start_cannot_be_overwritten_by_playing'],
+    'shared-hidden': ['tests.browser.test_browser_boundaries.NativeBoundaryTests.test_explicit_source_reuse_preserves_independent_clocks_through_resize',
+                      'tests.browser.test_browser_boundaries.NativeBoundaryTests.test_zero_size_container_restores_without_reset'],
+    'hold-still': ['tests.browser.test_browser_boundaries.NativeBoundaryTests.test_hold_resize_release_and_finish_are_not_restarts',
+                   'tests.browser.test_browser_boundaries.NativeBoundaryTests.test_still_video_swap_preserves_loop_boxes_and_unrelated_video'],
+    'independent-a': ['tests.browser.test_browser_continuity.ContinuityTests.test_3', 'tests.browser.test_browser_continuity.ContinuityTests.test_4', 'tests.browser.test_browser_continuity.ContinuityTests.test_5', 'tests.browser.test_browser_continuity.ContinuityTests.test_6'],
+    'independent-b': ['tests.browser.test_browser_continuity.ContinuityTests.test_7', 'tests.browser.test_browser_continuity.ContinuityTests.test_container_only', 'tests.browser.test_browser_continuity.ContinuityTests.test_held_loop_survives_resize', 'tests.browser.test_browser_continuity.ContinuityTests.test_reject_wrong_layout'],
+    'independent-c': ['tests.browser.test_browser_continuity.ContinuityTests.test_reject_time_reset', 'tests.browser.test_browser_continuity.ContinuityTests.test_reject_same_source_reload', 'tests.browser.test_browser_continuity.ContinuityTests.test_reject_source_reroll', 'tests.browser.test_browser_continuity.ContinuityTests.test_reject_transient_duplicate'],
+    'independent-d': ['tests.browser.test_browser_continuity.ContinuityTests.test_reject_transient_removal', 'tests.browser.test_browser_continuity.ContinuityTests.test_reject_same_id_replacement', 'tests.browser.test_browser_continuity.ContinuityTests.test_reject_pause', 'tests.browser.test_browser_continuity.ContinuityTests.test_reject_rate_change'],
 }
 
 
@@ -105,9 +105,9 @@ def run(output: Path, transport: str, groups: list[str], timeout: float) -> int:
         raise ValueError('timeout must be in 1..600')
     output = output.resolve()
     base_dir = HERE if HERE != Path(__file__).resolve().parent else REPO_ROOT
-    proof_root = PROOFS_DIR if base_dir == REPO_ROOT else base_dir / 'var' / 'proofs'
+    proof_root = PROOFS_DIR if base_dir == REPO_ROOT else base_dir / LAYOUT.relative('proofs')
     if not output.is_relative_to(proof_root) or output == proof_root:
-        raise ValueError('Evidence output must be a child of var/proofs inside the repository')
+        raise ValueError(f'Evidence output must be a child of {proof_root} inside the repository')
     output.mkdir(parents=True, exist_ok=False)
     report = dict(schema_version=1, transport=transport, python=platform.python_version(),
                   status='running', groups=[], scope='incubator-only; not a whole-repository or hosted-CI check',

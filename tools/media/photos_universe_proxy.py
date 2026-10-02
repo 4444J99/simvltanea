@@ -6,6 +6,8 @@ or hashes, and authorizes no Photos-library mutation.
 """
 
 from __future__ import annotations
+from tools.paths import lane_ref
+from tools.paths import resolve_references
 
 import argparse
 import json
@@ -33,7 +35,7 @@ def git_head(repo: Path) -> str:
 
 
 def load_receipt(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
     safety = data.get("safety") or {}
     if safety.get("read_only") is not True:
         raise SystemExit("receipt is not marked read_only")
@@ -61,7 +63,7 @@ def build_proxy(
         "source": {
             "lane": "photos-universe",
             "repo": "organvm/limen",
-            "branch": "work/photos-universe-20260629-182431",
+            "branch": lane_ref('work', 'photos-universe-20260629-182431'),
             "head": photos_head,
             "receipt": str(receipt_path),
             "receipt_type": "aggregate_duplicate_hash_proof",

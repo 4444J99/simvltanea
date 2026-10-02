@@ -2,6 +2,7 @@
 """Render a named edition's Story/Reel post pack, sync it, and verify the site."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
 
 import argparse
 import json
@@ -100,7 +101,7 @@ def require_inside(path: Path, label: str) -> None:
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return resolve_references(json.loads(path.read_text(encoding="utf-8")))
 
 
 def write_json(path: Path, payload: dict[str, Any], dry_run: bool) -> None:

@@ -2,6 +2,7 @@
 """Build a sanitized static index for published triptych editions."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
 
 import argparse
 import html
@@ -248,7 +249,7 @@ def require_inside(path: Path, label: str) -> None:
 
 def load_json(path: Path) -> dict[str, Any] | None:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) and data.get("public") is True else None

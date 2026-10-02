@@ -2,6 +2,7 @@
 """Opt-in local Photos library importer for the triptych video canon incubator."""
 
 from __future__ import annotations
+from tools.paths import resolve_references
 
 import argparse
 import json
@@ -768,7 +769,7 @@ def stage_media(
 def load_project(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise SystemExit(f"Base project manifest not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return resolve_references(json.loads(path.read_text(encoding="utf-8")))
 
 
 def relative_to_base(path: Path, base: Path) -> str:

@@ -6,6 +6,7 @@ the project feel heavy, without deleting or publishing anything.
 """
 
 from __future__ import annotations
+from tools.paths import lane_ref
 
 import argparse
 import json
@@ -15,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from tools.paths import VAR_DIR
+from tools.paths import VAR_DIR, LAYOUT
 
 
 ROOT = VAR_DIR
@@ -33,6 +34,7 @@ class Lane:
 @dataclass
 class LaneReport:
     path: str
+    directory: str
     role: str
     policy: str
     disposable: bool
@@ -87,7 +89,7 @@ REGENERATION_CHECKPOINTS = [
     "python3 -m tools.editions.edition_status",
     "python3 -m tools.verification.verify_editions",
     "python3 -m tools.publishing.build_site_index",
-    "python3 -m tools.verification.verify_post_pack work/editions/<slug>/project.json",
+    f"python3 -m tools.verification.verify_post_pack {lane_ref('work')}/editions/<slug>/project.json",
     "python3 -m tools.verification.verify_public_site",
     "python3 -m tools.publishing.package_public_site",
     "python3 -m tools.verification.verify_package",
@@ -107,7 +109,7 @@ CLEANUP_REGENERATION = {
     ],
     "renders": [
         "python3 -m tools.publishing.build_post_pack <edition> --profile draft",
-        "python3 -m tools.verification.verify_post_pack work/editions/<slug>/project.json",
+        f"python3 -m tools.verification.verify_post_pack {lane_ref('work')}/editions/<slug>/project.json",
     ],
     "work": [
         "python3 -m tools.editions.edition_status",
@@ -146,7 +148,7 @@ def iter_lane_files(path: Path) -> Iterable[Path]:
 
 
 def lane_report(lane: Lane) -> LaneReport:
-    path = ROOT / lane.path
+    path = LAYOUT.path(lane.path)
     total_bytes = 0
     file_count = 0
     symlink_count = 0
@@ -170,6 +172,7 @@ def lane_report(lane: Lane) -> LaneReport:
 
     return LaneReport(
         path=lane.path,
+        directory=LAYOUT.reference(lane.path),
         role=lane.role,
         policy=lane.policy,
         disposable=lane.disposable,
@@ -218,6 +221,7 @@ def cleanup_candidates(reports: list[LaneReport]) -> list[dict[str, object]]:
         candidates.append(
             {
                 "lane": report.path,
+                "directory": report.directory,
                 "bytes": report.bytes,
                 "human_size": human_bytes(report.bytes),
                 "files": report.files,

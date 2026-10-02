@@ -2,6 +2,8 @@
 """Write a private custody ledger for triptych source, work, and public outputs."""
 
 from __future__ import annotations
+from tools.paths import lane_ref
+from tools.paths import resolve_references
 
 import argparse
 import hashlib
@@ -84,7 +86,7 @@ def rel(path: Path) -> str:
 def load_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
     if not isinstance(data, dict):
         raise SystemExit(f"{path}: JSON root must be an object")
     return data
@@ -214,7 +216,7 @@ def public_derivative_state(
     if isinstance(slate_row, dict) and isinstance(slate_row.get("package_page"), str):
         package_page = slate_row["package_page"]
     elif package_receipt:
-        package_page = f"packages/triptych-video-canon-site/editions/{slug}/index.html"
+        package_page = f"{lane_ref('packages')}/triptych-video-canon-site/editions/{slug}/index.html"
 
     if public_gate == "public-package-ready":
         promotion_state = "public-package-ready"

@@ -8,6 +8,7 @@ store.
 """
 
 from __future__ import annotations
+from tools.paths import resolve_references, LAYOUT
 
 import argparse
 import hashlib
@@ -133,7 +134,7 @@ def parse_lanes(value: str) -> list[str]:
 
 def iter_files(lanes: list[str]) -> Iterable[Path]:
     for lane in lanes:
-        root = ROOT / lane
+        root = LAYOUT.path(lane)
         if not root.exists():
             continue
         for current_root, dirs, files in os.walk(root, followlinks=False):
@@ -254,7 +255,7 @@ def atom_for_path(
     chunk_dir: Path,
     no_ffprobe: bool,
 ) -> Atom:
-    lane = path.relative_to(ROOT).parts[0]
+    lane = next(role for role in LANE_POLICIES if path.resolve().is_relative_to(LAYOUT.path(role)))
     policy = LANE_POLICIES[lane]
     stat = path.stat()
     digest, chunks = hash_file(
@@ -293,7 +294,7 @@ def load_project_recipes() -> list[dict[str, Any]]:
             continue
         seen.add(path)
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError):
             continue
         if not isinstance(data, dict):

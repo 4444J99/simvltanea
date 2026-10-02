@@ -2,6 +2,8 @@
 """Package the verified public triptych site for static hosting."""
 
 from __future__ import annotations
+from tools.paths import lane_ref
+from tools.paths import resolve_references
 
 import argparse
 import hashlib
@@ -94,7 +96,7 @@ def tree_size(records: list[dict[str, Any]]) -> int:
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
     if not isinstance(data, dict):
         raise SystemExit(f"{path}: JSON root must be an object")
     return data
@@ -254,7 +256,7 @@ def rewrite_public_receipts(site_dir: Path, package_dir: Path, dry_run: bool) ->
         print(f"normalize {target_path}")
         if dry_run:
             continue
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt = resolve_references(json.loads(receipt_path.read_text(encoding="utf-8")))
         receipt["landing_page"] = f"editions/{receipt_path.parent.name}/index.html"
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 
@@ -281,8 +283,8 @@ def write_manifest(
             "promotion_state": PUBLIC_PACKAGE_READY,
             "public_export_gate": PUBLIC_PACKAGE_READY,
             "source_boundary": "copied from sanitized site/ only",
-            "private_durable_receipt": "work/preservation-ledger.json",
-            "forbidden_lanes": ["work/", "samples/", "renders/"],
+            "private_durable_receipt": lane_ref('work', 'preservation-ledger.json'),
+            "forbidden_lanes": [lane_ref('work', '') + "/", lane_ref('samples', '') + "/", lane_ref('renders', '') + "/"],
             "rule": "Only public-package-ready derivatives belong in this transfer package.",
         },
         "files": records,

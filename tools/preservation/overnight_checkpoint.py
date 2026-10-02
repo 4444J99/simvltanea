@@ -2,6 +2,8 @@
 """Write a private overnight checkpoint for the triptych incubator."""
 
 from __future__ import annotations
+from tools.paths import lane_ref
+from tools.paths import resolve_references
 
 import argparse
 import html as html_lib
@@ -78,7 +80,7 @@ PHASE_PRIORITY = {
     "visual-sketch": 74,
     "reel": 64,
 }
-PACKAGE_ROOT = "packages/triptych-video-canon-site"
+PACKAGE_ROOT = lane_ref('packages', 'triptych-video-canon-site')
 
 
 def human_size(value: Any) -> str:
@@ -355,7 +357,7 @@ def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -659,22 +661,22 @@ def checkpoint(site_dir: Path, package_dir: Path) -> dict[str, Any]:
         {
             "id": "public-manifest-schema",
             "ok": public_manifest.get("schema") == "triptych.public-release-manifest.v1",
-            "evidence": "site/public-manifest.json",
+            "evidence": lane_ref('site', 'public-manifest.json'),
         },
         {
             "id": "living-loop-rotations",
             "ok": living_loop.get("schema") == "triptych.living-loop.v1" and len(rotations) >= 3,
-            "evidence": "site/living-loop.json",
+            "evidence": lane_ref('site', 'living-loop.json'),
         },
         {
             "id": "package-manifest",
             "ok": package["exists"] is True and package["schema_ok"] is True,
-            "evidence": "packages/triptych-video-canon-site/package-manifest.json",
+            "evidence": lane_ref('packages', 'triptych-video-canon-site/package-manifest.json'),
         },
         {
             "id": "porn-gated",
             "ok": not (site_dir / "editions" / "porn" / "flash-copy.json").exists(),
-            "evidence": "site/editions/porn/flash-copy.json absent",
+            "evidence": lane_ref('site', 'editions/porn/flash-copy.json absent'),
         },
         {
             "id": "cleanup-plan-read-only",
@@ -692,7 +694,7 @@ def checkpoint(site_dir: Path, package_dir: Path) -> dict[str, Any]:
                 and item.get("product_shop_gate") == "deferred until explicit product review"
                 for item in focus_items
             ),
-            "evidence": "site/public-manifest.json",
+            "evidence": lane_ref('site', 'public-manifest.json'),
         },
     ]
     return {
@@ -700,11 +702,11 @@ def checkpoint(site_dir: Path, package_dir: Path) -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "purpose": "private paired creative/containment checkpoint for the incubated triptych-video-canon workstream",
         "inputs": {
-            "public_manifest": "site/public-manifest.json",
-            "living_loop": "site/living-loop.json",
-            "curatorial_score": "site/curatorial-score.json",
-            "release_matrix": "site/release-matrix.json",
-            "package_manifest": "packages/triptych-video-canon-site/package-manifest.json",
+            "public_manifest": lane_ref('site', 'public-manifest.json'),
+            "living_loop": lane_ref('site', 'living-loop.json'),
+            "curatorial_score": lane_ref('site', 'curatorial-score.json'),
+            "release_matrix": lane_ref('site', 'release-matrix.json'),
+            "package_manifest": lane_ref('packages', 'triptych-video-canon-site/package-manifest.json'),
         },
         "creative_track": {
             "edition_count": len(compact_editions),
@@ -771,12 +773,12 @@ def release_focus_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema": "triptych.release-focus.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
         "public_manifest": payload["inputs"]["public_manifest"],
-        "release_board": "site/release-board.html",
-        "release_copy": "site/release-copy.md",
-        "release_queue": "site/release-queue.md",
-        "package_entrypoint": "packages/triptych-video-canon-site/index.html",
+        "release_board": lane_ref('site', 'release-board.html'),
+        "release_copy": lane_ref('site', 'release-copy.md'),
+        "release_queue": lane_ref('site', 'release-queue.md'),
+        "package_entrypoint": lane_ref('packages', 'triptych-video-canon-site/index.html'),
         "package_ready": containment["package"].get("exists") is True and containment["package"].get("schema_ok") is True,
         "product_shop_gate": "deferred until explicit product review",
         "focus_count": len(creative["release_focus"]),
@@ -962,11 +964,11 @@ def control_auditions_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema": "triptych.control-auditions.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
         "public_manifest": payload["inputs"]["public_manifest"],
-        "playback_contract": "site/playback-contract.json",
+        "playback_contract": lane_ref('site', 'playback-contract.json'),
         "living_loop": payload["inputs"]["living_loop"],
-        "package_entrypoint": "packages/triptych-video-canon-site/index.html",
+        "package_entrypoint": lane_ref('packages', 'triptych-video-canon-site/index.html'),
         "package_ready": containment["package"].get("exists") is True and containment["package"].get("schema_ok") is True,
         "media_generation": "none",
         "source_access": "none",
@@ -1141,7 +1143,7 @@ def render_queue_payload(payload: dict[str, Any]) -> dict[str, Any]:
         )
         render_command = f"python3 -m tools.publishing.build_post_pack {slug} --skip-import --profile {profile} --pack {pack}"
         dry_run_command = f"{render_command} --dry-run"
-        project_manifest = f"work/editions/{slug}/project.json"
+        project_manifest = f"{lane_ref('work')}/editions/{slug}/project.json"
         queue.append(
             {
                 "rank": len(queue) + 1,
@@ -1154,17 +1156,17 @@ def render_queue_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "dry_run_command": dry_run_command,
                 "project_manifest": project_manifest,
                 "current_package_page": package_href(edition.get("page")),
-                "expected_public_receipt": f"site/editions/{slug}/flash-copy.json",
+                "expected_public_receipt": f"{lane_ref('site')}/editions/{slug}/flash-copy.json",
                 "expected_package_receipt": f"{PACKAGE_ROOT}/editions/{slug}/flash-copy.json",
                 "why": focus_reasons.get(slug) or reason,
                 "render_pressure_note": (
                     f"renders lane currently {render_pressure.get('human_size', 'unknown')}; use cleanup plan before broad rerenders"
                 ),
                 "review_before_render": [
-                    "Open work/control-auditions.html and test the matching edition recipes first.",
+                    f"Open {lane_ref('work')}/control-auditions.html and test the matching edition recipes first.",
                     "Run dry_run_command before render_command.",
                     "Do not pass --photos-export-missing unless the human explicitly authorizes Photos export.",
-                    "Do not delete renders/ or site/ while this queue is being evaluated.",
+                    f"Do not delete {lane_ref('renders')}/ or {lane_ref('site')}/ while this queue is being evaluated.",
                 ],
                 "post_render_gates": [
                     f"python3 -m tools.verification.verify_post_pack {project_manifest}",
@@ -1184,9 +1186,9 @@ def render_queue_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema": "triptych.next-render-queue.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
-        "source_release_focus": "work/release-focus.json",
-        "source_control_auditions": "work/control-auditions.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
+        "source_release_focus": lane_ref('work', 'release-focus.json'),
+        "source_control_auditions": lane_ref('work', 'control-auditions.json'),
         "package_ready": containment["package"].get("exists") is True and containment["package"].get("schema_ok") is True,
         "media_generation": "planned-only",
         "source_access": "staged-project-only",
@@ -1322,7 +1324,7 @@ def static_hosting_handoff_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema": "triptych.static-hosting-handoff.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
         "public_manifest": payload["inputs"]["public_manifest"],
         "package_manifest": f"{PACKAGE_ROOT}/package-manifest.json",
         "package_dir": PACKAGE_ROOT,
@@ -1355,9 +1357,9 @@ def static_hosting_handoff_payload(payload: dict[str, Any]) -> dict[str, Any]:
             zip_ref,
         ],
         "never_upload": [
-            "work/",
-            "samples/",
-            "renders/",
+            lane_ref('work', '') + "/",
+            lane_ref('samples', '') + "/",
+            lane_ref('renders', '') + "/",
             "local photo library bundle",
             "local photo catalog database",
             "source media paths",
@@ -1372,7 +1374,7 @@ def static_hosting_handoff_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "This handoff does not deploy or require hosting credentials.",
             "Only upload the verified package directory or zip.",
             "Regenerate package-manifest.json before transfer if site/ changes.",
-            "Do not upload private work/, samples/, renders/, or Photos-library lanes.",
+            f"Do not upload private {lane_ref('work')}/, {lane_ref('samples')}/, {lane_ref('renders')}/, or Photos-library lanes.",
         ],
     }
 
@@ -1418,7 +1420,7 @@ def validate_static_hosting_handoff_payload(payload: dict[str, Any]) -> list[str
         elif not target.exists():
             errors.append(f"static-hosting handoff {label} does not exist: {ref}")
     never_upload = payload.get("never_upload")
-    if not isinstance(never_upload, list) or not {"work/", "samples/", "renders/"}.issubset(set(never_upload)):
+    if not isinstance(never_upload, list) or not {lane_ref('work', '') + "/", lane_ref('samples', '') + "/", lane_ref('renders', '') + "/"}.issubset(set(never_upload)):
         errors.append("static-hosting handoff must exclude work/, samples/, and renders/")
     text = json.dumps(payload, sort_keys=True)
     for token in PRIVATE_TEXT:
@@ -1529,9 +1531,9 @@ def first_release_packet_payload(
     return {
         "schema": "triptych.first-release-packet.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
-        "source_release_focus": "work/release-focus.json",
-        "source_static_hosting_handoff": "work/static-hosting-handoff.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
+        "source_release_focus": lane_ref('work', 'release-focus.json'),
+        "source_static_hosting_handoff": lane_ref('work', 'static-hosting-handoff.json'),
         "package_ready": focus.get("package_ready") is True and hosting.get("package_ready") is True,
         "media_generation": "none",
         "source_access": "none",
@@ -1543,9 +1545,9 @@ def first_release_packet_payload(
         "platform_packet_count": len(platform_packets),
         "platform_packets": platform_packets,
         "package_entrypoints": [
-            "packages/triptych-video-canon-site/index.html",
-            "packages/triptych-video-canon-site/release-board.html",
-            "packages/triptych-video-canon-site/release-player.html",
+            lane_ref('packages', 'triptych-video-canon-site/index.html'),
+            lane_ref('packages', 'triptych-video-canon-site/release-board.html'),
+            lane_ref('packages', 'triptych-video-canon-site/release-player.html'),
         ],
         "preflight_commands": [
             "python3 -m tools.verification.verify_private_workflow",
@@ -1553,8 +1555,8 @@ def first_release_packet_payload(
             "python3 -m tools.verification.verify_package",
         ],
         "review_before_posting": [
-            "Open work/first-release-packet.html and play the selected media.",
-            "Open work/static-hosting-handoff.html if posting from a hosted copy.",
+            f"Open {lane_ref('work')}/first-release-packet.html and play the selected media.",
+            f"Open {lane_ref('work')}/static-hosting-handoff.html if posting from a hosted copy.",
             "Confirm captions do not include private source albums, local paths, or workflow receipts.",
             "Keep product/shop use deferred until a concrete product object is selected.",
         ],
@@ -1656,7 +1658,7 @@ def posting_receipt_template_payload(first_release: dict[str, Any]) -> dict[str,
                 "id": str(packet.get("id") or ""),
                 "target": str(packet.get("target") or ""),
                 "status": "unposted",
-                "source_first_release_packet": "work/first-release-packet.json",
+                "source_first_release_packet": lane_ref('work', 'first-release-packet.json'),
                 "work_title": str(selected.get("work_title") or ""),
                 "edition": str(selected.get("edition") or ""),
                 "kind": str(selected.get("kind") or ""),
@@ -1675,7 +1677,7 @@ def posting_receipt_template_payload(first_release: dict[str, Any]) -> dict[str,
     return {
         "schema": "triptych.posting-receipt-template.v1",
         "generated_at": first_release["generated_at"],
-        "source_first_release_packet": "work/first-release-packet.json",
+        "source_first_release_packet": lane_ref('work', 'first-release-packet.json'),
         "source_static_hosting_handoff": first_release["source_static_hosting_handoff"],
         "receipt_status": "template-unposted",
         "posted_count": 0,
@@ -1789,7 +1791,7 @@ def validate_posting_receipt_template_payload(payload: dict[str, Any]) -> list[s
         target = (VAR_DIR / ref_path).resolve()
         if not path_inside(target, VAR_DIR):
             errors.append(f"posting receipt template {label} escapes incubator: {ref}")
-        elif not target.exists() and ref != "work/first-release-packet.json":
+        elif not target.exists() and ref != lane_ref('work', 'first-release-packet.json'):
             errors.append(f"posting receipt template {label} does not exist: {ref}")
     text = json.dumps(payload, sort_keys=True)
     for token in PRIVATE_TEXT:
@@ -1849,8 +1851,8 @@ def release_cadence_payload(
                 "caption_seed": str(item.get("caption_seed") or ""),
                 "edit_prompt": str(item.get("edit_prompt") or ""),
                 "why": str(item.get("why") or ""),
-                "receipt_template": "work/posting-receipt-template.html" if is_first else "regenerate after promoting this item to first-release",
-                "render_queue_ref": "work/next-render-queue.html",
+                "receipt_template": lane_ref('work', 'posting-receipt-template.html') if is_first else "regenerate after promoting this item to first-release",
+                "render_queue_ref": lane_ref('work', 'next-render-queue.html'),
                 "dry_run_command": str(queue_item.get("dry_run_command") or ""),
                 "review_before_posting": [
                     "Open the package media or release player from this cadence row.",
@@ -1859,8 +1861,7 @@ def release_cadence_payload(
                     "Keep product/shop use deferred until a concrete product object is selected.",
                 ],
                 "if_not_ready": (
-                    "Open work/control-auditions.html for this edition before rendering; use "
-                    "work/next-render-queue.html only after a dry-run command is justified."
+                    f"Open {lane_ref('work')}/control-auditions.html for this edition before rendering; use {lane_ref('work')}/next-render-queue.html only after a dry-run command is justified."
                 ),
                 "media_generation": "none",
                 "source_access": "none",
@@ -1871,11 +1872,11 @@ def release_cadence_payload(
     return {
         "schema": "triptych.release-cadence-plan.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
-        "source_release_focus": "work/release-focus.json",
-        "source_first_release_packet": "work/first-release-packet.json",
-        "source_posting_receipt_template": "work/posting-receipt-template.json",
-        "source_next_render_queue": "work/next-render-queue.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
+        "source_release_focus": lane_ref('work', 'release-focus.json'),
+        "source_first_release_packet": lane_ref('work', 'first-release-packet.json'),
+        "source_posting_receipt_template": lane_ref('work', 'posting-receipt-template.json'),
+        "source_next_render_queue": lane_ref('work', 'next-render-queue.json'),
         "package_ready": focus.get("package_ready") is True and first_release.get("package_ready") is True,
         "cadence_mode": "ordered private sequence, not a calendar",
         "media_generation": "none",
@@ -1952,7 +1953,7 @@ def validate_release_cadence_payload(payload: dict[str, Any]) -> list[str]:
             errors.append(f"release-cadence plan item {index} target_candidates must be non-empty")
         for field in ("package_media_href", "release_player_href", "release_board_href", "render_queue_ref"):
             refs.append((f"sequence[{index}].{field}", item.get(field)))
-        if item.get("receipt_template") == "work/posting-receipt-template.html":
+        if item.get("receipt_template") == lane_ref('work', 'posting-receipt-template.html'):
             refs.append((f"sequence[{index}].receipt_template", item.get("receipt_template")))
         if item.get("media_generation") != "none":
             errors.append(f"release-cadence plan item {index} media_generation must be none")
@@ -1976,8 +1977,8 @@ def validate_release_cadence_payload(payload: dict[str, Any]) -> list[str]:
         if not path_inside(target, VAR_DIR):
             errors.append(f"release-cadence plan {label} escapes incubator: {ref}")
         elif not target.exists() and ref not in {
-            "work/first-release-packet.json",
-            "work/posting-receipt-template.json",
+            lane_ref('work', 'first-release-packet.json'),
+            lane_ref('work', 'posting-receipt-template.json'),
         }:
             errors.append(f"release-cadence plan {label} does not exist: {ref}")
     text = json.dumps(payload, sort_keys=True)
@@ -2220,9 +2221,9 @@ def edition_refinement_slate_payload(
                 "audition_count": audition_counts.get(slug, 0),
                 "dry_run_command": str(render_item.get("dry_run_command") or ""),
                 "next_private_surface": (
-                    "work/release-cadence-plan.html"
+                    lane_ref('work', 'release-cadence-plan.html')
                     if cadence_items
-                    else ("work/control-auditions.html" if slug != "porn" else "work/edition-refinement-slate.html")
+                    else (lane_ref('work', 'control-auditions.html') if slug != "porn" else lane_ref('work', 'edition-refinement-slate.html'))
                 ),
                 "recommended_next_action": action,
                 "rationale": rationale,
@@ -2236,10 +2237,10 @@ def edition_refinement_slate_payload(
     return {
         "schema": "triptych.edition-refinement-slate.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
-        "source_control_auditions": "work/control-auditions.json",
-        "source_next_render_queue": "work/next-render-queue.json",
-        "source_release_cadence": "work/release-cadence-plan.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
+        "source_control_auditions": lane_ref('work', 'control-auditions.json'),
+        "source_next_render_queue": lane_ref('work', 'next-render-queue.json'),
+        "source_release_cadence": lane_ref('work', 'release-cadence-plan.json'),
         "preset_source": "editions.example.json",
         "media_generation": "none",
         "source_access": "none",
@@ -2322,7 +2323,7 @@ def validate_edition_refinement_slate_payload(payload: dict[str, Any]) -> list[s
         if package_page:
             refs.append((f"rows[{index}].package_page", package_page))
         surface = row.get("next_private_surface")
-        if isinstance(surface, str) and surface.startswith("work/"):
+        if isinstance(surface, str) and surface.startswith(lane_ref('work', '') + "/"):
             refs.append((f"rows[{index}].next_private_surface", surface))
         for cadence_index, item in enumerate(row.get("cadence_items") or [], start=1):
             if isinstance(item, dict):
@@ -2339,9 +2340,9 @@ def validate_edition_refinement_slate_payload(payload: dict[str, Any]) -> list[s
         if not path_inside(target, VAR_DIR):
             errors.append(f"edition-refinement slate {label} escapes incubator: {ref}")
         elif not target.exists() and ref in {
-            "work/release-cadence-plan.json",
-            "work/release-cadence-plan.html",
-            "work/edition-refinement-slate.html",
+            lane_ref('work', 'release-cadence-plan.json'),
+            lane_ref('work', 'release-cadence-plan.html'),
+            lane_ref('work', 'edition-refinement-slate.html'),
         }:
             continue
         elif not target.exists():
@@ -2444,10 +2445,10 @@ def cache_retention_plan_payload(
     return {
         "schema": "triptych.cache-retention-plan.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
-        "source_edition_refinement_slate": "work/edition-refinement-slate.json",
-        "source_release_cadence": "work/release-cadence-plan.json",
-        "source_static_hosting_handoff": "work/static-hosting-handoff.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
+        "source_edition_refinement_slate": lane_ref('work', 'edition-refinement-slate.json'),
+        "source_release_cadence": lane_ref('work', 'release-cadence-plan.json'),
+        "source_static_hosting_handoff": lane_ref('work', 'static-hosting-handoff.json'),
         "inventory_command": "python3 -m tools.preservation.generated_inventory --cleanup-plan",
         "package_ready": hosting.get("package_ready") is True,
         "media_generation": "none",
@@ -2467,17 +2468,17 @@ def cache_retention_plan_payload(
         "row_count": len(rows),
         "rows": rows,
         "protected_private_surfaces": [
-            "work/overnight-dashboard.html",
-            "work/edition-refinement-slate.html",
-            "work/release-cadence-plan.html",
-            "work/first-release-packet.html",
-            "work/posting-receipt-template.html",
+            lane_ref('work', 'overnight-dashboard.html'),
+            lane_ref('work', 'edition-refinement-slate.html'),
+            lane_ref('work', 'release-cadence-plan.html'),
+            lane_ref('work', 'first-release-packet.html'),
+            lane_ref('work', 'posting-receipt-template.html'),
         ],
         "creative_proof_surfaces": [
-            "packages/triptych-video-canon-site/index.html",
-            "packages/triptych-video-canon-site/release-player.html",
-            "packages/triptych-video-canon-site/release-board.html",
-            "packages/triptych-video-canon-site/package-manifest.json",
+            lane_ref('packages', 'triptych-video-canon-site/index.html'),
+            lane_ref('packages', 'triptych-video-canon-site/release-player.html'),
+            lane_ref('packages', 'triptych-video-canon-site/release-board.html'),
+            lane_ref('packages', 'triptych-video-canon-site/package-manifest.json'),
         ],
         "preflight_commands": [
             "python3 -m tools.preservation.generated_inventory --cleanup-plan",
@@ -2488,9 +2489,9 @@ def cache_retention_plan_payload(
         ],
         "operating_gates": [
             "This plan is read-only; it performs no deletion and generates no media.",
-            "Do not delete work/ or samples/ during autonomous overnight work.",
-            "Reclaim renders/ only after accepting rerender cost and verifying package/public surfaces.",
-            "Reclaim packages/ or site/ only after package transfer/hosting state is no longer needed.",
+            f"Do not delete {lane_ref('work')}/ or {lane_ref('samples')}/ during autonomous overnight work.",
+            f"Reclaim {lane_ref('renders')}/ only after accepting rerender cost and verifying package/public surfaces.",
+            f"Reclaim {lane_ref('packages')}/ or {lane_ref('site')}/ only after package transfer/hosting state is no longer needed.",
             "Product/shop use remains deferred until a concrete product object is selected.",
         ],
         "context": {
@@ -2575,8 +2576,8 @@ def validate_cache_retention_plan_payload(payload: dict[str, Any]) -> list[str]:
         if not path_inside(target, VAR_DIR):
             errors.append(f"cache-retention plan {label} escapes incubator: {ref}")
         elif not target.exists() and ref in {
-            "work/edition-refinement-slate.json",
-            "work/edition-refinement-slate.html",
+            lane_ref('work', 'edition-refinement-slate.json'),
+            lane_ref('work', 'edition-refinement-slate.html'),
         }:
             continue
         elif not target.exists():
@@ -2598,30 +2599,30 @@ def source_curation_action(
         return (
             "private review only",
             "Keep this signal-damage source gated; review the album language and signal map before any public export.",
-            "work/edition-refinement-slate.html",
+            lane_ref('work', 'edition-refinement-slate.html'),
         )
     if slug == "ballerina":
         return (
             "preserve raw/model split",
             "Use ballerina danse as raw material and ballerina whole as the arrangement score before changing clips or panels.",
-            "work/control-auditions.html",
+            lane_ref('work', 'control-auditions.html'),
         )
     if source_type == "photos_visual_album":
         return (
             "dry-run still-to-motion refresh",
             "Review the current visual sketch first; refresh staged still-to-motion clips only when the album shape needs new evidence.",
-            "work/edition-refinement-slate.html",
+            lane_ref('work', 'edition-refinement-slate.html'),
         )
     if slate_row.get("public_export_gate") == "public-package-ready":
         return (
             "hold video selection",
             "The video-heavy branch has a verified package; use dry-run preview before changing staged source.",
-            "work/release-cadence-plan.html",
+            lane_ref('work', 'release-cadence-plan.html'),
         )
     return (
         "verify before import",
         "Run edition verification and inspect dry-run import commands before staging source media.",
-        "work/edition-refinement-slate.html",
+        lane_ref('work', 'edition-refinement-slate.html'),
     )
 
 
@@ -2693,9 +2694,9 @@ def source_curation_plan_payload(
     return {
         "schema": "triptych.source-curation-plan.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
-        "source_edition_refinement_slate": "work/edition-refinement-slate.json",
-        "source_cache_retention_plan": "work/cache-retention-plan.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
+        "source_edition_refinement_slate": lane_ref('work', 'edition-refinement-slate.json'),
+        "source_cache_retention_plan": lane_ref('work', 'cache-retention-plan.json'),
         "preset_source": "editions.example.json",
         "media_generation": "none",
         "source_access": "none",
@@ -2711,8 +2712,8 @@ def source_curation_plan_payload(
         "context": {
             "retention_lanes": retention_plan.get("row_count"),
             "edition_rows": edition_slate.get("edition_count"),
-            "protected_source_lane": "samples/",
-            "private_receipt_lane": "work/",
+            "protected_source_lane": lane_ref('samples', '') + "/",
+            "private_receipt_lane": lane_ref('work', '') + "/",
         },
         "preflight_commands": [
             "python3 -m tools.verification.verify_editions",
@@ -2789,7 +2790,7 @@ def validate_source_curation_plan_payload(payload: dict[str, Any]) -> list[str]:
         if "--photos-export-missing" in dry_run:
             errors.append(f"source-curation plan row {index} dry_run_command must not export missing Photos originals")
         surface = row.get("review_surface")
-        if isinstance(surface, str) and surface.startswith("work/"):
+        if isinstance(surface, str) and surface.startswith(lane_ref('work', '') + "/"):
             refs.append((f"rows[{index}].review_surface", surface))
         commands = row.get("preflight_commands")
         if not isinstance(commands, list) or not commands:
@@ -2806,11 +2807,11 @@ def validate_source_curation_plan_payload(payload: dict[str, Any]) -> list[str]:
         if not path_inside(target, VAR_DIR):
             errors.append(f"source-curation plan {label} escapes incubator: {ref}")
         elif not target.exists() and ref in {
-            "work/edition-refinement-slate.json",
-            "work/edition-refinement-slate.html",
-            "work/cache-retention-plan.json",
-            "work/control-auditions.html",
-            "work/release-cadence-plan.html",
+            lane_ref('work', 'edition-refinement-slate.json'),
+            lane_ref('work', 'edition-refinement-slate.html'),
+            lane_ref('work', 'cache-retention-plan.json'),
+            lane_ref('work', 'control-auditions.html'),
+            lane_ref('work', 'release-cadence-plan.html'),
         }:
             continue
         elif not target.exists():
@@ -2890,9 +2891,9 @@ def audio_control_plan_payload(
                 "public_silent_duration_seconds": public_sound.get("silent_duration_seconds", 0),
                 "recommended_audio_action": action,
                 "rationale": rationale,
-                "review_surface": "packages/triptych-video-canon-site/sound-map.md"
+                "review_surface": lane_ref('packages', 'triptych-video-canon-site/sound-map.md')
                 if slug != "porn"
-                else "work/edition-refinement-slate.html",
+                else lane_ref('work', 'edition-refinement-slate.html'),
                 "review_player_href": review_url if slug != "porn" else "",
                 "dry_run_command": f"python3 -m tools.editions.build_edition {slug} --skip-import --render --draft --dry-run",
                 "preflight_commands": [
@@ -2913,10 +2914,10 @@ def audio_control_plan_payload(
     return {
         "schema": "triptych.audio-control-plan.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
-        "source_public_sound_map": "site/sound-map.json",
-        "source_playback_contract": "site/playback-contract.json",
-        "source_source_curation_plan": "work/source-curation-plan.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
+        "source_public_sound_map": lane_ref('site', 'sound-map.json'),
+        "source_playback_contract": lane_ref('site', 'playback-contract.json'),
+        "source_source_curation_plan": lane_ref('work', 'source-curation-plan.json'),
         "preset_source": "editions.example.json",
         "media_generation": "none",
         "source_access": "none",
@@ -3047,8 +3048,8 @@ def validate_audio_control_plan_payload(payload: dict[str, Any]) -> list[str]:
         if not path_inside(target, VAR_DIR):
             errors.append(f"audio-control plan {label} escapes incubator: {ref}")
         elif not target.exists() and ref in {
-            "work/source-curation-plan.json",
-            "work/edition-refinement-slate.html",
+            lane_ref('work', 'source-curation-plan.json'),
+            lane_ref('work', 'edition-refinement-slate.html'),
         }:
             continue
         elif not target.exists():
@@ -3115,11 +3116,11 @@ def paired_work_order_payload(
         if slug == "porn":
             creative_action = "keep gated signal map in private review"
             containment_action = "block public export until explicit review changes the gate"
-            next_surface = "work/edition-refinement-slate.html"
+            next_surface = lane_ref('work', 'edition-refinement-slate.html')
         else:
             creative_action = str(slate.get("recommended_next_action") or source.get("recommended_source_action") or "audition before render")
             containment_action = "verify private/public/package gates before any render or source refresh"
-            next_surface = str(slate.get("next_private_surface") or "work/control-auditions.html")
+            next_surface = str(slate.get("next_private_surface") or lane_ref('work', 'control-auditions.html'))
         dry_run = str(render.get("dry_run_command") or slate.get("dry_run_command") or "")
         if not dry_run and slug != "porn":
             dry_run = f"python3 -m tools.publishing.build_post_pack {slug} --skip-import --profile draft --pack story --dry-run"
@@ -3151,9 +3152,9 @@ def paired_work_order_payload(
                 "render_queue_profile": str(render.get("profile") or ""),
                 "render_queue_pack": str(render.get("pack") or ""),
                 "containment_action": containment_action,
-                "containment_surface": "work/cache-retention-plan.html",
-                "source_surface": str(source.get("review_surface") or "work/source-curation-plan.html"),
-                "audio_surface": str(audio.get("review_surface") or "work/audio-control-plan.html"),
+                "containment_surface": lane_ref('work', 'cache-retention-plan.html'),
+                "source_surface": str(source.get("review_surface") or lane_ref('work', 'source-curation-plan.html')),
+                "audio_surface": str(audio.get("review_surface") or lane_ref('work', 'audio-control-plan.html')),
                 "package_page": str(slate.get("package_page") or render.get("current_package_page") or ""),
                 "drive_pressure_lane": str(largest_lane.get("lane") or "renders"),
                 "drive_pressure_size": str(largest_lane.get("human_size") or ""),
@@ -3184,12 +3185,12 @@ def paired_work_order_payload(
     return {
         "schema": "triptych.paired-work-order.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
-        "source_edition_refinement_slate": "work/edition-refinement-slate.json",
-        "source_source_curation_plan": "work/source-curation-plan.json",
-        "source_audio_control_plan": "work/audio-control-plan.json",
-        "source_cache_retention_plan": "work/cache-retention-plan.json",
-        "source_next_render_queue": "work/next-render-queue.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
+        "source_edition_refinement_slate": lane_ref('work', 'edition-refinement-slate.json'),
+        "source_source_curation_plan": lane_ref('work', 'source-curation-plan.json'),
+        "source_audio_control_plan": lane_ref('work', 'audio-control-plan.json'),
+        "source_cache_retention_plan": lane_ref('work', 'cache-retention-plan.json'),
+        "source_next_render_queue": lane_ref('work', 'next-render-queue.json'),
         "preset_source": "editions.example.json",
         "package_ready": payload["containment_track"]["package"].get("exists") is True,
         "media_generation": "none",
@@ -3205,8 +3206,8 @@ def paired_work_order_payload(
         "row_count": len(rows),
         "rows": rows,
         "paired_rule": "Every autonomous pass chooses one creative move and one containment move.",
-        "first_next_surface": rows[0]["creative_surface"] if rows else "work/edition-refinement-slate.html",
-        "first_containment_surface": "work/cache-retention-plan.html",
+        "first_next_surface": rows[0]["creative_surface"] if rows else lane_ref('work', 'edition-refinement-slate.html'),
+        "first_containment_surface": lane_ref('work', 'cache-retention-plan.html'),
         "preflight_commands": [
             "python3 -m tools.preservation.generated_inventory --cleanup-plan",
             "python3 -m tools.verification.verify_editions",
@@ -3323,11 +3324,11 @@ def validate_paired_work_order_payload(payload: dict[str, Any]) -> list[str]:
         if not path_inside(target, VAR_DIR):
             errors.append(f"paired work-order {label} escapes incubator: {ref}")
         elif not target.exists() and ref in {
-            "work/paired-work-order.html",
-            "work/edition-refinement-slate.html",
-            "work/cache-retention-plan.html",
-            "work/source-curation-plan.html",
-            "work/audio-control-plan.html",
+            lane_ref('work', 'paired-work-order.html'),
+            lane_ref('work', 'edition-refinement-slate.html'),
+            lane_ref('work', 'cache-retention-plan.html'),
+            lane_ref('work', 'source-curation-plan.html'),
+            lane_ref('work', 'audio-control-plan.html'),
         }:
             continue
         elif not target.exists():
@@ -3367,129 +3368,129 @@ def dashboard_payload(
             "id": "checkpoint",
             "label": "Overnight checkpoint",
             "kind": "private receipt",
-            "href": "work/overnight-checkpoint.md",
+            "href": lane_ref('work', 'overnight-checkpoint.md'),
             "purpose": "Creative and containment summary.",
         },
         {
             "id": "release-focus",
             "label": "Release focus",
             "kind": "private review",
-            "href": "work/release-focus.html",
+            "href": lane_ref('work', 'release-focus.html'),
             "purpose": "Visual review of current posting/refinement candidates.",
         },
         {
             "id": "control-auditions",
             "label": "Control auditions",
             "kind": "private review",
-            "href": "work/control-auditions.html",
+            "href": lane_ref('work', 'control-auditions.html'),
             "purpose": "Text-control recipes for direction, panels, audio, presets, and loops.",
         },
         {
             "id": "next-render-queue",
             "label": "Next render queue",
             "kind": "private plan",
-            "href": "work/next-render-queue.html",
+            "href": lane_ref('work', 'next-render-queue.html'),
             "purpose": "Dry-run-first render candidates and post-render gates.",
         },
         {
             "id": "static-hosting-handoff",
             "label": "Static hosting handoff",
             "kind": "private handoff",
-            "href": "work/static-hosting-handoff.html",
+            "href": lane_ref('work', 'static-hosting-handoff.html'),
             "purpose": "Verified package transfer scope and hosting preflight gates.",
         },
         {
             "id": "first-release-packet",
             "label": "First release packet",
             "kind": "private posting packet",
-            "href": "work/first-release-packet.html",
+            "href": lane_ref('work', 'first-release-packet.html'),
             "purpose": "Platform-specific first-post checklist from verified package media.",
         },
         {
             "id": "posting-receipt-template",
             "label": "Posting receipt template",
             "kind": "private receipt template",
-            "href": "work/posting-receipt-template.html",
+            "href": lane_ref('work', 'posting-receipt-template.html'),
             "purpose": "Private unposted receipt slots for future platform evidence.",
         },
         {
             "id": "release-cadence-plan",
             "label": "Release cadence plan",
             "kind": "private sequence",
-            "href": "work/release-cadence-plan.html",
+            "href": lane_ref('work', 'release-cadence-plan.html'),
             "purpose": "Ordered posting/refinement sequence over verified focus items.",
         },
         {
             "id": "edition-refinement-slate",
             "label": "Edition refinement slate",
             "kind": "private edition slate",
-            "href": "work/edition-refinement-slate.html",
+            "href": lane_ref('work', 'edition-refinement-slate.html'),
             "purpose": "Per-edition next actions across public-ready and gated work.",
         },
         {
             "id": "cache-retention-plan",
             "label": "Cache retention plan",
             "kind": "private retention plan",
-            "href": "work/cache-retention-plan.html",
+            "href": lane_ref('work', 'cache-retention-plan.html'),
             "purpose": "Read-only lane reclaim posture with creative proof surfaces.",
         },
         {
             "id": "source-curation-plan",
             "label": "Source curation plan",
             "kind": "private source plan",
-            "href": "work/source-curation-plan.html",
+            "href": lane_ref('work', 'source-curation-plan.html'),
             "purpose": "Album roles, raw/model distinctions, and dry-run-only source refresh posture.",
         },
         {
             "id": "audio-control-plan",
             "label": "Audio control plan",
             "kind": "private audio plan",
-            "href": "work/audio-control-plan.html",
+            "href": lane_ref('work', 'audio-control-plan.html'),
             "purpose": "Per-edition gain, panel balance, direction-aware audio, and browser-only playback controls.",
         },
         {
             "id": "paired-work-order",
             "label": "Paired work order",
             "kind": "private paired plan",
-            "href": "work/paired-work-order.html",
+            "href": lane_ref('work', 'paired-work-order.html'),
             "purpose": "Always-both next moves: creative edit beside containment gate.",
         },
         {
             "id": "package-index",
             "label": "Package index",
             "kind": "package",
-            "href": "packages/triptych-video-canon-site/index.html",
+            "href": lane_ref('packages', 'triptych-video-canon-site/index.html'),
             "purpose": "Verified package entry point.",
         },
         {
             "id": "release-board",
             "label": "Release board",
             "kind": "package",
-            "href": "packages/triptych-video-canon-site/release-board.html",
+            "href": lane_ref('packages', 'triptych-video-canon-site/release-board.html'),
             "purpose": "Public posting board inside the verified package.",
         },
         {
             "id": "release-player",
             "label": "Release player",
             "kind": "package",
-            "href": "packages/triptych-video-canon-site/release-player.html",
+            "href": lane_ref('packages', 'triptych-video-canon-site/release-player.html'),
             "purpose": "Public playback surface inside the verified package.",
         },
         {
             "id": "public-manifest",
             "label": "Public manifest",
             "kind": "public receipt",
-            "href": "site/public-manifest.json",
+            "href": lane_ref('site', 'public-manifest.json'),
             "purpose": "Sanitized release/post map.",
         },
     ]
     return {
         "schema": "triptych.overnight-dashboard.v1",
         "generated_at": payload["generated_at"],
-        "source_checkpoint": "work/overnight-checkpoint.json",
-        "release_focus": "work/release-focus.json",
-        "control_auditions": "work/control-auditions.json",
-        "next_render_queue": "work/next-render-queue.json",
+        "source_checkpoint": lane_ref('work', 'overnight-checkpoint.json'),
+        "release_focus": lane_ref('work', 'release-focus.json'),
+        "control_auditions": lane_ref('work', 'control-auditions.json'),
+        "next_render_queue": lane_ref('work', 'next-render-queue.json'),
         "package_ready": package.get("exists") is True and package.get("schema_ok") is True,
         "media_generation": "none",
         "source_access": "none",
@@ -3525,17 +3526,17 @@ def dashboard_payload(
         },
         "links": links,
         "next_actions": [
-            "Open work/first-release-packet.html when the next move is posting instead of rendering.",
-            "Use work/posting-receipt-template.html to keep future social-platform receipts private.",
-            "Use work/release-cadence-plan.html when choosing the next verified focus item.",
-            "Use work/edition-refinement-slate.html to keep every edition, including gated Porn, in view.",
-            "Use work/cache-retention-plan.html before reclaiming generated media manually.",
-            "Use work/source-curation-plan.html before changing album source selection or staging media.",
-            "Use work/audio-control-plan.html before changing rendered audio, panel gains, or reverse/ping-pong audio posture.",
-            "Use work/paired-work-order.html to keep each creative move paired with a containment gate.",
-            "Open work/release-focus.html and choose whether a current public output is ready to post or refine.",
-            "Open work/control-auditions.html before any rerender to test text controls against package media.",
-            "Use work/next-render-queue.html only as a dry-run-first plan if a render is justified.",
+            f"Open {lane_ref('work')}/first-release-packet.html when the next move is posting instead of rendering.",
+            f"Use {lane_ref('work')}/posting-receipt-template.html to keep future social-platform receipts private.",
+            f"Use {lane_ref('work')}/release-cadence-plan.html when choosing the next verified focus item.",
+            f"Use {lane_ref('work')}/edition-refinement-slate.html to keep every edition, including gated Porn, in view.",
+            f"Use {lane_ref('work')}/cache-retention-plan.html before reclaiming generated media manually.",
+            f"Use {lane_ref('work')}/source-curation-plan.html before changing album source selection or staging media.",
+            f"Use {lane_ref('work')}/audio-control-plan.html before changing rendered audio, panel gains, or reverse/ping-pong audio posture.",
+            f"Use {lane_ref('work')}/paired-work-order.html to keep each creative move paired with a containment gate.",
+            f"Open {lane_ref('work')}/release-focus.html and choose whether a current public output is ready to post or refine.",
+            f"Open {lane_ref('work')}/control-auditions.html before any rerender to test text controls against package media.",
+            f"Use {lane_ref('work')}/next-render-queue.html only as a dry-run-first plan if a render is justified.",
             "Run python3 -m tools.verification.verify_private_workflow after regenerating private handoffs.",
         ],
         "operating_gates": [
@@ -3599,15 +3600,15 @@ def validate_dashboard_payload(payload: dict[str, Any]) -> list[str]:
         if not path_inside(ref_target, VAR_DIR):
             errors.append(f"overnight dashboard link {index} escapes incubator: {href}")
         elif not ref_target.exists() and href not in {
-            "work/static-hosting-handoff.html",
-            "work/first-release-packet.html",
-            "work/posting-receipt-template.html",
-            "work/release-cadence-plan.html",
-            "work/edition-refinement-slate.html",
-            "work/cache-retention-plan.html",
-            "work/source-curation-plan.html",
-            "work/audio-control-plan.html",
-            "work/paired-work-order.html",
+            lane_ref('work', 'static-hosting-handoff.html'),
+            lane_ref('work', 'first-release-packet.html'),
+            lane_ref('work', 'posting-receipt-template.html'),
+            lane_ref('work', 'release-cadence-plan.html'),
+            lane_ref('work', 'edition-refinement-slate.html'),
+            lane_ref('work', 'cache-retention-plan.html'),
+            lane_ref('work', 'source-curation-plan.html'),
+            lane_ref('work', 'audio-control-plan.html'),
+            lane_ref('work', 'paired-work-order.html'),
         }:
             errors.append(f"overnight dashboard link {index} does not exist: {href}")
     text = json.dumps(payload, sort_keys=True)

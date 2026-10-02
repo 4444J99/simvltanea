@@ -6,7 +6,7 @@ labels: ["enhancement"]
 ---
 
 ## Intention
-<!-- Which stated scope does this complete? Link docs/CANON.md or editions.json or RECOVERY.md row. -->
+<!-- Which stated scope does this complete? Link docs/architecture/CANON.md or editions/registry.json or RECOVERY.md row. -->
 
 ## Lane
 <!-- lane/expand | lane/evolve -->
