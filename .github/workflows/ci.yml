@@ -13,10 +13,39 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: ls-lint
+        uses: ls-lint/action@v2.3.1
+        with:
+          config: .ls-lint.yml
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Verify Repository Structure
+        run: python3 tools/verify_repository_structure.py
+
+      - name: Set up Node.js for Markdown linting
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Lint changed Markdown
+        env:
+          MARKDOWN_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MARKDOWN_BASE" ] || [ "$MARKDOWN_BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "No base commit available; skipping changed-Markdown lint"
+            exit 0
+          fi
+          if ! git cat-file -e "${MARKDOWN_BASE}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$MARKDOWN_BASE"
+          fi
+          git diff --name-only --diff-filter=ACMR -z "$MARKDOWN_BASE" HEAD -- '*.md' |
+            xargs -0 -r npx --yes markdownlint-cli@0.45.0 \
+              --config .markdownlint.json --ignore-path .markdownlintignore --
 
       - name: Install System Dependencies
         run: |

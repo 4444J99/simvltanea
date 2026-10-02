@@ -22,3 +22,25 @@ Configuration words: triptych, N-panel, portrait, landscape
 Schema id already in code: `visual-form-composition/v1`
 
 Historical artifacts are not renamed.
+
+## Filesystem naming policy
+
+New and actively maintained paths follow these conventions:
+
+| Scope | Convention | Examples |
+| --- | --- | --- |
+| Directories | `kebab-case` | `artifact-001`, `visual-proof` |
+| Python and JavaScript files | `snake_case` | `composition_model.py`, `browser_runtime.js` |
+| Canonical documentation in `docs/` | `SCREAMING_SNAKE_CASE` | `AUDIO_ARCHITECTURE.md` |
+| Plans in `docs/plans/` | date-prefixed `kebab-case` | `2026-09-11-final-closeout.md` |
+| Conventional ecosystem files | tool-defined names | `README.md`, `LICENSE`, `.gitignore` |
+
+The root `.ls-lint.yml` is the executable policy. CI runs it on every push and
+pull request. Contributors should run `ls-lint` locally before opening a pull
+request when they add or rename paths.
+
+Historical and provenance-bearing material under `archive/`, `docs/historical/`,
+and `artifact-001/baseline/` is excluded from linting. Those paths preserve
+source identifiers and recovered names; do not rename them merely to satisfy an
+active-repository convention. Generated and local-only lanes are also excluded
+because repository cleanliness checks, rather than filename policy, govern them.
