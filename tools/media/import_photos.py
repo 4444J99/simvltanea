@@ -189,6 +189,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also include Live Photo motion clips when their paired .mov files are local.",
     )
+    parser.add_argument("--live-photos-only", action="store_true", help="Select only Live Photo motion assets.")
+    parser.add_argument("--album-via-photos-app", action="store_true", help="Read exact album membership from Photos.app instead of its cached database.")
     parser.add_argument(
         "--render",
         action="store_true",
@@ -885,13 +887,28 @@ def main() -> int:
     print(f"read Photos catalog {db_path}")
     assets = load_assets(
         db_path=db_path,
-        include_live_photos=args.include_live_photos,
+        include_live_photos=args.include_live_photos or args.live_photos_only,
         min_duration=args.min_duration,
         max_duration=args.max_duration,
         order=args.order,
     )
     print(f"catalog matches after filters: {len(assets)}")
-    assets, album_matches = filter_assets_by_album(db_path, assets, args.album, args.album_match)
+    if args.live_photos_only:
+        assets = [asset for asset in assets if asset.playback_style == 3]
+    if args.album_via_photos_app:
+        if not args.album or args.album_match != "exact":
+            raise SystemExit("Photos.app membership requires an exact --album selection.")
+        selected_uuids: set[str] = set()
+        album_matches = []
+        for selector in args.album:
+            script = f'tell application "Photos" to get id of every media item of album "{applescript_string(selector)}"'
+            result = subprocess.run(["osascript", "-e", script], check=True, capture_output=True, text=True, timeout=60)
+            ids = {value.strip().split("/", 1)[0].upper() for value in result.stdout.split(",") if value.strip()}
+            selected_uuids.update(ids)
+            album_matches.append({"selector": selector, "matched_path": selector, "descendant_album_count": 0, "membership_source": "Photos.app", "item_count": len(ids)})
+        assets = [asset for asset in assets if asset.uuid.upper() in selected_uuids]
+    else:
+        assets, album_matches = filter_assets_by_album(db_path, assets, args.album, args.album_match)
     if args.album:
         print(f"catalog matches after album selection: {len(assets)}")
         for record in album_matches:
@@ -951,6 +968,8 @@ def main() -> int:
             "min_duration": args.min_duration,
             "max_duration": args.max_duration,
             "include_live_photos": args.include_live_photos,
+            "live_photos_only": args.live_photos_only,
+            "album_via_photos_app": args.album_via_photos_app,
         },
         dry_run=args.dry_run,
     )

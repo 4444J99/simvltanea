@@ -28,6 +28,30 @@
   },
   "editions": [
     {
+      "name": "simvl-live",
+      "slug": "simvl-live",
+      "status": "configured",
+      "work_title": "SIMVL Live Photos",
+      "note": "The complete simvl-live Photos.app album, restricted to Live Photo motion assets. Use a run-time limit for a bounded preview without changing the full-album configuration.",
+      "source": {
+        "type": "photos_album",
+        "album": "simvl-live",
+        "album_match": "exact",
+        "album_via_photos_app": true,
+        "live_photos_only": true,
+        "include_live_photos": true,
+        "all_local": true,
+        "photos_export_missing": true,
+        "mode": "copy",
+        "order": "oldest"
+      },
+      "settings": {
+        "title": "SIMVL Live Photos",
+        "subtitle": "Live Photo motion from the simvl-live album.",
+        "web_media": {"proxy_limit": 72}
+      }
+    },
+    {
       "name": "simvltanea-inaugural",
       "slug": "simvltanea-inaugural",
       "status": "video-ready",
