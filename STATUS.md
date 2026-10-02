@@ -1,6 +1,6 @@
 # SIMVLTANEA — STATUS
 
-> Updated 2026-10-02 — N=7 authored layouts shipped via PRs #14–15; trunk and all standing lanes are synchronized at `b2c1e12`. CI Verification run `36952942473` passed all 174 tests on the implementation head. Issue #4 closed under its existing `wontfix` boundary. Assigned-copy housekeeping issue #12 remains partial: live Git refs are remotely reconstructable, but unique local Git objects and ignored payload do not yet have independently restored encrypted custody, so the copy is retained.
+> Updated 2026-10-02 — N=7 authored layouts shipped via PRs #14–15; final closeout PR #16 merged; trunk and all standing lanes are synchronized. CI Verification run `36953519356` passed all 174 tests on the closeout head. Issue #4 closed under its existing `wontfix` boundary. Assigned-copy housekeeping issue #12 remains partial: live Git refs are remotely reconstructable, but unique local Git objects and ignored payload do not yet have independently restored encrypted custody, so the copy is retained.
 >
 > Historical receipt (2026-09-11 22:00 UTC): green trunk confirmed, tolerance tuned, all lanes synced via `8fbdc46`.
 
@@ -16,16 +16,16 @@
 | Edition status | `python3 tools/edition_status.py` | 7 editions `local-only` | **pass** |
 | Layouts | `python3 tools/verify_layouts.py --examples` | `layouts ok` counts `2,3` | **pass** wired `99c573d` |
 | Media pix_fmt | `ffprobe -show_entries stream=pix_fmt` gate | **yuv420p** 7/7 `runtime-proof/media/*.mp4` + `artifact-001/renders` `13×` | **pass** `yuv420p` 7/7 gate |
-| CI | `.github/workflows/ci.yml` | local non-browser and evidence gates pass | **SUCCESS** `bfee34f 36952942473` — PR #15 implementation tree green/releasable |
+| CI | `.github/workflows/ci.yml` | local non-browser and evidence gates pass | **SUCCESS** `cc48a5d 36953519356` — PR #16 closeout tree green/releasable |
 
-**Verdict:** trunk `main@b2c1e12` **GREEN.** N=2 through N=7 are supported, all standing lanes are synced, and no remote work branches remain. Product/governance work is closed. Assigned-copy retirement remains blocked only by issue #12's external private-custody gate, not by application health.
+**Verdict:** trunk through PR #16 is **GREEN.** N=2 through N=7 are supported, all standing lanes are synced, and no remote work branches remain. Product/governance work is closed. Assigned-copy retirement remains blocked only by issue #12's external private-custody gate, not by application health.
 
 ## Trunk
 
-- `main@b2c1e12` (linear, no force-push)
+- `main` includes final closeout PR #16 (linear, no force-push)
 - Lineage: `… → 8fbdc46 34600713288 SUCCESS` → `f4ede0e/c638a25` (Audio v1.1, PR #10) → `0324129` (archive provenance, PR #11) → `da426fc/cdcfed4` (inaugural fixture, `work/heal/inaugural-fixture-eval`)
 - Push authority: granted — `Branch not protected` (`gh api repos/4444J99/simvltanea/branches/main/protection → 404`)
-- Branches: `main@b2c1e12` + `lane/verify|heal|expand|evolve@b2c1e12` (all synced); no open work branches
+- Branches: `main` + `lane/verify|heal|expand|evolve` (all synchronized); no open work branches
 - Worktrees: single primary `[main]`
 - Tags: none
 
@@ -33,10 +33,10 @@
 
 | Lane | State | Last PR |
 | --- | --- | --- |
-| `lane/verify` | **green** — synced to `b2c1e12` | PR #8 merged (2026-09-11) |
-| `lane/heal` | **green** — synced to `b2c1e12` | PR #13 merged (2026-10-02) |
-| `lane/expand` | **green** — synced to `b2c1e12`; lineage-neighbor scope closed `wontfix` | PR #9 merged (2026-09-11) |
-| `lane/evolve` | **green** — Audio v1.1 and authored N=7 shipped | PR #15 merged (2026-10-02) |
+| `lane/verify` | **green** — synced to current `main` | PR #8 merged (2026-09-11) |
+| `lane/heal` | **green** — synced to current `main` | PR #13 merged (2026-10-02) |
+| `lane/expand` | **green** — synced to current `main`; lineage-neighbor scope closed `wontfix` | PR #9 merged (2026-09-11) |
+| `lane/evolve` | **green** — synced to current `main`; Audio v1.1 and authored N=7 shipped | PR #15 merged (2026-10-02) |
 
 ## Issues (living intentions)
 
