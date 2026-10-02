@@ -1,7 +1,7 @@
 # SIMVLTANEA — STATUS
 
 > Updated 2026-10-02 — trunk refreshed: PRs #10 (Audio v1.1), #11 (archive provenance), and `work/heal/inaugural-fixture-eval` (inaugural fixture generator + tests) merged. All lane branches fast-forwarded to `cdcfed4`. Stale work branches deleted. CI trigger cleaned up. 133 tests passing (4 browser tests require Python ≤3.12 per CI pinning; all non-browser tests pass locally and in CI).
-
+>
 > Historical receipt (2026-09-11 22:00 UTC): green trunk confirmed, tolerance tuned, all lanes synced via `8fbdc46`.
 
 ## Green gates (must pass on `main`)
