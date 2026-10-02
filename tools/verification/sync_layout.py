@@ -42,7 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     naming = naming_path.read_text()
     head = naming.split('ignore:', 1)[0]
     # Resolve the docs rule through its configured role as well.
-    head = re.sub(r'(?m)^  [^\n]+/plans:', '  ' + LAYOUT.relative('docs') + '/plans:', head)
+    for topic in ('plans', 'provenance'):
+        head = re.sub(r'(?m)^  [^\n]+/' + topic + ':', '  ' + LAYOUT.relative('docs') + '/' + topic + ':', head)
     expected_naming = head + 'ignore:\n' + ''.join(
         '  - ' + json.dumps(LAYOUT.expand(item)) + '\n' for item in LAYOUT.lint['ignore'])
     markdown_path = LAYOUT.path('config') / 'lint' / 'markdownlintignore'

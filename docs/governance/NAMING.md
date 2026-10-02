@@ -33,6 +33,7 @@ New and actively maintained paths follow these conventions:
 | Python files | `snake_case` with underscore roles | `composition_model.py`, `test_audio_model.py` |
 | JavaScript feature assets | `name.role.js` | `browser.runtime.js`, `browser.continuity.js` |
 | Canonical documentation in `docs/` | `SCREAMING_SNAKE_CASE` | `AUDIO_ARCHITECTURE.md` |
+| Dated provenance reports | `SCREAMING_SNAKE_CASE_YYYY-MM-DD` | `PHOTOS_PREVIEW_2026-10-02.md` |
 | Plans in `docs/plans/` | date-prefixed `kebab-case` | `2026-09-11-final-closeout.md` |
 | Conventional ecosystem files | tool-defined names | `README.md`, `LICENSE`, `.gitignore` |
 
