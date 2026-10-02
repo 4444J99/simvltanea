@@ -114,7 +114,7 @@ normalization. A loud multitrack sum can clip; choose gains accordingly.
 
 ### Browser Runtime (Web Audio API)
 
-In [`src/simvltanea/browser/browser_runtime.js`](../../src/simvltanea/browser/browser_runtime.js):
+In [`src/simvltanea/browser/browser.runtime.js`](../../src/simvltanea/browser/browser.runtime.js):
 
 - In spatial mode, each video element connects to a `MediaElementAudioSourceNode` feeding a `StereoPannerNode` and a `GainNode`.
 - Orientation transitions smoothly update `StereoPannerNode.pan.linearRampToValueAtTime(...)` over 200ms without interrupting audio buffer playback.

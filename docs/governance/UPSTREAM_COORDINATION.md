@@ -44,7 +44,7 @@ The requirements of Issue #8 have been fully achieved and independently verified
 3. **Empirical Verification Delivered**:
    - 120 unit, boundary, render, and native browser continuity tests executed and passing.
    - Synthetic 8-state Artifact 001 proof rendered.
-   - Independent native browser timing probe (`browser_continuity_probe.js`) verified with $<0.15s$ clock drift across orientation changes.
+   - Independent native browser timing probe (`browser.continuity.js`) verified with $<0.15s$ clock drift across orientation changes.
 
 4. **Canonical Home Established**:
    - The project is now independently maintained at **https://github.com/4444J99/simvltanea**.

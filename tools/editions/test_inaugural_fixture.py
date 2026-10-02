@@ -33,6 +33,7 @@ class InauguralFixtureTests(unittest.TestCase):
             self.assertIn("yuv420p", command)
 
     def test_generate_produces_decodable_video_only_mp4s(self):
+        (ROOT / "var" / "work").mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=ROOT / "var" / "work") as temp:
             targets = MODULE.generate(Path(temp), duration=0.125, size=64)
             self.assertEqual(len(targets), 3)
