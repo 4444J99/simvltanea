@@ -277,6 +277,9 @@ def import_command(
         ):
             string_option(command, flag, source.get(key))
         bool_flag(command, "--include-live-photos", source.get("include_live_photos", True))
+        bool_flag(command, "--live-photos-only", source.get("live_photos_only", False))
+        bool_flag(command, "--album-via-photos-app", source.get("album_via_photos_app", False))
+        bool_flag(command, "--all-local", source.get("all_local", False) and source.get("limit") is None)
         bool_flag(command, "--photos-export-missing", source.get("photos_export_missing", False))
     elif source_type == "photos_visual_album":
         command = [
