@@ -1,4 +1,5 @@
 """Exercise repository governance against real Git indexes and worktrees."""
+import tests  # shared discovery bootstrap
 
 from contextlib import redirect_stderr, redirect_stdout
 import io
@@ -11,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 sys.path.insert(0, str(ROOT / "tools" / "verification"))
 
 import verify_local_lifecycle as lifecycle

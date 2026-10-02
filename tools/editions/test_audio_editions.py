@@ -1,11 +1,12 @@
 """Edition declarations and the boundary around the historical exporter."""
+import tests  # shared discovery bootstrap
 import copy
 import json
 from pathlib import Path
 import sys
 import unittest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 for folder in (ROOT / 'src' / 'simvltanea', ROOT / 'tools' / 'editions', ROOT / 'tools' / 'verification'):
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))

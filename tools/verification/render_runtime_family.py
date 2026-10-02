@@ -17,9 +17,11 @@ from tools.paths import PROOFS_DIR, REPO_ROOT
 HERE = Path(__file__).resolve().parent
 REPO = REPO_ROOT
 
-import simvltanea.authoring.composition as c
-from simvltanea.generators.make_artifact_001 import probe
-from simvltanea.generators.make_runtime_fixture import prepare
+from simvltanea.authoring import composition as c
+from simvltanea.generators import make_artifact_001
+probe = make_artifact_001.probe
+from simvltanea.generators import make_runtime_fixture
+prepare = make_runtime_fixture.prepare
 
 ROOT = PROOFS_DIR
 RENDER_MODULE = 'simvltanea.rendering.render_triptych'

@@ -5,6 +5,7 @@ or hardware is emulated as a substitute for actual native decoding. Fault cases
 are labeled injections, not naturally observed network failures.
 """
 from __future__ import annotations
+import tests  # shared discovery bootstrap
 
 import copy
 import json
@@ -12,7 +13,7 @@ import sys
 import unittest
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
@@ -20,7 +21,7 @@ for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
 import composition as c
 from browser_runtime import compile_plan, build_preview, HERE
 from make_runtime_fixture import ROOT, prepare
-from tests.browser import test_browser_runtime as legacy
+from simvltanea.browser import test_browser_runtime as legacy
 
 
 class PlanBoundaryTests(unittest.TestCase):
@@ -100,7 +101,7 @@ class NativeBoundaryTests(unittest.TestCase):
                           async bytes(){window.reads++;return new Promise(()=>{});},
                           async digest(){throw Error('not reached');}};
                     }''', plan)
-                    page.add_script_tag(content=(HERE / 'browser_runtime.js').read_text())
+                    page.add_script_tag(content=(HERE / 'browser.runtime.js').read_text())
                     page.wait_for_timeout(100)
                     result = page.evaluate('''() => ({error:compositionRuntime.error, reads,
                         mounted:stage.children.length, ready:compositionRuntime.ready})''')

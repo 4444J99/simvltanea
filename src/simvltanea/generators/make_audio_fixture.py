@@ -11,8 +11,8 @@ import copy
 import subprocess
 
 from simvltanea.authoring import composition as c
-from simvltanea.authoring.artifact001_layouts import build_artifact001
-from simvltanea.browser.browser_runtime import build_preview
+from simvltanea.authoring import build_artifact001
+from simvltanea.browser import build_preview
 from simvltanea.paths import PROOFS_DIR
 
 ROOT = PROOFS_DIR / 'audio-v1.1'

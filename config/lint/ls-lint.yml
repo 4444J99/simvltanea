@@ -6,6 +6,8 @@ ls:
   .*.*: regex:[a-z0-9]+([_-][a-z0-9]+)*
   .py: snake_case
   .js: snake_case
+  .runtime.js: snake_case
+  .continuity.js: snake_case
   .md: SCREAMING_SNAKE_CASE | kebab-case
 
   docs/plans:

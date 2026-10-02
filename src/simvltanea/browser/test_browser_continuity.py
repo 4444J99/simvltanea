@@ -5,6 +5,7 @@ only where required). Never falls back, mocks media clocks, downloads a browser,
 or relaxes browser policy. N=7 uses the supported synthetic engineering pair.
 """
 from __future__ import annotations
+import tests  # shared discovery bootstrap
 
 import hashlib
 import json
@@ -13,7 +14,7 @@ import unittest
 from fractions import Fraction
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
@@ -21,9 +22,9 @@ for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
 import composition as c
 from browser_runtime import build_preview
 from make_runtime_fixture import HERE, ROOT
-from tests.browser import test_browser_runtime as existing
+from simvltanea.browser import test_browser_runtime as existing
 
-PROBE = HERE / 'browser_continuity_probe.js'
+PROBE = HERE / 'browser.continuity.js'
 OUT = ROOT / 'evidence' / 'independent-continuity'
 SOURCE_COLORS = {f'source-{index}':rgb for index,rgb in enumerate(
     [(170,45,45),(32,125,70),(35,80,170),(120,50,155),(170,110,25),(25,130,145),(145,45,100)],1)}
@@ -136,7 +137,7 @@ class ContinuityTests(unittest.TestCase):
     def save(self, name, page, state, checkpoints, expected_failure=None):
         trace = page.evaluate('continuityProbe.finish()')
         record = {'transport':self.transport, 'browser':self.browser.version,
-                  'runtime_sha256':hashlib.sha256((HERE/'browser_runtime.js').read_bytes()).hexdigest(),
+                  'runtime_sha256':hashlib.sha256((HERE/'browser.runtime.js').read_bytes()).hexdigest(),
                   'probe_sha256':hashlib.sha256(PROBE.read_bytes()).hexdigest(),
                   'state_sha256':hashlib.sha256(c.canonical_json(state).encode()).hexdigest(),
                   'trace':trace, 'checkpoints':checkpoints, 'page_errors':self.errors,

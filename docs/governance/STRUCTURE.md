@@ -15,7 +15,8 @@ python3 -m tools.verification.verify_repository_structure
 - `src/simvltanea/` is the installable engine and browser-runtime package.
 - `tools/` contains operational commands grouped by workflow: `editions`,
   `media`, `publishing`, `preservation`, and `verification`.
-- `tests/` mirrors product and governance behavior.
+- Tests and feature guides live beside their owning source; `tests/` preserves
+  the historical unittest discovery entry point.
 - `examples/` contains safe configuration templates.
 - `fixtures/` contains small, tracked regression inputs. Artifact 001's pinned
   baseline is under `fixtures/artifact-001/`.
@@ -62,8 +63,14 @@ Active docs are grouped into `architecture/`, `authoring/`, `governance/`,
 Engine implementations are grouped into `authoring/`, `browser/`, `rendering/`,
 and `generators/`. Root package modules retain compatibility with existing
 imports and CLI commands. Browser JavaScript is distributed with its subpackage.
-Tests use `model/`, `browser/`, `render/`, `editions/`, and `governance/` packages;
-both pytest and recursive unittest discovery remain supported.
+Feature tests live directly in `authoring/`, `browser/`, `rendering/`,
+`tools/editions/`, and `tools/verification/`. Both pytest and the historical
+`python3 -m unittest discover -s tests` command discover these suites.
+
+Cross-feature imports use explicit exports in feature `__init__.py` files.
+Run `python3 -m tools.verification.verify_feature_boundaries` to enforce this
+barrier. Python does not provide runtime access control; this AST gate enforces
+static imports in active source and tools, while feature tests may inspect internals.
 
 Approved root directories are `.github`, `config`, `editions`, `archive`, `docs`,
 `evidence`, `examples`, `fixtures`, `src`, `tests`, `tools`, and `var`;

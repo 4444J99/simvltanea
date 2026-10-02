@@ -1,5 +1,6 @@
 """Exercise the clean-clone synthetic inaugural fixture generator."""
 from __future__ import annotations
+import tests  # shared discovery bootstrap
 
 import importlib.util
 import json
@@ -9,7 +10,7 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 SCRIPT = ROOT / "tools" / "media" / "make_inaugural_fixture.py"
 SPEC = importlib.util.spec_from_file_location("make_inaugural_fixture", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)

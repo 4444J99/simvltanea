@@ -186,7 +186,7 @@ def build_preview(state_path: Path, output: Path) -> dict:
     plan['state_sha256'] = hashlib.sha256(c.canonical_json(portable).encode()).hexdigest()
     (output / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
     c.save_state(portable, output / 'state.json')
-    shutil.copyfile(HERE / 'browser_runtime.js', output / 'runtime.js')
+    shutil.copyfile(HERE / 'browser.runtime.js', output / 'runtime.js')
     (output / 'index.html').write_text(HTML)
     return plan
 

@@ -1,11 +1,12 @@
 """Reject malformed authoring snapshots before conversion to the strict compiler."""
+import tests  # shared discovery bootstrap
 import math
 import sys
 import unittest
 from dataclasses import replace
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))

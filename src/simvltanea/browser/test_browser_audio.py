@@ -4,6 +4,7 @@ The tones are new synthetic engineering fixtures. No historical soundtrack or
 physical speaker, mobile-device or sample-exact A/V proof is asserted here.
 """
 from __future__ import annotations
+import tests  # shared discovery bootstrap
 
 import base64
 import copy
@@ -17,7 +18,7 @@ import unittest
 import wave
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 for _p in (_ROOT, _ROOT / 'src' / 'simvltanea'):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
@@ -25,7 +26,7 @@ for _p in (_ROOT, _ROOT / 'src' / 'simvltanea'):
 import composition as c
 from browser_runtime import build_preview, compile_plan, HERE
 from make_runtime_fixture import ROOT, prepare
-from tests.browser import test_browser_runtime as legacy
+from simvltanea.browser import test_browser_runtime as legacy
 
 
 def prepare_audio():
@@ -163,7 +164,7 @@ class NativeAudioTests(unittest.TestCase):
         self.assertIsNone(page.evaluate('compositionRuntime.error'))
         (ROOT / f'evidence/audio-{name}.json').write_text(json.dumps(dict(
             transport=self.transport, browser=self.browser.version, kind='synthetic-native-WebAudio',
-            runtime_sha256=c.sha256_file(HERE / 'browser_runtime.js'), observations=observations,
+            runtime_sha256=c.sha256_file(HERE / 'browser.runtime.js'), observations=observations,
             events=page.evaluate('compositionRuntime.events')), indent=2)+'\n')
 
     def test_v1_keeps_silent_native_media_and_no_audio_context(self):
@@ -260,7 +261,7 @@ class NativeAudioTests(unittest.TestCase):
         page.set_content('<main id="stage"></main>')
         page.evaluate('''plan=>{window.reads=0;window.compositionIO={async plan(){return plan},
           async bytes(){reads++;throw Error('must not read')},async digest(){throw Error('must not digest')}}}''', plan)
-        page.add_script_tag(content=(HERE / 'browser_runtime.js').read_text())
+        page.add_script_tag(content=(HERE / 'browser.runtime.js').read_text())
         page.wait_for_function('compositionRuntime.error')
         self.assertEqual(page.evaluate('reads'), 0)
         self.assertEqual(page.locator('.loop').count(), 0)

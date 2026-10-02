@@ -1,4 +1,5 @@
 """Exercise operational paths across workflow boundaries."""
+import tests  # shared discovery bootstrap
 import importlib
 from pathlib import Path
 import unittest
@@ -24,7 +25,7 @@ class PathContractTests(unittest.TestCase):
     def test_browser_assets_follow_the_runtime_package(self):
         from importlib.resources import files
         from simvltanea.browser import browser_runtime
-        for name in ("browser_runtime.js", "browser_continuity_probe.js"):
+        for name in ("browser.runtime.js", "browser.continuity.js"):
             self.assertTrue(files("simvltanea.browser").joinpath(name).is_file())
             self.assertTrue((browser_runtime.HERE / name).is_file())
 

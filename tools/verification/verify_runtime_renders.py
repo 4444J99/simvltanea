@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 REPO = REPO_ROOT
 
 from PIL import Image, ImageChops, ImageStat
-import simvltanea.authoring.composition as c
+from simvltanea.authoring import composition as c
 
 ROOT = PROOFS_DIR
 CHECK_FRAMES = (12, 48, 120)

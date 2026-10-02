@@ -4,7 +4,7 @@ Provides the composition compiler, authoring model, layout definitions,
 headless browser runtime, and multi-stream rendering engine.
 """
 
-from .composition import (
+from .authoring import (
     ENGINE_VERSION,
     SCHEMA_VERSION,
     ORIENTATIONS,
@@ -16,7 +16,7 @@ from .composition import (
     pixel_placements,
     from_authoring_model,
 )
-from .composition_model import (
+from .authoring import (
     Composition,
     LoopState,
     Layout,
@@ -26,7 +26,7 @@ from .composition_model import (
     SpatialLoopsAudio,
 )
 CompositionModel = Composition
-from .artifact001_layouts import build_artifact001, AUTHORED
+from .authoring import build_artifact001, AUTHORED
 
 __all__ = [
     "ENGINE_VERSION",
