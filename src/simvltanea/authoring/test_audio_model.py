@@ -4,7 +4,6 @@ The video bindings in state fixtures are schema-only. Only temporary WAV bytes
 in the binding tests are actual media, generated specifically for these tests.
 """
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 
 import copy
 import hashlib
@@ -12,7 +11,6 @@ import json
 import math
 import shutil
 import struct
-import sys
 import tempfile
 import unittest
 import wave
@@ -20,14 +18,10 @@ from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
-ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-for folder in (ROOT, ROOT / "src" / "simvltanea"):
-    if str(folder) not in sys.path:
-        sys.path.insert(0, str(folder))
 
-import composition as c
-from artifact001_layouts import build_artifact001
-from composition_model import (AUDIO_SCHEMA_VERSION, Composition, LoopAudio,
+import simvltanea.authoring.composition as c
+from simvltanea.authoring.artifact001_layouts import build_artifact001
+from simvltanea.authoring.composition_model import (AUDIO_SCHEMA_VERSION, Composition, LoopAudio,
                                SilentAudio, SoundtrackAudio, SpatialLoopsAudio)
 
 

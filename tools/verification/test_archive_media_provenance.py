@@ -1,5 +1,4 @@
 """Bind the retained portrait study's catalogue entry to its unchanged media."""
-import tests  # shared discovery bootstrap
 import hashlib
 import json
 from pathlib import Path

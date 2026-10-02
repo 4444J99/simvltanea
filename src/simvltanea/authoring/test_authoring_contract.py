@@ -1,17 +1,11 @@
 """Reject malformed authoring snapshots before conversion to the strict compiler."""
-import tests  # shared discovery bootstrap
 import math
-import sys
 import unittest
 from dataclasses import replace
 from pathlib import Path
 
-_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
-from artifact001_layouts import build_artifact001
+from simvltanea.authoring.artifact001_layouts import build_artifact001
 
 
 class AuthoringContractTests(unittest.TestCase):
@@ -63,7 +57,7 @@ class AuthoringContractTests(unittest.TestCase):
 class BindingContractTests(unittest.TestCase):
     @staticmethod
     def state():
-        import composition as c
+        from simvltanea.authoring import composition as c
         import hashlib
         # Schema-only bindings: these are not claims of playable media bytes.
         sources = {f'fixtures/loop-{i}.mp4': dict(id=f'media-{i}',path=f'media/loop-{i}.mp4',
@@ -72,7 +66,7 @@ class BindingContractTests(unittest.TestCase):
         return c.from_authoring_model(build_artifact001(3),sources)
 
     def test_duplicate_bytes_need_explicit_reuse_even_with_distinct_ids(self):
-        import composition as c
+        from simvltanea.authoring import composition as c
         state = self.state()
         state['sources'][1]['sha256'] = state['sources'][0]['sha256']
         with self.assertRaisesRegex(c.StateError, 'reuse'):
@@ -81,7 +75,7 @@ class BindingContractTests(unittest.TestCase):
         c.validate_state(state)
 
     def test_authored_z_order_reaches_compiled_placements(self):
-        import composition as c
+        from simvltanea.authoring import composition as c
         base = build_artifact001(3)
         layouts = tuple(replace(l, placements=tuple(replace(p,z=z) for p,z in zip(l.placements,(3,-1,1))))
                         for l in base.layouts)

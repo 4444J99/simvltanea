@@ -123,6 +123,8 @@ def path_violation(path: str, layout: Layout = LAYOUT) -> str | None:
             return None
         return "tests/ allows test_*.py, __init__.py, conftest.py, and Markdown"
     if area == "docs":
+        if path in policy.get("DOCUMENTATION_FILE_EXCEPTIONS", frozenset()):
+            return None
         if len(parts) > 2 and parts[1] not in policy["DOC_SUBDIRECTORIES"]:
             return "docs/ subdirectories must be documented topic groups"
         if entry.suffix == ".md":

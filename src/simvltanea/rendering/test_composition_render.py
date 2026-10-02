@@ -5,7 +5,6 @@ browser or historical-reconstruction tests. The original renderer snapshot in
 the delivered bundle is optional for the stricter command-graph regression.
 """
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 import copy
 import dataclasses
 import hashlib
@@ -22,14 +21,11 @@ from unittest.mock import patch
 HERE = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 ROOT = HERE / 'var' / 'artifact-001'
 BASELINE = HERE / 'fixtures' / 'artifact-001'
-for _p in (HERE, HERE / 'src' / 'simvltanea'):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
-import composition as c
-import render_triptych as r
-from artifact001_layouts import build_artifact001
-from make_artifact_001 import prepare, probe
+import simvltanea.authoring.composition as c
+import simvltanea.rendering.render_triptych as r
+from simvltanea.authoring.artifact001_layouts import build_artifact001
+from simvltanea.generators.make_artifact_001 import prepare, probe
 
 def get_state(n=3):
     return c.load_state(ROOT/f'state-{n}.json')

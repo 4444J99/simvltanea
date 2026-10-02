@@ -75,9 +75,12 @@
   function row(video, includePixels) {
     const box = video.parentElement, rect = box.getBoundingClientRect();
     const quality = video.getVideoPlaybackQuality();
-    return {id: video.dataset.loopId, token: token(video), boxToken: token(box),
+    // Sample the media clock and its wall clock together, before GPU pixel reads.
+    // Each row can be delayed by a previous video's drawImage/getImageData call.
+    const wall = performance.now(), time = video.currentTime;
+    return {wall, id: video.dataset.loopId, token: token(video), boxToken: token(box), // allow-secret: DOM identity counters
       src: video.currentSrc, attrSrc: video.getAttribute('src'),
-      time: video.currentTime, rate: video.playbackRate, paused: video.paused,
+      time, rate: video.playbackRate, paused: video.paused,
       seeking: video.seeking, readyState: video.readyState,
       connected: video.isConnected, boxId: box.dataset.loopId,
       rect: {x:rect.x,y:rect.y,width:rect.width,height:rect.height},

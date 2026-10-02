@@ -5,23 +5,17 @@ only where required). Never falls back, mocks media clocks, downloads a browser,
 or relaxes browser policy. N=7 uses the supported synthetic engineering pair.
 """
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 
 import hashlib
 import json
-import sys
 import unittest
 from fractions import Fraction
 from pathlib import Path
 
-_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
-import composition as c
-from browser_runtime import build_preview
-from make_runtime_fixture import HERE, ROOT
+import simvltanea.authoring.composition as c
+from simvltanea.browser.browser_runtime import build_preview
+from simvltanea.generators.make_runtime_fixture import HERE, ROOT
 from simvltanea.browser import test_browser_runtime as existing
 
 PROBE = HERE / 'browser.continuity.js'
@@ -54,7 +48,7 @@ def verify_trace(trace: dict, state: dict, checkpoints: list[dict]) -> dict:
         require(sample['boxCount'] == len(expected) == len(loops), 'loop-count')
         require({loop['id'] for loop in loops} == set(expected), 'loop-identity')
         require(len({loop['src'] for loop in loops}) == len(expected), 'source-duplication')
-        elapsed = (sample['wall'] - baseline['wall']) / 1000
+
         for loop in loops:
             old, model = initial[loop['id']], expected[loop['id']]
             require(loop['token'] == old['token'] and loop['boxToken'] == old['boxToken'], 'node-replaced')
@@ -63,6 +57,7 @@ def verify_trace(trace: dict, state: dict, checkpoints: list[dict]) -> dict:
             require(loop['rate'] == float(Fraction(model['rate'])), 'rate-changed')
             require(loop['paused'] == model['held'] and not loop['seeking'], 'playback-state')
             require(loop['readyState'] >= 2, 'no-decoded-data')
+            elapsed = (loop['wall'] - old['wall']) / 1000
             predicted = old['time'] + (0 if model['held'] else elapsed * old['rate'])
             error = abs(loop['time'] - predicted)
             maximum_error = max(maximum_error, error)
@@ -97,6 +92,42 @@ def verify_trace(trace: dict, state: dict, checkpoints: list[dict]) -> dict:
             'duration_seconds':(trace['samples'][-1]['wall']-baseline['wall'])/1000,
             'max_clock_error_seconds':maximum_error, 'unexpected_events':len(trace['events']),
             'max_reported_dropped_frames':max(loop['droppedFrames'] for sample in trace['samples'] for loop in sample['loops'])}
+
+
+class ContinuityOracleTests(unittest.TestCase):
+    def trace(self):
+        # Pixel reads can stall later media rows while the snapshot's wall time
+        # remains fixed. A row's media clock must use its own observation time.
+        def snapshot(wall):
+            row_wall = wall + (250 if wall == 0 else 0)
+            loop = dict(id="loop-1", token=1, boxToken=2, src="source-1", attrSrc="source-1",  # allow-secret: synthetic DOM identities
+                        wall=row_wall, time=row_wall / 1000, rate=1, paused=False,
+                        seeking=False, readyState=4, connected=True, boxId="loop-1",
+                        rect=dict(x=0, y=0, width=100, height=200), fit="cover", display="block",
+                        pixels=dict(backgroundRGB=[170, 45, 45], hash=str(wall)),
+                        decoded=dict(callbacks=wall + 1, mediaTime=row_wall / 1000), droppedFrames=0)
+            return dict(wall=wall, stageToken=3, boxCount=1, loops=[loop],
+                        stage=dict(x=0, y=0, width=100, height=200))
+        trace = dict(initial=snapshot(0), samples=[snapshot(wall) for wall in (300, 400, 500, 600, 700)], events=[])
+        checkpoints = [snapshot(300), snapshot(700)]
+        state = dict(layouts={"portrait": dict(cells=[dict(loop="loop-1", rect=[0, 0, 1, 1], fit="cover")])})
+        model = dict(loops=[dict(id="loop-1", rate="1", held=False, source="source-1")])
+        return trace, checkpoints, state, model
+
+    def test_pixel_capture_delay_does_not_create_clock_drift(self):
+        from unittest.mock import patch
+        trace, checkpoints, state, model = self.trace()
+        with patch.object(c, "resolve_at", return_value=model):
+            metrics = verify_trace(trace, state, checkpoints)
+        self.assertLess(metrics["max_clock_error_seconds"], 1e-9)
+
+    def test_real_media_clock_drift_still_fails(self):
+        from unittest.mock import patch
+        trace, checkpoints, state, model = self.trace()
+        trace["samples"][-1]["loops"][0]["time"] += CLOCK_TOLERANCE + 0.01
+        with patch.object(c, "resolve_at", return_value=model):
+            with self.assertRaisesRegex(AssertionError, "clock-discontinuity"):
+                verify_trace(trace, state, checkpoints)
 
 
 class ContinuityTests(unittest.TestCase):

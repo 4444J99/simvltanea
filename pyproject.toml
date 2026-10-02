@@ -12,10 +12,10 @@ requires-python = ">=3.12"
 verification = ["Pillow==12.3.0", "playwright==1.57.0", "pytest>=8,<10"]
 
 [tool.pytest.ini_options]
-testpaths = ["src/simvltanea", "tools"]
+testpaths = ["src/simvltanea", "tools", "tests"]
 python_files = ["test_*.py"]
-addopts = "-p no:asyncio"
-pythonpath = [".", "src", "src/simvltanea", "tools/editions", "tools/media", "tools/preservation", "tools/publishing", "tools/verification"]
+addopts = "-p no:asyncio --import-mode=importlib"
+pythonpath = [".", "src"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

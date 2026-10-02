@@ -22,9 +22,6 @@ from pathlib import Path
 from tools.paths import LAYOUT, PROOFS_DIR, REPO_ROOT
 
 HERE = Path(__file__).resolve().parent
-TESTS = REPO_ROOT / 'tests'
-if str(TESTS) not in sys.path:
-    sys.path.insert(0, str(TESTS))
 GROUPS = {
     'model': ['tools.verification.test_review_proof', 'simvltanea.authoring.test_composition_model', 'simvltanea.authoring.test_authoring_contract',
               'simvltanea.rendering.test_composition_render', 'simvltanea.browser.test_browser_runtime.PlanTests',

@@ -1,6 +1,5 @@
 """Exercise real commands and governance with a different physical hierarchy."""
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 
 import os
 from pathlib import Path
@@ -9,10 +8,6 @@ import sys
 import tempfile
 import unittest
 
-_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-for _p in (_ROOT, _ROOT / "src"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
 from simvltanea.paths import LAYOUT, REPO_ROOT, load_layout, resolve_references
 
@@ -81,8 +76,9 @@ for file in (Path(__import__('tools').__file__).parent).glob('*/*.py'):
 assert build_edition.DEFAULT_EDITIONS == EDITIONS_FILE
 registry = build_edition.load_json(EDITIONS_FILE)
 assert registry['default_source_project'] == str(EXAMPLES_DIR/'project.example.json')
-assert registry['editions'][0]['source']['folder'] == str(SAMPLES_DIR/'inaugural')
-errors,_ = verify_editions.validate_payload(registry,SITE_DIR)
+inaugural = next(e for e in registry['editions'] if e['slug'] == 'simvltanea-inaugural')
+assert inaugural['source']['folder'] == str(SAMPLES_DIR/'inaugural')
+errors,_ = verify_editions.validate_payload(verify_editions.load_json(EDITIONS_FILE),SITE_DIR)
 assert errors == [], errors
 project = build_edition.load_json(EXAMPLES_DIR/'project.example.json')
 assert project['input_dir'] == str(SAMPLES_DIR)

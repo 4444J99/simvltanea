@@ -1445,7 +1445,7 @@ def render_composition_audio(segments: list[Segment], settings: Settings, output
         raise ValueError(f"unsupported composition audio mode: {config['mode']}")
     graph_path = output.with_suffix(".ffgraph")
     graph_path.write_text(";\n".join(filters) + "\n", encoding="utf-8")
-    command += ["-filter_complex_script", str(graph_path), "-map", "[outa]", "-vn",
+    command += ["-filter_complex", ";\n".join(filters), "-map", "[outa]", "-vn",
                 "-ar", "48000", "-ac", "2", "-c:a", "pcm_f32le", str(output)]
     run(command)
 

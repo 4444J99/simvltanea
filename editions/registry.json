@@ -22,7 +22,8 @@
       "role": "Configurable simultaneous multi-stream field with independent local rational clocks and paired portrait/landscape layouts.",
       "members": [
         "simvltanea-inaugural",
-        "simvltanea-slice"
+        "simvltanea-slice",
+        "simvl-live"
       ]
     }
   },
@@ -49,6 +50,12 @@
         "title": "SIMVL Live Photos",
         "subtitle": "Live Photo motion from the simvl-live album.",
         "web_media": {"proxy_limit": 72}
+      },
+      "family": "simultaneous_field",
+      "composition": {
+        "work_title": "SIMVL Live Photos",
+        "family": "simultaneous_field",
+        "panel_arrangement_role": "Use the existing project panel arrangement for Live Photo motion sources selected from simvl-live; the configured intake covers the eligible album and preview runs may bound selection."
       }
     },
     {

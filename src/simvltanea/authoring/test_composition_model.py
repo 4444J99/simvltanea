@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 
 import json
-import sys
 import unittest
 from pathlib import Path
 
-_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
-from artifact001_layouts import AUTHORED, build_artifact001
-from composition_model import Composition
+from simvltanea.authoring.artifact001_layouts import AUTHORED, build_artifact001
+from simvltanea.authoring.composition_model import Composition
 
 
 class CompositionModelTests(unittest.TestCase):

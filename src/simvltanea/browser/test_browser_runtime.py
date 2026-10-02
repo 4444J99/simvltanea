@@ -4,7 +4,6 @@ Requires Python Playwright, an installed Chromium/Chrome, Pillow, FFmpeg and ffp
 No browser download, remote endpoint or public deployment is used by the suite.
 """
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 
 import copy
 import base64
@@ -14,21 +13,16 @@ import functools
 import http.server
 import json
 import shutil
-import sys
 import threading
 import unittest
 from fractions import Fraction
 from pathlib import Path
 from unittest.mock import patch
 
-_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
-import composition as c
-from browser_runtime import build_preview, compile_plan
-from make_runtime_fixture import HERE, ROOT, prepare
+import simvltanea.authoring.composition as c
+from simvltanea.browser.browser_runtime import build_preview, compile_plan
+from simvltanea.generators.make_runtime_fixture import HERE, ROOT, prepare
 
 
 def browser_executable() -> str:

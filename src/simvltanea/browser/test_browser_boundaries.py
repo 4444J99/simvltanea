@@ -5,22 +5,16 @@ or hardware is emulated as a substitute for actual native decoding. Fault cases
 are labeled injections, not naturally observed network failures.
 """
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 
 import copy
 import json
-import sys
 import unittest
 from pathlib import Path
 
-_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
-import composition as c
-from browser_runtime import compile_plan, build_preview, HERE
-from make_runtime_fixture import ROOT, prepare
+import simvltanea.authoring.composition as c
+from simvltanea.browser.browser_runtime import compile_plan, build_preview, HERE
+from simvltanea.generators.make_runtime_fixture import ROOT, prepare
 from simvltanea.browser import test_browser_runtime as legacy
 
 

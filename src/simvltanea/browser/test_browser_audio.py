@@ -4,7 +4,6 @@ The tones are new synthetic engineering fixtures. No historical soundtrack or
 physical speaker, mobile-device or sample-exact A/V proof is asserted here.
 """
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 
 import base64
 import copy
@@ -13,19 +12,14 @@ import json
 import math
 import struct
 import subprocess
-import sys
 import unittest
 import wave
 from pathlib import Path
 
-_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-for _p in (_ROOT, _ROOT / 'src' / 'simvltanea'):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
-import composition as c
-from browser_runtime import build_preview, compile_plan, HERE
-from make_runtime_fixture import ROOT, prepare
+import simvltanea.authoring.composition as c
+from simvltanea.browser.browser_runtime import build_preview, compile_plan, HERE
+from simvltanea.generators.make_runtime_fixture import ROOT, prepare
 from simvltanea.browser import test_browser_runtime as legacy
 
 
