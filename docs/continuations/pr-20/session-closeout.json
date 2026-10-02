@@ -1,0 +1,34 @@
+{
+  "schema": "limen.session_closeout.v1",
+  "session_id": "01a0fd12-4e84-7da1-bdcb-bd1649d37a56",
+  "repository": "4444J99/simvltanea",
+  "worktree_name": "simvltanea",
+  "base_head": "0324129cadffd8f102f66cf43faf8a9143dd21b2",
+  "publication_branch": "refactor/feature-encapsulation-20261002",
+  "owner_url": "https://github.com/4444J99/simvltanea/pull/20",
+  "disposition": "handoff",
+  "owned_paths": [
+    "editions/registry.json",
+    "tools/editions/build_edition.py",
+    "tools/media/import_photos.py",
+    "tests/test_live_album_config.py",
+    "docs/authoring/LIVE_PHOTOS_EDITION.md",
+    "docs/provenance/PHOTOS_PREVIEW_2026-10-02.md"
+  ],
+  "retained_work": [],
+  "verification": [
+    {
+      "command": ".venv/bin/python -m unittest tests.test_live_album_config",
+      "head": "f6f24d188c3b5a786c68dd50ab4e299669e4972b",
+      "exit_code": 0,
+      "evidence": "docs/continuations/pr-20/photos-session-evidence.md",
+      "sha256": "9105676fa684d9e3cc8ddf997caa313d048346b4270532f576a2643d56a2adf7"
+    }
+  ],
+  "custody": {
+    "verified": false,
+    "evidence": "docs/continuations/pr-20/photos-session-evidence.md",
+    "sha256": "9105676fa684d9e3cc8ddf997caa313d048346b4270532f576a2643d56a2adf7",
+    "owner_url": "https://github.com/4444J99/simvltanea/pull/20"
+  }
+}
