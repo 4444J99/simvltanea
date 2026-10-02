@@ -39,6 +39,7 @@ jobs:
         run: |
           python3 -m tools.verification.sync_layout
           python3 -m tools.verification.verify_repository_structure
+          python3 -m tools.verification.verify_feature_boundaries
 
       - name: Set up Node.js for Markdown linting
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4

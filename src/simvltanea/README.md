@@ -9,7 +9,7 @@ FFmpeg renderer.
 | `authoring/composition.py` | Strict state validation, frame resolution, and segment compilation |
 | `authoring/composition_model.py` | Renderer-independent authoring datatypes |
 | `authoring/artifact001_layouts.py` | Authored portrait and landscape layout pairs |
-| `browser/browser_runtime.py` / `.js` | Bounded native-browser preview |
+| `browser/browser_runtime.py` / `browser.runtime.js` | Bounded native-browser preview |
 | `rendering/render_triptych.py` | Legacy and N-loop FFmpeg rendering |
 | `make_*_fixture.py` | Synthetic engineering inputs under `var/proofs/` |
 | `generators/make_artifact_001.py` | Artifact 001 output under `var/artifact-001/` |

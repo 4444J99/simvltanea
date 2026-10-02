@@ -4,6 +4,7 @@ Requires Python Playwright, an installed Chromium/Chrome, Pillow, FFmpeg and ffp
 No browser download, remote endpoint or public deployment is used by the suite.
 """
 from __future__ import annotations
+import tests  # shared discovery bootstrap
 
 import copy
 import base64
@@ -20,7 +21,7 @@ from fractions import Fraction
 from pathlib import Path
 from unittest.mock import patch
 
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 for _p in (_ROOT, _ROOT / "src" / "simvltanea"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
@@ -285,7 +286,7 @@ class BrowserTests(unittest.TestCase):
             window.compositionIO={async plan(){return plan;},
                 async bytes(){return new Promise(()=>{});},async digest(){throw Error('not reached');}};
         }""",plan)
-        page.add_script_tag(content=(HERE/'browser_runtime.js').read_text())
+        page.add_script_tag(content=(HERE/'browser.runtime.js').read_text())
         page.wait_for_timeout(50)
         page.evaluate('stage.style.width="844px";stage.style.height="390px"')
         page.wait_for_timeout(100)

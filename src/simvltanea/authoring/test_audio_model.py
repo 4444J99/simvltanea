@@ -4,6 +4,7 @@ The video bindings in state fixtures are schema-only. Only temporary WAV bytes
 in the binding tests are actual media, generated specifically for these tests.
 """
 from __future__ import annotations
+import tests  # shared discovery bootstrap
 
 import copy
 import hashlib
@@ -19,7 +20,7 @@ from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 for folder in (ROOT, ROOT / "src" / "simvltanea"):
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))
@@ -200,7 +201,7 @@ class SoundtrackBindingTests(unittest.TestCase):
                                             for n in range(16000)))
             current = state(soundtrack())
             current["audio"]["sha256"] = c.sha256_file(media)
-            self.assertEqual(c.soundtrack_path(current, root), media)
+            self.assertEqual(c.soundtrack_path(current, root), media.resolve())
             current["audio"]["duration"] = "3"
             with self.assertRaisesRegex(c.StateError, "duration disagrees"):
                 c.soundtrack_path(current, root)

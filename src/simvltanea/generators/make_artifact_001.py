@@ -14,7 +14,7 @@ if __package__ in (None, ""):
 import argparse
 import json
 import subprocess
-from simvltanea.authoring.composition import ENGINE_VERSION, RNG, SCHEMA_VERSION, save_state, sha256_file, from_authoring_model
+from simvltanea.authoring import ENGINE_VERSION, RNG, SCHEMA_VERSION, save_state, sha256_file, from_authoring_model
 from simvltanea.paths import ARTIFACT_OUTPUT_DIR, REPO_ROOT
 
 HERE = Path(__file__).resolve().parent
@@ -52,7 +52,7 @@ def prepare(root: Path) -> list[Path]:
     still_src = dict(id='still',path='media/still.png',sha256=sha256_file(still),kind='still',duration='2')
     write_json(root/'evidence/source-commands.json',commands)
     write_json(root/'sources.json',dict(kind='synthetic-engineering-media',sources=sources+[still_src]))
-    from simvltanea.authoring.artifact001_layouts import build_artifact001
+    from simvltanea.authoring import build_artifact001
     paths = []
     for count in (2,3,4,5,6,7):
         authoring = build_artifact001(count)

@@ -556,7 +556,7 @@ def audio_at(state: dict, frame: int, orientation: str, snapshot: dict | None = 
 
 
 def pixel_placements(layout: dict, width: int, height: int) -> tuple:
-    from simvltanea.rendering.render_triptych import Placement
+    from simvltanea.rendering import Placement
     def edge(value: Fraction, dimension: int) -> int:
         return 2 * round(value * dimension / 2)
     result = []
@@ -587,7 +587,7 @@ def continuous(previous: dict, current: dict, fps: int, orientation: str) -> boo
 
 def compile_segments(state: dict, root: Path, orientation: str, width: int, height: int,
                      verify_media: bool = True) -> list:
-    from simvltanea.rendering.render_triptych import Panel, Segment, probe_audio_channels
+    from simvltanea.rendering import Panel, Segment, probe_audio_channels
     validate_state(state)
     require(orientation in ORIENTATIONS, "unknown orientation")
     require(orientation_for(width, height) == orientation, "export dimensions disagree with orientation")
@@ -688,7 +688,7 @@ def from_authoring_model(composition: Any, source_map: dict[str, dict], frames: 
 
 def render_from_args(args: Any) -> int:
     """CLI adapter; encoding and concatenation remain in render_triptych.py."""
-    import simvltanea.rendering.render_triptych as engine
+    from simvltanea.rendering import render_triptych as engine
     try:
         incompatible = ("input_dir", "manifest", "timing", "phrase", "layout", "panel_order", "max_videos",
                         "max_clip_seconds", "audio", "audio_panel", "audio_gain", "audio_left_gain",

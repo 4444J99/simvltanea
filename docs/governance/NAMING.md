@@ -30,7 +30,8 @@ New and actively maintained paths follow these conventions:
 | Scope | Convention | Examples |
 | --- | --- | --- |
 | Directories | `kebab-case` | `artifact-001`, `visual-proof` |
-| Python and JavaScript files | `snake_case` | `composition_model.py`, `browser_runtime.js` |
+| Python files | `snake_case` with underscore roles | `composition_model.py`, `test_audio_model.py` |
+| JavaScript feature assets | `name.role.js` | `browser.runtime.js`, `browser.continuity.js` |
 | Canonical documentation in `docs/` | `SCREAMING_SNAKE_CASE` | `AUDIO_ARCHITECTURE.md` |
 | Plans in `docs/plans/` | date-prefixed `kebab-case` | `2026-09-11-final-closeout.md` |
 | Conventional ecosystem files | tool-defined names | `README.md`, `LICENSE`, `.gitignore` |
@@ -48,3 +49,11 @@ and `fixtures/artifact-001/baseline/` is excluded from linting. Those paths pres
 source identifiers and recovered names; do not rename them merely to satisfy an
 active-repository convention. Generated and local-only lanes are also excluded
 because repository cleanliness checks, rather than filename policy, govern them.
+
+## File roles
+
+Python modules use importable snake_case role names (`composition_model.py`,
+`browser_runtime.py`, `test_composition_model.py`). Dots in a Python basename
+change import semantics, so Python role suffixes use underscores. Feature API
+files use the ecosystem name `__init__.py`; feature guides use `README.md`.
+JavaScript assets may use dot role suffixes such as `browser.runtime.js`.

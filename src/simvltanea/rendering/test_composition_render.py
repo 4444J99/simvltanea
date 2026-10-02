@@ -5,6 +5,7 @@ browser or historical-reconstruction tests. The original renderer snapshot in
 the delivered bundle is optional for the stricter command-graph regression.
 """
 from __future__ import annotations
+import tests  # shared discovery bootstrap
 import copy
 import dataclasses
 import hashlib
@@ -18,7 +19,7 @@ from fractions import Fraction
 from pathlib import Path
 from unittest.mock import patch
 
-HERE = Path(__file__).resolve().parents[2]
+HERE = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 ROOT = HERE / 'var' / 'artifact-001'
 BASELINE = HERE / 'fixtures' / 'artifact-001'
 for _p in (HERE, HERE / 'src' / 'simvltanea'):

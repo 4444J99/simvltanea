@@ -41,7 +41,7 @@ PYTHONPATH=src python3 -m simvltanea.make_artifact_001 --draft   # 2..6 draft re
 python3 -m tools.verification.verify_editions            # 7 editions ok
 python3 -m unittest discover -s tests       # 73+ non-browser; plan tests 12 ok
 # browser continuity (requires Chromium + ffmpeg):
-python3 -m unittest tests.browser.test_browser_runtime -v
+python3 -m unittest simvltanea.browser.test_browser_runtime -v
 # full ffmpeg proof:
 PYTHONPATH=src python3 -m simvltanea.render_triptych --state var/proofs/state-slice.json --orientation portrait --output var/proofs/renders/slice-portrait-test.mp4 --preset ultrafast --crf 28 --width 360 --height 640
 ```

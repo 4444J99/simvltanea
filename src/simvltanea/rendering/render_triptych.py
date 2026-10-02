@@ -1493,7 +1493,7 @@ def render(segments: list[Segment], settings: Settings) -> None:
 def main() -> int:
     args = parse_args()
     if args.state is not None:
-        from simvltanea.authoring.composition import render_from_args
+        from simvltanea.authoring import render_from_args
         return render_from_args(args)
     if args.orientation is not None:
         raise SystemExit("--orientation requires --state; legacy CLI is unchanged.")

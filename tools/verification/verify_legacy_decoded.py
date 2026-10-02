@@ -20,8 +20,9 @@ from tools.paths import ARTIFACT_FIXTURE_DIR, PROOFS_DIR, REPO_ROOT
 from simvltanea.rendering import render_triptych
 CORE = Path(render_triptych.__file__).resolve().parent
 
-import simvltanea.authoring.composition as c
-from simvltanea.generators.make_artifact_001 import prepare, probe
+from simvltanea.authoring import composition as c
+from simvltanea.generators import make_artifact_001
+prepare, probe = make_artifact_001.prepare, make_artifact_001.probe
 
 BASELINE = ARTIFACT_FIXTURE_DIR / 'baseline/render_triptych.original.py'
 MANIFEST = ARTIFACT_FIXTURE_DIR / 'baseline-manifest.json'

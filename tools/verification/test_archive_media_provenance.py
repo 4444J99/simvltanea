@@ -1,4 +1,5 @@
 """Bind the retained portrait study's catalogue entry to its unchanged media."""
+import tests  # shared discovery bootstrap
 import hashlib
 import json
 from pathlib import Path
@@ -7,7 +8,7 @@ import subprocess
 import unittest
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
 RELATIVE_MEDIA = "chatgpt/media/MEDA-002_visual-form-canon-7-portrait.mp4"
 MEDIA = ROOT / "archive" / RELATIVE_MEDIA
 EXPECTED_SHA256 = "a5b117f704863d27e6db7bf30f40c70a9ad0cda84bb74b121c48541f5a4d6f46"
