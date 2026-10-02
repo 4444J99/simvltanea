@@ -2,7 +2,7 @@ name: CI Verification
 
 on:
   push:
-    branches: [ main, 'work/evolve/audio-*' ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
