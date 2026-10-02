@@ -69,7 +69,7 @@ The seven-loop pair promotes the previously experimental Portvs geometry into
 the reviewed engineering family. Counts without an authored pair still fail
 explicitly; eight loops are currently unsupported.
 
-Layouts live in [`core/artifact001_layouts.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/artifact001_layouts.py). They are synthetic engineering
+Layouts live in [`core/artifact001_layouts.py`](core/artifact001_layouts.py). They are synthetic engineering
 geometries, not artist-approved designs.
 
 ## Repository Layout
@@ -79,7 +79,7 @@ SIMVLTANEA/
 ├── core/         # Composition compiler, authoring model, layouts, browser engine, FFmpeg renderer
 ├── tools/        # CLI tools, media importers, site builders, edition tools, audit scripts
 ├── examples/     # Example edition and project configuration files
-├── tests/        # Comprehensive 120-test verification suite
+├── tests/        # Unit, media, browser, provenance, and governance verification
 ├── docs/         # Canonical documentation (and historical incubation receipts in docs/historical/)
 ├── archive/      # ChatGPT transcripts, research notes, and master project manifest
 ├── editions.json # Production multi-edition registry
@@ -89,9 +89,9 @@ SIMVLTANEA/
 ## Rendering Model
 
 - Schema: silent `visual-form-composition/v1`; opt-in audio `visual-form-composition/v1.1`
-- Authoring model: [`core/composition_model.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/composition_model.py)
-- Compiler / state: [`core/composition.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/composition.py)
-- FFmpeg renderer: [`core/render_triptych.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/render_triptych.py) (legacy three-panel path plus compiled N-loop placements)
+- Authoring model: [`core/composition_model.py`](core/composition_model.py)
+- Compiler / state: [`core/composition.py`](core/composition.py)
+- FFmpeg renderer: [`core/render_triptych.py`](core/render_triptych.py) (legacy three-panel path plus compiled N-loop placements)
 - Browser preview: [`core/browser_runtime.py`](core/browser_runtime.py) / [`core/browser_runtime.js`](core/browser_runtime.js) (bounded; v1.1 audio opt-in)
 
 Schema-1 loop exports remain silent. Explicit v1.1 states support a synchronized
@@ -101,8 +101,14 @@ for the version contract, synthetic examples, and verification boundaries.
 
 ## Verify
 
+CI also enforces [file and directory naming](docs/NAMING.md),
+[repository structure](docs/STRUCTURE.md), and added or edited Markdown,
+including MD041 titles and MD047 final newlines. See
+[Contributing](CONTRIBUTING.md#verify-before-pr) for pinned tools and local
+governance commands.
+
 ```bash
-# Run full suite (120 tests across unit, ffmpeg render, browser runtime, and continuity)
+# Run the full unit, media, browser, provenance, and governance suite
 python3 -m unittest discover -s tests
 
 # Or run with pytest
@@ -154,5 +160,5 @@ The Portvs incubator copy is not deleted.
 
 Historical ChatGPT transcripts, execution handoffs, receipts, telemetry traces, bundles, and media proofs are cataloged in the master annotated bibliography:
 
-- **[Project Manifest & Annotated Bibliography](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/PROJECT_MANIFEST.md)** (`archive/PROJECT_MANIFEST.md`)
-- **[Classified Archive Directory](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/chatgpt/)** (`archive/chatgpt/`)
+- **[Project Manifest & Annotated Bibliography](archive/PROJECT_MANIFEST.md)** (`archive/PROJECT_MANIFEST.md`)
+- **[Classified Archive Directory](archive/chatgpt/)** (`archive/chatgpt/`)

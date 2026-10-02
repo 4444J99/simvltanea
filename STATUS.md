@@ -1,8 +1,8 @@
 # SIMVLTANEA — STATUS
 
-> Updated 2026-10-02 — N=7 authored layouts shipped via PRs #14–15; final closeout PR #16 merged; trunk and all standing lanes are synchronized. CI Verification run `36953519356` passed all 174 tests on the closeout head. Issue #4 closed under its existing `wontfix` boundary. Assigned-copy housekeeping issue #12 remains partial: live Git refs are remotely reconstructable, but unique local Git objects and ignored payload do not yet have independently restored encrypted custody, so the copy is retained.
+> Updated 2026-10-01 (America/New_York) — N=7 authored layouts shipped via PRs #14–15 and closeout PR #16. Repository governance now covers naming, structure, and changed Markdown with blocking CI gates. Standing lanes follow the verified `main` after closeout. Assigned-copy housekeeping issue #12 remains partial: live Git refs are remotely reconstructable, but unique local Git objects and ignored payload do not yet have independently restored encrypted custody, so the copy is retained.
 >
-> Historical receipt (2026-09-11 22:00 UTC): green trunk confirmed, tolerance tuned, all lanes synced via `8fbdc46`.
+> Historical receipts: CI Verification run `36953519356` passed all 174 pre-governance tests on the PR #16 closeout head. On 2026-09-11 22:00 UTC, green trunk, tolerance tuning, and lane synchronization were confirmed via `8fbdc46`.
 
 ## Green gates (must pass on `main`)
 
@@ -10,21 +10,24 @@
 | --- | --- | --- | --- |
 | Tests (non-browser) | `pytest tests/test_authoring_contract.py tests/test_composition_model.py tests/test_composition_render.py tests/test_review_proof.py -q` | **73 passed** (17 subtests) | **pass** (part of CI suite) |
 | Tests (plan) | `python3 -m unittest tests.test_browser_runtime.PlanTests -v` | **12 passed** | **pass** |
-| Tests (full, in-memory) | `PORTVS_BROWSER_TRANSPORT=in-memory python3 -m unittest discover -s tests -v` | **133 passed** + 67 subtests on Python 3.14 outside native-browser setup; native browser requires the CI environment | **174 OK** on Python 3.12 CI |
+| Naming | `ls-lint` (v2.3.1) | **pass** | **required** `.ls-lint.yml` |
+| Structure | `python3 tools/verify_repository_structure.py` | **pass**; 20 Git-fixture tests | **required** before dependency installation |
+| Changed Markdown | `markdownlint-cli@0.45.0` with repository config and ignore file | **pass** on added/edited Markdown | **required** on PR and push diffs; MD041 and MD047 enforced |
+| Tests (full, in-memory) | `PORTVS_BROWSER_TRANSPORT=in-memory python3 -m unittest discover -s tests -v` | 194 discovered; **153 passed** on Python 3.14; 41 native-browser methods require an installed browser | **required** full suite on Python 3.12 with Chrome |
 | Lifecycle | `python3 tools/verify_local_lifecycle.py` | `local lifecycle ok` 0 leaks | **pass** `.github/workflows/ci.yml` |
 | Edition presets | `python3 tools/verify_editions.py` | `edition presets ok` **7**/16/43 | **pass** |
 | Edition status | `python3 tools/edition_status.py` | 7 editions `local-only` | **pass** |
 | Layouts | `python3 tools/verify_layouts.py --examples` | `layouts ok` counts `2,3` | **pass** wired `99c573d` |
 | Media pix_fmt | `ffprobe -show_entries stream=pix_fmt` gate | **yuv420p** 7/7 `runtime-proof/media/*.mp4` + `artifact-001/renders` `13×` | **pass** `yuv420p` 7/7 gate |
-| CI | `.github/workflows/ci.yml` | local non-browser and evidence gates pass | **SUCCESS** `cc48a5d 36953519356` — PR #16 closeout tree green/releasable |
+| CI | `.github/workflows/ci.yml` | local non-browser and evidence gates pass | [CI Verification](https://github.com/4444J99/simvltanea/actions/workflows/ci.yml) must be green before merging |
 
-**Verdict:** trunk through PR #16 is **GREEN.** N=2 through N=7 are supported, all standing lanes are synced, and no remote work branches remain. Product/governance work is closed. Assigned-copy retirement remains blocked only by issue #12's external private-custody gate, not by application health.
+**Release boundary:** N=2 through N=7 are supported. Governance changes land only after the complete CI workflow passes; standing lanes are then fast-forwarded to `main` and merged working branches removed. Assigned-copy retirement remains blocked by issue #12's external private-custody gate, separate from application and repository-governance health.
 
 ## Trunk
 
-- `main` includes final closeout PR #16 (linear, no force-push)
+- `main` includes the N=7 closeout PR #16; repository governance follows the same PR-only, no-force-push boundary
 - Lineage: `… → 8fbdc46 34600713288 SUCCESS` → `f4ede0e/c638a25` (Audio v1.1, PR #10) → `0324129` (archive provenance, PR #11) → `da426fc/cdcfed4` (inaugural fixture, `work/heal/inaugural-fixture-eval`)
-- Push authority: granted — `Branch not protected` (`gh api repos/4444J99/simvltanea/branches/main/protection → 404`)
+- Merge authority: available; CI is a required contributor-policy gate even where GitHub branch protection is not configured
 - Branches: `main` + `lane/verify|heal|expand|evolve` (all synchronized); no open work branches
 - Worktrees: single primary `[main]`
 - Tags: none
@@ -62,6 +65,7 @@
 - **Inaugural fixture generator** (`work/heal/inaugural-fixture-eval`) `tools/make_inaugural_fixture.py` + `tests/test_inaugural_fixture.py` — synthetic clean-clone demo clips; boundary + decodability tests.
 - **CI trigger cleanup** `.github/workflows/ci.yml` — removed stale `work/evolve/audio-*` push trigger.
 - **N=7 authored layouts** (PRs #14–15) — promoted the evidenced portrait/landscape pair into the canonical N=2..7 family; unified fixture generation; extended Artifact 001; retained explicit N=8 rejection; repaired root-invoked evidence tools.
+- **Repository governance** — `ls-lint/action@v2.3.1`, explicit naming rules, a standard-library Git-visible structure verifier, shared generated-output boundaries, 20 fixture tests, and changed-Markdown linting. Contributor/PR instructions, editor/assistant configuration, and portable documentation links are included; historical material and ignored local builds remain intact.
 
 ## Fixtures
 

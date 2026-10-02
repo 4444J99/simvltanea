@@ -9,7 +9,7 @@ History: linear, no force-push to `main`. All changes via PR. Preserve history (
 
 | Branch | Purpose | Merge into | Green means |
 | --- | --- | --- | --- |
-| `main` | Production-true trunk. Always releasable. No direct work commits. | tags / releases | required CI (`CI Verification` on `ubuntu-latest`: 120 tests + `tools/verify_local_lifecycle.py` no leaks) passes; `visual-form-composition/v1` invariants hold |
+| `main` | Production-true trunk. Always releasable. No direct work commits. | tags / releases | required CI (`CI Verification` on `ubuntu-latest`: full tests, naming, structure, changed Markdown, and lifecycle gates) passes; `visual-form-composition/v1` invariants hold |
 | `lane/verify` | Proof: tests, contracts, CI, reproducibility, visual proof regen | `main` | verification suite strictly stronger or equal; `python3 core/make_artifact_001.py` idempotent; browser continuity probe green |
 | `lane/heal` | Repair of known broken or rotting behavior, docs/governance debt that blocks shipping | `main` | previously failing paths pass; governance updated |
 | `lane/expand` | Complete already-stated scope: edition coverage N=3..6, ingestion factories, remaining jurisdictions/features | `main` | new coverage verified (`tools/verify_editions.py`, `tools/edition_status.py`), not merely sketched |
@@ -23,6 +23,7 @@ Pattern: `work/<lane>/<short-intent>` preferred
 Also allowed: `feat|fix|chore|docs|test|hotfix/<short-intent>`
 
 Rules:
+
 - Cut from the lane you are advancing, or from `main` if the change is trunk-ready.
 - One intention per branch. Lifetime measured in days, not months.
 - Merge by PR with linked issue, `how to verify` steps, and evidence. Delete working branch after merge. Keep the lane.
@@ -53,7 +54,18 @@ Do not create worktrees inside `work/` — that directory is ignored and disposa
 
 ## What must never live on `main`
 
-Generated lanes (`samples/`, `renders/`, `site/`, `packages/`, `work/`, `artifact-001/media`, `runtime-proof/`, `evidence/visual-proof/media/`), secrets/credentials/production data, large MP4s, `.DS_Store`, `__pycache__`. Gated by `tools/verify_local_lifecycle.py` (`GENERATED_LANES`). Exceptions: tracked placeholders (`*/.gitkeep`) and `artifact-001/baseline/` provenance files.
+Generated outputs under `samples/`, `renders/`, `site/`, `packages/`, `work/`,
+`artifact-001/`, `runtime-proof/`, and visual-proof `media/` and `renders/`
+must stay out of Git, as must secrets, credentials, production data,
+`.DS_Store`, and `__pycache__`. The structure and lifecycle verifiers share the
+generated-path policy. Its only generated-lane exceptions are the root
+`.gitkeep` in `samples`, `renders`, `site`, `packages`, and `work`, plus the exact
+baseline inputs `artifact-001/baseline-manifest.json` and
+`artifact-001/baseline/render_triptych.original.py`. Retained archive media and
+inspected proof frames follow the [structure contract](docs/STRUCTURE.md).
+
+See [Contributing](CONTRIBUTING.md#verify-before-pr) for naming, structure,
+Markdown, test, and lifecycle verification commands before opening a PR.
 
 ## Labels
 
