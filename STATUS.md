@@ -1,6 +1,6 @@
 # SIMVLTANEA — STATUS
 
-> Updated 2026-10-02 — trunk refreshed: PRs #10 (Audio v1.1), #11 (archive provenance), and `work/heal/inaugural-fixture-eval` (inaugural fixture generator + tests) merged. All lane branches fast-forwarded to `cdcfed4`. Stale work branches deleted. CI trigger cleaned up. 133 tests passing (4 browser tests require Python ≤3.12 per CI pinning; all non-browser tests pass locally and in CI).
+> Updated 2026-10-02 — trunk and all standing lanes are synchronized at `f5828a0`; CI Verification run `36949143980` passed at that commit. Assigned-copy housekeeping issue #12 remains partial: live Git refs are remotely reconstructable, but unique local Git objects and ignored payload do not yet have independently restored encrypted custody, so the copy is retained.
 >
 > Historical receipt (2026-09-11 22:00 UTC): green trunk confirmed, tolerance tuned, all lanes synced via `8fbdc46`.
 
@@ -16,16 +16,16 @@
 | Edition status | `python3 tools/edition_status.py` | 7 editions `local-only` | **pass** |
 | Layouts | `python3 tools/verify_layouts.py --examples` | `layouts ok` counts `2,3` | **pass** wired `99c573d` |
 | Media pix_fmt | `ffprobe -show_entries stream=pix_fmt` gate | **yuv420p** 7/7 `runtime-proof/media/*.mp4` + `1080 1920` `artifact-001/renders` `11×` | **pass** `yuv420p` 7/7 gate |
-| CI | `.github/workflows/ci.yml` | local ok | **SUCCESS** `8fbdc46 34600713288` — trunk green/releasable |
+| CI | `.github/workflows/ci.yml` | local ok | **SUCCESS** `f5828a0 36949143980` — trunk green/releasable |
 
-**Verdict:** trunk `main@cdcfed4` **GREEN.** CI last green at `8fbdc46`; `cdcfed4` adds factory tests only (no logic change), expected CI green on next push. All lanes synced (`cdcfed4`). No open work branches. Governance loop closed.
+**Verdict:** trunk `main@f5828a0` **GREEN.** Current CI passed and all lanes are synced. No open work branches. Governance loop closed. Assigned-copy retirement remains blocked by issue #12's private-custody gate, not by application health.
 
 ## Trunk
 
-- `main@cdcfed4` (linear, no force-push)
+- `main@f5828a0` (linear, no force-push)
 - Lineage: `… → 8fbdc46 34600713288 SUCCESS` → `f4ede0e/c638a25` (Audio v1.1, PR #10) → `0324129` (archive provenance, PR #11) → `da426fc/cdcfed4` (inaugural fixture, `work/heal/inaugural-fixture-eval`)
 - Push authority: granted — `Branch not protected` (`gh api repos/4444J99/simvltanea/branches/main/protection → 404`)
-- Branches: `main@cdcfed4` + `lane/verify|heal|expand|evolve@cdcfed4` (all synced); no open work branches
+- Branches: `main@f5828a0` + `lane/verify|heal|expand|evolve@f5828a0` (all synced); no open work branches
 - Worktrees: single primary `[main]`
 - Tags: none
 
@@ -33,9 +33,9 @@
 
 | Lane | State | Last PR |
 | --- | --- | --- |
-| `lane/verify` | **green** — synced to `cdcfed4` | PR #8 merged (2026-09-11) |
-| `lane/heal` | **green** — inaugural fixture merged, synced to `cdcfed4` | `work/heal/inaugural-fixture-eval` → `main` (2026-10-02) |
-| `lane/expand` | **green** — synced to `cdcfed4` | PR #9 merged (2026-09-11) |
+| `lane/verify` | **green** — synced to `f5828a0` | PR #8 merged (2026-09-11) |
+| `lane/heal` | **green** — inaugural fixture merged, synced to `f5828a0` | `work/heal/inaugural-fixture-eval` → `main` (2026-10-02) |
+| `lane/expand` | **green** — synced to `f5828a0` | PR #9 merged (2026-09-11) |
 | `lane/evolve` | dormant — audio v1.1 shipped (PR #10), N=7 parked as issue #3 | PR #10 merged (2026-09-13) |
 
 ## Issues (living intentions)
@@ -47,6 +47,7 @@
 | #3 | N=7 authored layouts — experimental family parked | lane/evolve | parked — rejects 7 per `artifact001_layouts.py:32` |
 | #4 | Parked intention: First Circle / photo-selector + Floating Points | lane/expand | parked — lineage neighbors (`wontfix` + `lane/expand`) |
 | #5 | Factory hardening: verify_editions / edition_status path & lifecycle docs | lane/heal | **CLOSED** |
+| #12 | Assigned-copy Git parity, custody, and retirement | housekeeping | **OPEN / PARTIAL** — remote refs and clean-clone reconstruction pass; encrypted archive + independent restore not established, copy retained |
 
 ## What shipped (cumulative)
 
@@ -72,3 +73,4 @@
 - **Issue #3** N=7 authored layouts — experimental `lane/evolve`, no code; design decision open.
 - **Issue #4** First Circle / photo-selector — `lane/expand`, parked `wontfix`.
 - **Tags** — no tags yet; first `vX.Y.Z` tag to be created on next verified `main` release point.
+- **Issue #12** assigned-copy retirement — live refs and current CI are verified; retain `/workspaces/simvltanea` until unique local Git objects and non-reproducible ignored payload have encrypted custody with an independent restore proof.
