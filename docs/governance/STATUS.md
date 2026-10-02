@@ -59,8 +59,8 @@
 - **N=2 authored layouts** `src/simvltanea/authoring/artifact001_layouts.py` — portrait + landscape panels; tests updated.
 - **Seamed slice field** `src/simvltanea/authoring/composition.py` — `SEAM_MODES`, `validate_slice`, `validate_seam`, `slice_rect`, `seam_config`, `resolve_at`, `continuous`, `compile_segments`.
 - **Renderer** `src/simvltanea/rendering/render_triptych.py` — `Panel.source_crop`, `Segment.seam`, `_crop_prefix`, `render_segment` seam blur.
-- **Browser** `src/simvltanea/browser/browser_runtime.py` + `src/simvltanea/browser/browser_runtime.js` — `_continues`, canonicalize, `applySlice`, `renderSeams`.
-- **Audio v1.1** (PR #10) `src/simvltanea/authoring/composition.py`, `src/simvltanea/authoring/composition_model.py`, `src/simvltanea/rendering/render_triptych.py`, `src/simvltanea/browser/browser_runtime.js/.py` — opt-in synchronized soundtrack + spatial loop mix; `docs/architecture/AUDIO_ARCHITECTURE.md`; tests `test_audio_editions`, `test_audio_model`, `test_audio_render`, `test_browser_audio`.
+- **Browser** `src/simvltanea/browser/browser_runtime.py` + `src/simvltanea/browser/browser.runtime.js` — `_continues`, canonicalize, `applySlice`, `renderSeams`.
+- **Audio v1.1** (PR #10) `src/simvltanea/authoring/composition.py`, `src/simvltanea/authoring/composition_model.py`, `src/simvltanea/rendering/render_triptych.py`, `src/simvltanea/browser/browser.runtime.js/.py` — opt-in synchronized soundtrack + spatial loop mix; `docs/architecture/AUDIO_ARCHITECTURE.md`; tests `test_audio_editions`, `test_audio_model`, `test_audio_render`, `test_browser_audio`.
 - **Archive provenance** (PR #11) `archive/PROJECT_MANIFEST.md` — corrected MEDA-002 checksum/stream/links; `tests/governance/test_archive_media_provenance.py` retained-artifact regressions.
 - **Inaugural fixture generator** (`work/heal/inaugural-fixture-eval`) `tools/media/make_inaugural_fixture.py` + `tests/editions/test_inaugural_fixture.py` — synthetic clean-clone demo clips; boundary + decodability tests.
 - **CI trigger cleanup** `.github/workflows/ci.yml` — removed stale `work/evolve/audio-*` push trigger.
