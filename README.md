@@ -69,15 +69,17 @@ The seven-loop pair promotes the previously experimental Portvs geometry into
 the reviewed engineering family. Counts without an authored pair still fail
 explicitly; eight loops are currently unsupported.
 
-Layouts live in [`core/artifact001_layouts.py`](core/artifact001_layouts.py). They are synthetic engineering
+Layouts live in [`src/simvltanea/artifact001_layouts.py`](src/simvltanea/artifact001_layouts.py). They are synthetic engineering
 geometries, not artist-approved designs.
 
 ## Repository Layout
 
 ```text
 SIMVLTANEA/
-├── core/         # Composition compiler, authoring model, layouts, browser engine, FFmpeg renderer
-├── tools/        # CLI tools, media importers, site builders, edition tools, audit scripts
+├── src/simvltanea/ # Composition compiler, authoring model, browser engine, FFmpeg renderer
+├── tools/        # Commands grouped into editions, media, publishing, preservation, verification
+├── fixtures/     # Tracked regression inputs
+├── var/          # Ignored generated media, proofs, sites, packages, and scratch work
 ├── examples/     # Example edition and project configuration files
 ├── tests/        # Unit, media, browser, provenance, and governance verification
 ├── docs/         # Canonical documentation (and historical incubation receipts in docs/historical/)
@@ -89,10 +91,10 @@ SIMVLTANEA/
 ## Rendering Model
 
 - Schema: silent `visual-form-composition/v1`; opt-in audio `visual-form-composition/v1.1`
-- Authoring model: [`core/composition_model.py`](core/composition_model.py)
-- Compiler / state: [`core/composition.py`](core/composition.py)
-- FFmpeg renderer: [`core/render_triptych.py`](core/render_triptych.py) (legacy three-panel path plus compiled N-loop placements)
-- Browser preview: [`core/browser_runtime.py`](core/browser_runtime.py) / [`core/browser_runtime.js`](core/browser_runtime.js) (bounded; v1.1 audio opt-in)
+- Authoring model: [`src/simvltanea/composition_model.py`](src/simvltanea/composition_model.py)
+- Compiler / state: [`src/simvltanea/composition.py`](src/simvltanea/composition.py)
+- FFmpeg renderer: [`src/simvltanea/render_triptych.py`](src/simvltanea/render_triptych.py)
+- Browser preview: [`src/simvltanea/browser_runtime.py`](src/simvltanea/browser_runtime.py) / [`src/simvltanea/browser_runtime.js`](src/simvltanea/browser_runtime.js)
 
 Schema-1 loop exports remain silent. Explicit v1.1 states support a synchronized
 soundtrack or spatial loop mix. Legacy `none` / `panel` / `mix` audio routing is
@@ -115,13 +117,13 @@ python3 -m unittest discover -s tests
 pytest
 
 # Verify worktree cleanliness
-python3 tools/verify_local_lifecycle.py
+python3 -m tools.verification.verify_local_lifecycle
 ```
 
 Generate the synthetic Artifact 001 family:
 
 ```bash
-python3 core/make_artifact_001.py
+PYTHONPATH=src python3 -m simvltanea.make_artifact_001
 ```
 
 ## Relationship

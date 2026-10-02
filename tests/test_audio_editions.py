@@ -6,7 +6,7 @@ import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
-for folder in (ROOT / 'core', ROOT / 'tools'):
+for folder in (ROOT / 'src' / 'simvltanea', ROOT / 'tools' / 'editions', ROOT / 'tools' / 'verification'):
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))
 

@@ -30,7 +30,7 @@ TripTicks (2017, ETCETER4)
 The incubator implementation tree from `c9fa438` was copied into this repository.
 Generated caches (`work/`, `site/`, `packages/`, `runtime-proof/`) were not treated
 as canon. The historical incubator README is stored at
-`docs/PORTVS_INCUBATOR_README.md`.
+`docs/historical/PORTVS_INCUBATOR_README.md`.
 
 ## What was repaired
 

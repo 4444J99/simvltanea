@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 _ROOT = Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / "core", _ROOT / "tools"):
+for _p in (_ROOT, _ROOT / "src" / "simvltanea", _ROOT / "tools" / "verification"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -28,7 +28,7 @@ class ReviewProofTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
-        self.output = self.root / 'runtime-proof' / 'run'
+        self.output = self.root / 'var' / 'proofs' / 'run'
         self.receipt = self.root / 'child.json'
 
     @staticmethod
@@ -56,7 +56,10 @@ class ReviewProofTests(unittest.TestCase):
                 raise outcome
             payload, code = outcome
             if payload is not None:
-                Path(command[3]).write_text(payload if isinstance(payload, str) else json.dumps(payload))
+                receipt_index = command.index('--child') + 1
+                Path(command[receipt_index]).write_text(
+                    payload if isinstance(payload, str) else json.dumps(payload)
+                )
             return subprocess.CompletedProcess(command, code)
 
         with patch.object(proof, 'HERE', self.root), patch.object(proof, 'GROUPS', registry), \
@@ -112,7 +115,7 @@ class ReviewProofTests(unittest.TestCase):
         self.assertEqual(receipt['skipped'], 1)
 
     def test_real_child_process_rejects_empty_selection(self):
-        completed = subprocess.run([proof.sys.executable, str(Path(proof.__file__).resolve()),
+        completed = subprocess.run([proof.sys.executable, '-m', 'tools.verification.run_review_proof',
                                     '--child', str(self.receipt)], capture_output=True, text=True, timeout=10)
         self.assertEqual(completed.returncode, 1)
         self.assertEqual(json.loads(self.receipt.read_text())['status'], 'failed')
@@ -152,7 +155,7 @@ class ReviewProofTests(unittest.TestCase):
     def test_parent_contradictory_pass_receipts_rejected(self):
         for counter in ('failures', 'errors', 'skipped', 'unexpected_successes', 'expected_failures'):
             with self.subTest(counter=counter), tempfile.TemporaryDirectory() as directory:
-                self.output = self.root / 'runtime-proof' / Path(directory).name
+                self.output = self.root / 'var' / 'proofs' / Path(directory).name
                 code, report, _ = self.run_shards([(self.valid_receipt(**{counter: 1}), 0)])
                 self.assertEqual(code, 1)
                 self.assert_failed(report)
@@ -160,7 +163,7 @@ class ReviewProofTests(unittest.TestCase):
     def test_parent_invalid_counts_rejected(self):
         for value in (-1, True, 1.5, '1', None):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
-                self.output = self.root / 'runtime-proof' / Path(directory).name
+                self.output = self.root / 'var' / 'proofs' / Path(directory).name
                 code, report, _ = self.run_shards([(self.valid_receipt(tests_run=value), 0)])
                 self.assertEqual(code, 1)
                 self.assert_failed(report)

@@ -4,13 +4,7 @@
 /archive/
 /docs/historical/
 /.github/instructions/mermaid.instructions.md
-/artifact-001/
-/packages/
-/renders/
-/runtime-proof/
-/samples/
-/site/
-/work/
+/var/
 /.pytest_cache/
 /.venv/
 **/__pycache__/

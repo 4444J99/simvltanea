@@ -14,10 +14,10 @@ ls-lint
 git diff --name-only --diff-filter=ACMR -z origin/main...HEAD -- '*.md' |
   xargs -0 -r npx --yes markdownlint-cli@0.45.0 \
     --config .markdownlint.json --ignore-path .markdownlintignore --
-python3 tools/verify_repository_structure.py
+python3 -m tools.verification.verify_repository_structure
 python3 -m pytest -q
-python3 tools/verify_local_lifecycle.py
-python3 tools/verify_editions.py
+python3 -m tools.verification.verify_local_lifecycle
+python3 -m tools.verification.verify_editions
 ```
 
 ## Checklist

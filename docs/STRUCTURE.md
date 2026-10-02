@@ -1,126 +1,71 @@
 # Repository structure governance
 
-`tools/verify_repository_structure.py` is the executable structure contract.
-Its named policy tables govern required paths, approved root entries, folder
-roles, and generated-output boundaries. Update those tables and this document
-in the same PR as an intentional layout change.
+`tools/verification/verify_repository_structure.py` is the executable structure
+contract. Update it and this document together when the layout changes.
 
 Run the contract from the repository root:
 
 ```bash
-python3 tools/verify_repository_structure.py
+python3 -m tools.verification.verify_repository_structure
 ```
 
-Use `--root PATH` to check another Git repository, including a test fixture.
-The command reports sorted, actionable violations and exits with `0` for a
-passing contract, `1` for policy violations, or `2` for invocation or Git
-failures. CI runs it immediately after Python setup, before dependency
-installation; a failure blocks the build.
+## Source and command boundaries
 
-## Approved root entries and required paths
+- `src/simvltanea/` is the installable engine and browser-runtime package.
+- `tools/` contains operational commands grouped by workflow: `editions`,
+  `media`, `publishing`, `preservation`, and `verification`.
+- `tests/` mirrors product and governance behavior.
+- `examples/` contains safe configuration templates.
+- `fixtures/` contains small, tracked regression inputs. Artifact 001's pinned
+  baseline is under `fixtures/artifact-001/`.
+- `docs/`, `archive/`, and `evidence/` remain separate because active guidance,
+  historical records, and reviewed evidence have different lifecycles.
 
-Approved root directories are `.github`, `archive`, `artifact-001`, `core`,
-`docs`, `evidence`, `examples`, `packages`, `renders`, `samples`, `site`, `tests`,
-`tools`, and `work`. These directories are required; `.vscode` is optional.
-Other root entries, including new root-level scripts, require an explicit
-contract update.
+## Generated-output boundary
 
-The following root files are approved and required:
+All generated or private local output belongs below `var/`:
 
 ```text
-.gitignore                  .ls-lint.yml
-.markdownlint.json          .markdownlintignore
-BRANCHES.md                 CODEOWNERS
-CONTRIBUTING.md             LICENSE
-README.md                   SECURITY.md
-STATUS.md                   editions.json
-pytest.ini                  requirements-runtime-proof.txt
+var/
+├── artifact-001/
+├── packages/
+├── proofs/
+├── renders/
+├── samples/
+├── site/
+└── work/
 ```
 
-The contract also requires:
+Only `var/.gitkeep` is Git-visible. Everything else below `var/` is ignored and
+regenerable. Commands resolve these paths through `simvltanea.paths`; they must
+not create parallel output trees relative to their own script directories.
 
-- `.github/workflows/ci.yml` and `core/__init__.py`.
-- `README.md` in `core`, `tools`, `tests`, `examples`, `docs/historical`,
-  `archive/chatgpt`, `archive/raw`, and `evidence/visual-proof`.
-- `docs/plans/INDEX.md`, `archive/PROJECT_MANIFEST.md`, and
-  `evidence/visual-proof/ledger.json`.
-- The governance documents `docs/NAMING.md` and `docs/STRUCTURE.md`.
-- `artifact-001/baseline-manifest.json` and
-  `artifact-001/baseline/render_triptych.original.py`.
-- `.gitkeep` at the root of each generated lane: `packages`, `renders`,
-  `samples`, `site`, and `work`.
+Reviewed visual evidence remains under `evidence/visual-proof/`. Its generated
+`media/` and `renders/` children stay local, while the ledger and inspected PNG
+frames may be tracked.
 
-Required nested directories are `archive/chatgpt`, `archive/raw`, `docs/plans`,
-`docs/historical`, `artifact-001/baseline`, `evidence/visual-proof`, and
-`evidence/visual-proof/frames`. Archive category directories are allowed but
-not individually required.
+## Approved root
 
-Required files must exist as regular files and must not be staged for deletion.
-A remaining local copy does not satisfy a staged deletion. Directory presence
-comes from Git-visible children rather than empty folders or local output.
+The approved root directories are `.github`, `archive`, `docs`, `evidence`,
+`examples`, `fixtures`, `src`, `tests`, `tools`, and `var`; `.vscode` is
+optional. Root configuration and governance files are enumerated by the
+executable contract, including `pyproject.toml`.
 
-## Folder roles
+Branch guidance and project status live in `docs/BRANCHES.md` and
+`docs/STATUS.md`. Root files are reserved for project entry points, the edition
+registry, and conventional tooling configuration such as `requirements.txt`.
+Obsolete `core/` and `runtime-proof/` directories must not be recreated; runtime
+proof output belongs in `var/proofs/`.
 
-| Area | Allowed contents |
-| --- | --- |
-| `core` | Python, JavaScript, Markdown, and optional `core/layouts.json` |
-| `tools` | Python utilities and Markdown documentation |
-| `tests` | `test_*.py`, `__init__.py`, `conftest.py`, and Markdown |
-| `examples` | JSON configurations and Markdown |
-| `docs` | Markdown at the root; only `plans` and `historical` subdirectories |
-| `docs/plans` | Markdown plans and the plans index; names also follow the naming policy |
-| `docs/historical` | Historical files with unrestricted formats and preserved source names |
-| `.github` | Root Markdown; direct workflow YAML and issue-template Markdown/YAML; Markdown descendants under `instructions` |
-| `.vscode` | Optional JSON editor configuration directly within the directory |
-| `archive` | The project manifest, raw intake documentation, and classified ChatGPT material |
-| `evidence` | Visual-proof README, JSON ledger, and PNG files under `visual-proof/frames` |
-
-Classified archival material belongs under `archive/chatgpt/` in `threads`,
-`handoffs`, `receipts`, `research`, `evidence`, `logs`, `media`, `bundles`,
-`sessions`, `prompts`, or `extracts`. `logs` remains optional. These categories
-preserve arbitrary archival filenames and formats, including recovered code,
-binary media, and bundles.
-
-Git-visible raw intake is limited to `archive/raw/README.md`,
-`archive/raw/.gitkeep`, and the existing legacy receipt
-`archive/raw/PR9_review_proof_2026-09-06/README.md`. That exact receipt is an
-exception, not a convention permitting new raw-intake folders. Historical
-material also has an approved home in `docs/historical/`.
-
-## Generated-output boundaries
-
-Only the root `.gitkeep` may be Git-visible in each of `packages`, `renders`,
-`samples`, `site`, and `work`; nested placeholders are not exceptions.
-`runtime-proof/` must remain local. Within `artifact-001/`, only the two required
-baseline inputs above may be Git-visible. Visual-proof `media` and `renders`
-outputs must also remain local; inspected PNG frames in
-`evidence/visual-proof/frames/` are approved evidence.
-
-Finder `.DS_Store` files and Python `__pycache__` directories are prohibited
-throughout the Git-visible inventory. Root `.venv` and `.pytest_cache` also
-remain local-only.
-
-The verifier inventories indexed files and nonignored untracked files using
-NUL-delimited Git output. Ignored local builds are permitted. Force-staging or
-committing an ignored output makes it Git-visible and causes the check to fail.
-The inventory does not recursively scan local output directories. Staged
-removals of optional paths are allowed.
+The verifier inventories indexed files and nonignored untracked files with
+NUL-delimited Git output. It reports violations without moving or deleting
+files. CI runs the structure contract before dependency installation.
 
 ## Complementary checks
 
-- `ls-lint` enforces file and directory names using `.ls-lint.yml`; see
-  [Naming policy](NAMING.md).
-- `markdownlint-cli@0.45.0` checks added or edited Markdown in CI using
-  `.markdownlint.json` and `.markdownlintignore`, including MD041 title and
-  MD047 final-newline requirements. Both configuration files are required.
-- `verify_repository_structure.py` enforces placement, required presence, and
-  the repository's folder roles.
-- `verify_local_lifecycle.py` shares the generated-path policy and checks for
-  generated/local leaks and prohibited raw intake across indexed and
-  nonignored untracked paths. It also provides optional pending-change and
-  untracked-size limits.
-
-These checks report violations without moving or deleting files. Structure
-verification uses only Python's standard library and Git. Import boundaries,
-module-to-test mappings, and arbitrary nesting or file-count limits are not
-part of this contract.
+- `ls-lint` enforces file and directory names.
+- Markdown lint checks changed documentation.
+- `tools.verification.verify_local_lifecycle` rejects generated-output leaks,
+  Python caches, and local metadata.
+- Unit tests exercise required paths, linked worktrees, staged removals,
+  arbitrary filenames, and every generated-output visibility state.

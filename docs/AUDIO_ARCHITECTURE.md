@@ -35,18 +35,21 @@ The audio design of the configurable panel project evolved across three historic
 | Spatial loop mix | Audio present in each selected video | Independent loop source clocks |
 
 ### Mode 0: Silent Field (Default / Pure Visual Art)
+
 - **Behavior**: All video loops are exported without audio streams (`-an` in FFmpeg; `muted` attribute in `<video>` tags).
 - **Rationale**: Emphasizes pure visual rhythm, geometry, and temporal coexistence across the $N$ panels. Ideal for gallery installations, silent digital displays, and mobile autoplay.
 
 ---
 
 ### Mode 1: Synchronized Ambient Soundtrack (Master Audio Track)
+
 - **Behavior**: A single external master audio soundtrack plays alongside the visual composition.
 - **Clock Binding**:
   - The soundtrack clock $t_{\text{audio}}$ is locked directly to global composition time $c$:
     $$t_{\text{audio}} = c \pmod{T_{\text{soundtrack}}}$$
   - Rotating between portrait and landscape modes maintains continuous playback of the master track without glitch or restart.
 - **Specification**:
+
   ```json
   {
     "audio": {
@@ -63,6 +66,7 @@ The audio design of the configurable panel project evolved across three historic
 ---
 
 ### Mode 2: Multi-Track Spatial Loop Mix (Per-Loop Sound Field)
+
 - **Behavior**: Each active video loop instance $i$ emits its own audio track derived from its current playback position $t_{\text{src}, i}(t)$.
 - **Spatial Positioning**:
   - In horizontal/landscape modes, audio tracks are spatially panned stereo according to the panel center coordinate $x_i \in [0, 1]$:
@@ -72,6 +76,7 @@ The audio design of the configurable panel project evolved across three historic
   - A held loop is silent. Its final 50ms of audible playback ramps down to zero at the authored hold boundary. The compiled timeline makes this anticipation possible: pausing a native video stops its audio samples immediately. Holds at frame zero begin silent; release resumes the frozen source clock without catch-up.
   - Sibling loops continue audible playback uninterrupted.
 - **Specification**:
+
   ```json
   {
     "audio": {
@@ -93,7 +98,7 @@ The audio design of the configurable panel project evolved across three historic
 
 ### FFmpeg
 
-`core/render_triptych.py` retains the historical rendering path. Explicit v1.1
+`src/simvltanea/render_triptych.py` retains the historical rendering path. Explicit v1.1
 audio is assembled across the full composition into 48 kHz stereo PCM, then
 encoded to AAC once alongside the concatenated video. Visual segment boundaries
 cannot restart a soundtrack or introduce per-segment AAC priming.
@@ -108,7 +113,9 @@ The mix applies authored gains without an automatic limiter or loudness
 normalization. A loud multitrack sum can clip; choose gains accordingly.
 
 ### Browser Runtime (Web Audio API)
-In [`core/browser_runtime.js`](../core/browser_runtime.js):
+
+In [`src/simvltanea/browser_runtime.js`](../src/simvltanea/browser_runtime.js):
+
 - In spatial mode, each video element connects to a `MediaElementAudioSourceNode` feeding a `StereoPannerNode` and a `GainNode`.
 - Orientation transitions smoothly update `StereoPannerNode.pan.linearRampToValueAtTime(...)` over 200ms without interrupting audio buffer playback.
 
@@ -153,7 +160,7 @@ authored cell center, including letterboxing and gaps. Unknown loop IDs and
 unsupported controls are rejected. `mute_on_hold: false`, frozen-audio synthesis,
 optional portrait focal-volume scaling, and generative audio are not implemented.
 
-`tools/verify_editions.py` accepts both new audio declarations while preserving
+`tools/verification/verify_editions.py` accepts both new audio declarations while preserving
 historical `none`/`panel`/`mix` validation. Preset validation does not bind media
 or establish edition readiness. The historical project exporter and its landing
 page retain their existing audio contract; v1.1 rendering uses the versioned
@@ -165,10 +172,10 @@ unchanged.
 From the repository root, with FFmpeg/ffprobe and the pinned Python dependencies:
 
 ```bash
-python3 core/make_audio_fixture.py
-python3 core/render_triptych.py --state runtime-proof/audio-v1.1/soundtrack.json --orientation landscape --width 320 --height 180 --output runtime-proof/audio-v1.1/soundtrack.mp4
-python3 core/render_triptych.py --state runtime-proof/audio-v1.1/spatial-loops.json --orientation landscape --width 320 --height 180 --output runtime-proof/audio-v1.1/spatial-loops.mp4
-python3 -m http.server 8000 --bind 127.0.0.1 --directory runtime-proof/audio-v1.1
+PYTHONPATH=src python3 -m simvltanea.make_audio_fixture
+PYTHONPATH=src python3 -m simvltanea.render_triptych --state var/proofs/audio-v1.1/soundtrack.json --orientation landscape --width 320 --height 180 --output var/proofs/audio-v1.1/soundtrack.mp4
+PYTHONPATH=src python3 -m simvltanea.render_triptych --state var/proofs/audio-v1.1/spatial-loops.json --orientation landscape --width 320 --height 180 --output var/proofs/audio-v1.1/spatial-loops.mp4
+python3 -m http.server 8000 --bind 127.0.0.1 --directory var/proofs/audio-v1.1
 ```
 
 Open `/preview-soundtrack/` or `/preview-spatial-loops/` on the local server and
@@ -180,10 +187,10 @@ Verification commands:
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 tools/verify_legacy_decoded.py
-python3 tools/verify_editions.py
-python3 tools/verify_layouts.py --examples
-python3 tools/verify_local_lifecycle.py
+python3 -m tools.verification.verify_legacy_decoded
+python3 -m tools.verification.verify_editions
+python3 -m tools.verification.verify_layouts --examples
+python3 -m tools.verification.verify_local_lifecycle
 ```
 
 Native browser tests require a working installed Chrome/Chromium with H.264

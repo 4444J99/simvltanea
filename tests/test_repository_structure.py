@@ -12,42 +12,28 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "tools" / "verification"))
 
 import verify_local_lifecycle as lifecycle
 import verify_repository_structure as structure
 
 
 GENERATED_OUTPUTS = (
-    "packages/release.zip",
-    "renders/review.mp4",
-    "samples/source.mp4",
-    "site/index.html",
-    "work/session.json",
-    "runtime-proof/receipt.json",
-    "artifact-001/baseline/unapproved.py",
-    "artifact-001/output/render.mp4",
+    "var/packages/release.zip",
+    "var/renders/review.mp4",
+    "var/samples/source.mp4",
+    "var/site/index.html",
+    "var/work/session.json",
+    "var/proofs/receipt.json",
+    "var/artifact-001/baseline/unapproved.py",
+    "var/artifact-001/output/render.mp4",
     "evidence/visual-proof/media/source.mp4",
     "evidence/visual-proof/renders/review.mp4",
 )
 
 FIXTURE_IGNORE_RULES = """\
-packages/*
-!packages/.gitkeep
-renders/*
-!renders/.gitkeep
-samples/*
-!samples/.gitkeep
-site/*
-!site/.gitkeep
-work/*
-!work/.gitkeep
-runtime-proof/
-artifact-001/*
-!artifact-001/baseline-manifest.json
-!artifact-001/baseline/
-artifact-001/baseline/*
-!artifact-001/baseline/render_triptych.original.py
+var/*
+!var/.gitkeep
 evidence/visual-proof/media/
 evidence/visual-proof/renders/
 archive/raw/*
@@ -137,7 +123,21 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assertEqual(self.lifecycle_result(self.root)[0], 0)
 
     def test_current_repository_layout_satisfies_the_contract(self):
-        self.assertEqual(structure.verify_structure(ROOT), [])
+        # Validate the complete working tree without modifying the developer's
+        # real index; this also handles structural refactors made as renames.
+        with tempfile.TemporaryDirectory() as directory:
+            index = Path(directory) / "index"
+            environment = {**os.environ, "GIT_INDEX_FILE": str(index)}
+            subprocess.run(
+                ["git", "-C", str(ROOT), "read-tree", "HEAD"],
+                env=environment, check=True, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(ROOT), "add", "-A"],
+                env=environment, check=True, capture_output=True,
+            )
+            with patch.dict(os.environ, {"GIT_INDEX_FILE": str(index)}):
+                self.assertEqual(structure.verify_structure(ROOT), [])
 
     def test_allowed_optional_files_and_archival_formats(self):
         paths = (
@@ -146,7 +146,7 @@ class RepositoryStructureTests(unittest.TestCase):
             ".github/instructions/python.instructions.md",
             ".github/ISSUE_TEMPLATE/bug_report.md",
             ".github/ISSUE_TEMPLATE/config.yml",
-            "core/layouts.json",
+            "src/simvltanea/layouts.json",
             "tests/__init__.py",
             "tests/conftest.py",
             "tests/test_fixture.py",
@@ -167,7 +167,7 @@ class RepositoryStructureTests(unittest.TestCase):
         paths = (
             "root_script.py",
             "unapproved/README.md",
-            "core/config.json",
+            "src/simvltanea/config.json",
             "tools/config.json",
             "examples/script.py",
             "docs/receipt.json",
@@ -233,7 +233,7 @@ class RepositoryStructureTests(unittest.TestCase):
                 if kind == "directory":
                     readme.mkdir()
                 else:
-                    readme.symlink_to("core/README.md")
+                    readme.symlink_to("src/simvltanea/README.md")
                     self.assertTrue(readme.is_file())
                 self.assert_violation(root, "README.md")
 
@@ -243,14 +243,14 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assert_violation(self.root, "evidence/visual-proof/frames")
 
     def test_required_parent_replaced_by_file_returns_a_policy_violation(self):
-        (self.root / "core").rename(Path(self.temp.name) / "saved-core")
-        self.write(self.root, "core", b"wrong path type\n")
+        (self.root / "src").rename(Path(self.temp.name) / "saved-src")
+        self.write(self.root, "src", b"wrong path type\n")
         output = io.StringIO()
         with redirect_stdout(output), redirect_stderr(output):
             result = structure.main(["--root", str(self.root)])
         self.assertEqual(result, 1, output.getvalue())
-        self.assertIn("core", output.getvalue())
-        self.assert_violation(self.root, "core")
+        self.assertIn("src", output.getvalue())
+        self.assert_violation(self.root, "src")
 
     def test_generated_outputs_fail_in_every_git_visible_state(self):
         for state in ("untracked", "staged", "committed"):
@@ -277,13 +277,12 @@ class RepositoryStructureTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(structure.is_generated_path(path))
         for path in (
-            "packages/.gitkeep", "renders/.gitkeep", "samples/.gitkeep",
-            "site/.gitkeep", "work/.gitkeep",
-            "artifact-001/baseline-manifest.json",
-            "artifact-001/baseline/render_triptych.original.py",
+            "var/.gitkeep",
+            "fixtures/artifact-001/baseline-manifest.json",
+            "fixtures/artifact-001/baseline/render_triptych.original.py",
             "evidence/visual-proof/ledger.json",
             "evidence/visual-proof/frames/review.png",
-            "core/generated_inventory.py",
+            "src/simvltanea/generated_inventory.py",
         ):
             with self.subTest(path=path):
                 self.assertFalse(structure.is_generated_path(path))
@@ -296,7 +295,7 @@ class RepositoryStructureTests(unittest.TestCase):
 
     def test_nested_generated_placeholders_and_raw_intake_are_rejected(self):
         paths = (
-            "packages/nested/.gitkeep",
+            "var/nested/.gitkeep",
             "archive/raw/new-drop/README.md",
             "archive/raw/PR9_review_proof_2026-09-06/extra.json",
         )
@@ -307,15 +306,15 @@ class RepositoryStructureTests(unittest.TestCase):
             self.assert_violation(self.root, path)
 
     def test_staged_removal_of_optional_file_passes(self):
-        self.write(self.root, "core/optional.py")
-        self.git(self.root, "add", "core/optional.py")
+        self.write(self.root, "src/simvltanea/optional.py")
+        self.git(self.root, "add", "src/simvltanea/optional.py")
         self.git(self.root, "commit", "--quiet", "-m", "Optional module")
-        self.git(self.root, "rm", "core/optional.py")
+        self.git(self.root, "rm", "src/simvltanea/optional.py")
         self.assertEqual(structure.verify_structure(self.root), [])
         self.assertEqual(self.lifecycle_result(self.root)[0], 0)
 
     def test_staged_removal_of_generated_file_stops_the_leak(self):
-        path = "renders/forced.mp4"
+        path = "var/renders/forced.mp4"
         self.write(self.root, path)
         self.git(self.root, "add", "--force", path)
         self.git(self.root, "commit", "--quiet", "-m", "Generated leak fixture")
@@ -340,7 +339,7 @@ class RepositoryStructureTests(unittest.TestCase):
         self.assert_violation(self.root, bad_path)
 
     def test_lifecycle_detects_force_staged_local_metadata_and_python_caches(self):
-        paths = ("core/.DS_Store", "core/__pycache__/composition.cpython-314.pyc")
+        paths = ("src/simvltanea/.DS_Store", "src/simvltanea/__pycache__/composition.cpython-314.pyc")
         for path in paths:
             self.write(self.root, path)
         self.git(self.root, "add", "--force", "--", *paths)
@@ -370,7 +369,7 @@ class RepositoryStructureTests(unittest.TestCase):
                 self.assertEqual(result, 2, output.getvalue())
                 self.assertTrue(output.getvalue().strip())
         result = subprocess.run(
-            [sys.executable, str(ROOT / "tools/verify_repository_structure.py"), "--unknown"],
+            [sys.executable, str(ROOT / "tools/verification/verify_repository_structure.py"), "--unknown"],
             capture_output=True,
             check=False,
         )

@@ -2,7 +2,7 @@
 
 ## Branching
 
-Read `BRANCHES.md` before creating branches.
+Read `docs/BRANCHES.md` before creating branches.
 
 - `main` is always releasable. No direct commits.
 - Standing lanes (`lane/verify`, `lane/heal`, `lane/expand`, `lane/evolve`) persist.
@@ -23,13 +23,13 @@ git diff --name-only --diff-filter=ACMR -z origin/main...HEAD -- '*.md' |
     --config .markdownlint.json --ignore-path .markdownlintignore --
 
 # Repository placement, required paths, and generated-output boundaries
-python3 tools/verify_repository_structure.py    # must print "repository structure ok"
+python3 -m tools.verification.verify_repository_structure # must print "repository structure ok"
 
 # Full suite (unit, ffmpeg render, browser runtime, continuity)
 python3 -m pytest -q            # or: python3 -m unittest discover -s tests
-python3 tools/verify_local_lifecycle.py          # must print "local lifecycle ok"
-python3 tools/verify_editions.py                 # must print "edition presets ok"
-python3 tools/edition_status.py                  # inspect edition readiness
+python3 -m tools.verification.verify_local_lifecycle # must print "local lifecycle ok"
+python3 -m tools.verification.verify_editions    # must print "edition presets ok"
+python3 -m tools.editions.edition_status         # inspect edition readiness
 ```
 
 CI (`.github/workflows/ci.yml`) runs naming and structure checks, linting for
@@ -49,7 +49,7 @@ check new or uncommitted Markdown by passing its paths directly to
 
 See [repository structure governance](docs/STRUCTURE.md) for approved root
 entries, required paths, and folder roles. When changing the layout, update the
-named policy tables in `tools/verify_repository_structure.py` and the documented
+named policy tables in `tools/verification/verify_repository_structure.py` and the documented
 contract in the same PR. Keep new scripts under `tools/` or `core/`, according
 to their role; root-level scripts require an explicit contract change.
 
@@ -58,13 +58,13 @@ to their role; root-level scripts require an explicit contract change.
 These directories are gitignored and must never leak into a PR:
 
 ```text
-samples/  renders/  site/  packages/  work/  artifact-001/media  runtime-proof/
+var/samples/  var/renders/  var/site/  var/packages/  var/work/  var/proofs/
 ```
 
 Only root `.gitkeep` placeholders in `samples`, `renders`, `site`, `packages`,
 and `work`, plus the two Artifact 001 baseline inputs
-(`artifact-001/baseline-manifest.json` and
-`artifact-001/baseline/render_triptych.original.py`), are exceptions.
+(`fixtures/artifact-001/baseline-manifest.json` and
+`fixtures/artifact-001/baseline/render_triptych.original.py`), are exceptions.
 Visual-proof `media` and `renders` outputs must also remain local; approved
 inspected PNG frames belong in `evidence/visual-proof/frames/`.
 Ignored local outputs are allowed, but force-staged or committed outputs fail
@@ -74,16 +74,16 @@ run both verifiers and remove the unintended Git additions.
 To regenerate synthetic proofs without committing blobs:
 
 ```bash
-python3 core/make_artifact_001.py           # full 8-state family
-python3 core/make_artifact_001.py --draft   # fast 360p draft
-python3 tools/generated_inventory.py --json # inventory by lane
+PYTHONPATH=src python3 -m simvltanea.make_artifact_001           # full family
+PYTHONPATH=src python3 -m simvltanea.make_artifact_001 --draft   # fast 360p draft
+python3 -m tools.preservation.generated_inventory --json         # inventory by lane
 ```
 
 ## Edition authoring
 
-See `docs/EDITION_AUTHORING.md` for real-media ingestion (`samples/` → `atomize_media.py` → `editions.json` → `build_edition.py` → `verify_editions.py`).
+See `docs/EDITION_AUTHORING.md` for real-media ingestion (`var/samples/` → media tools → `editions.json` → edition tools → verification).
 
-Every edition entry in `editions.json` must satisfy `tools/verify_editions.py` (`schema triptych.editions.v1`). Run it before committing edition changes.
+Every edition entry in `editions.json` must satisfy `tools.verification.verify_editions` (`schema triptych.editions.v1`). Run it before committing edition changes.
 
 ## Invariant
 
@@ -95,7 +95,7 @@ Never commit credentials, production data, or raw photo-library paths. The verif
 
 ## PR checklist
 
-- [ ] Branch from correct lane (`BRANCHES.md`)
+- [ ] Branch from correct lane (`docs/BRANCHES.md`)
 - [ ] New files and directories pass `ls-lint`
 - [ ] Added or edited Markdown passes `markdownlint-cli@0.45.0`
 - [ ] `verify_repository_structure.py` prints `repository structure ok`

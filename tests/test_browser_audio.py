@@ -18,7 +18,7 @@ import wave
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / 'core', _ROOT / 'tools'):
+for _p in (_ROOT, _ROOT / 'src' / 'simvltanea'):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

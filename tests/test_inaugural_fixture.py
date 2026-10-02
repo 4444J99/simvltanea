@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "tools" / "make_inaugural_fixture.py"
+SCRIPT = ROOT / "tools" / "media" / "make_inaugural_fixture.py"
 SPEC = importlib.util.spec_from_file_location("make_inaugural_fixture", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -32,7 +32,7 @@ class InauguralFixtureTests(unittest.TestCase):
             self.assertIn("yuv420p", command)
 
     def test_generate_produces_decodable_video_only_mp4s(self):
-        with tempfile.TemporaryDirectory(dir=ROOT / "work") as temp:
+        with tempfile.TemporaryDirectory(dir=ROOT / "var" / "work") as temp:
             targets = MODULE.generate(Path(temp), duration=0.125, size=64)
             self.assertEqual(len(targets), 3)
             for target in targets:

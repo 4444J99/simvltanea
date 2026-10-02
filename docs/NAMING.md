@@ -35,12 +35,16 @@ New and actively maintained paths follow these conventions:
 | Plans in `docs/plans/` | date-prefixed `kebab-case` | `2026-09-11-final-closeout.md` |
 | Conventional ecosystem files | tool-defined names | `README.md`, `LICENSE`, `.gitignore` |
 
+Prefer single-word directory names for workflow groups and output lanes, such as
+`media`, `verification`, and `proofs`. When multiple words are necessary, join
+them with hyphens, never spaces. Runtime proof output uses `var/proofs/`.
+
 The root `.ls-lint.yml` is the executable policy. CI runs it on every push and
 pull request. Contributors should run `ls-lint` locally before opening a pull
 request when they add or rename paths.
 
 Historical and provenance-bearing material under `archive/`, `docs/historical/`,
-and `artifact-001/baseline/` is excluded from linting. Those paths preserve
+and `fixtures/artifact-001/baseline/` is excluded from linting. Those paths preserve
 source identifiers and recovered names; do not rename them merely to satisfy an
 active-repository convention. Generated and local-only lanes are also excluded
 because repository cleanliness checks, rather than filename policy, govern them.

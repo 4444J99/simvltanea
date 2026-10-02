@@ -19,8 +19,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent.parent
-ROOT = HERE / 'artifact-001'
-for _p in (HERE, HERE / 'core', HERE / 'tools'):
+ROOT = HERE / 'var' / 'artifact-001'
+BASELINE = HERE / 'fixtures' / 'artifact-001'
+for _p in (HERE, HERE / 'src' / 'simvltanea'):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -238,11 +239,11 @@ class StateTests(unittest.TestCase):
             settings=r.build_settings(r.parse_args())
         self.assertEqual((settings.width,settings.height,settings.fps),(1080,1920,30))
         self.assertEqual(settings.audio_mode,'none');self.assertEqual(settings.timing_mode,'clip')
-        result=subprocess.run([sys.executable,str(HERE/'core'/'render_triptych.py'),'--state',str(ROOT/'state-3.json')],capture_output=True,text=True)
+        result=subprocess.run([sys.executable,str(HERE/'src'/'simvltanea'/'render_triptych.py'),'--state',str(ROOT/'state-3.json')],capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0); self.assertIn('explicit --orientation',result.stderr)
 
     def test_original_command_graph_compatibility(self):
-        original=ROOT/'baseline/render_triptych.original.py'
+        original=BASELINE/'baseline/render_triptych.original.py'
         if not original.exists():self.skipTest('original snapshot only included in execution bundle')
         spec=importlib.util.spec_from_file_location('triptych_baseline',original)
         old=importlib.util.module_from_spec(spec);sys.modules[spec.name]=old;spec.loader.exec_module(old)
@@ -251,7 +252,7 @@ class StateTests(unittest.TestCase):
             for layout in ('story','left','middle','right'):
                 for audio in ('none','panel','mix'):
                     for direction in ('forward','reverse','pingpong'):
-                        argv=['render_triptych.py','--manifest',str(ROOT/'baseline-manifest.json'),
+                        argv=['render_triptych.py','--manifest',str(BASELINE/'baseline-manifest.json'),
                               '--timing',timing,'--phrase','1','--layout',layout,'--audio',audio,'--direction',direction,
                               '--panel-order','middle,left,right']
                         with patch.object(sys,'argv',argv):
@@ -273,7 +274,7 @@ class RenderTests(unittest.TestCase):
         s['frames']=72;s['events']=[x for x in s['events'] if x['frame']<72]
         path=ROOT/'test-integration-state.json';c.save_state(s,path)
         output=ROOT/'renders/test-integration.mp4'
-        command=[sys.executable,str(HERE/'core'/'render_triptych.py'),'--state',str(path),'--orientation','portrait',
+        command=[sys.executable,str(HERE/'src'/'simvltanea'/'render_triptych.py'),'--state',str(path),'--orientation','portrait',
                  '--width','360','--height','640','--preset','ultrafast','--output',str(output)]
         done=subprocess.run(command,cwd=HERE,capture_output=True,text=True)
         (ROOT/'evidence/integration.log').write_text(done.stdout+done.stderr)

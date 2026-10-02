@@ -20,7 +20,7 @@ from fractions import Fraction
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-for folder in (ROOT, ROOT / "core", ROOT / "tools"):
+for folder in (ROOT, ROOT / "src" / "simvltanea"):
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))
 

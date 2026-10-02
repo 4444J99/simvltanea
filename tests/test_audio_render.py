@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE / "core"))
+sys.path.insert(0, str(HERE / "src" / "simvltanea"))
 import composition as c
 import render_triptych as r
 
@@ -65,7 +65,7 @@ def write_tone(path: Path, duration: int, channels: int = 1, stepped: bool = Fal
 class AudioRenderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        generated = HERE / "runtime-proof"
+        generated = HERE / "var" / "proofs"
         generated.mkdir(exist_ok=True)
         cls.scratch = tempfile.TemporaryDirectory(prefix="audio-tests-", dir=generated)
         cls.addClassCleanup(cls.scratch.cleanup)

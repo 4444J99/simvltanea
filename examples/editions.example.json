@@ -1,6 +1,6 @@
 {
   "schema": "triptych.editions.v1",
-  "default_source_project": "project.example.json",
+  "default_source_project": "examples/project.example.json",
   "note": "Named editions are small text configurations over the same triptych canon engine.",
   "edition_families": {
     "structural_recomposition": {
@@ -117,7 +117,7 @@
         }
       ],
       "visual_sketch": {
-        "output_file": "renders/editions/accidents/draft-visual-sketch.mp4",
+        "output_file": "var/renders/editions/accidents/draft-visual-sketch.mp4",
         "style": "fracture",
         "width": 540,
         "height": 960,
@@ -244,7 +244,7 @@
         }
       ],
       "visual_sketch": {
-        "output_file": "renders/editions/ballerina/draft-visual-sketch.mp4",
+        "output_file": "var/renders/editions/ballerina/draft-visual-sketch.mp4",
         "style": "score",
         "width": 540,
         "height": 960,
@@ -378,7 +378,7 @@
         }
       ],
       "visual_sketch": {
-        "output_file": "renders/editions/noonlight/draft-visual-sketch.mp4",
+        "output_file": "var/renders/editions/noonlight/draft-visual-sketch.mp4",
         "style": "serial",
         "width": 540,
         "height": 960,
@@ -497,7 +497,7 @@
         }
       ],
       "visual_sketch": {
-        "output_file": "renders/editions/porn/draft-visual-sketch.mp4",
+        "output_file": "var/renders/editions/porn/draft-visual-sketch.mp4",
         "style": "signal",
         "width": 540,
         "height": 960,
@@ -635,7 +635,7 @@
         }
       ],
       "visual_sketch": {
-        "output_file": "renders/editions/glitche/draft-visual-sketch.mp4",
+        "output_file": "var/renders/editions/glitche/draft-visual-sketch.mp4",
         "style": "signal",
         "width": 540,
         "height": 960,

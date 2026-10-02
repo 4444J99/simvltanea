@@ -6,13 +6,13 @@ labels: ["bug"]
 ---
 
 ## Intention / invariant broken
-<!-- Which invariant or contract failed? Reference BRANCHES.md green definition. -->
+<!-- Which invariant or contract failed? Reference docs/BRANCHES.md green definition. -->
 
 ## Repro
 ```bash
 # minimal commands
 python3 -m pytest tests/test_xxx.py -v
-python3 tools/verify_local_lifecycle.py
+python3 -m tools.verification.verify_local_lifecycle
 ```
 
 ## Evidence

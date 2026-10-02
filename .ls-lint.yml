@@ -24,10 +24,5 @@ ignore:
   - "**/__pycache__"
   - archive
   - docs/historical
-  - artifact-001/baseline
-  - packages
-  - renders
-  - runtime-proof
-  - samples
-  - site
-  - work
+  - fixtures/artifact-001/baseline
+  - var

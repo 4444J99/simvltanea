@@ -27,7 +27,7 @@ jobs:
           python-version: '3.12'
 
       - name: Verify Repository Structure
-        run: python3 tools/verify_repository_structure.py
+        run: python3 -m tools.verification.verify_repository_structure
 
       - name: Set up Node.js for Markdown linting
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -69,21 +69,21 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-runtime-proof.txt
+          pip install -r requirements.txt
           playwright install --with-deps chromium
           python3 -c "import PIL; print(f'Pillow {PIL.__version__}')"
           python3 -c "import importlib.metadata; print(f'playwright {importlib.metadata.version(\"playwright\")}')"
           python3 -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()"
 
-      - name: Generate runtime-proof fixtures
+      - name: Generate runtime proof fixtures
         run: |
-          python3 core/make_runtime_fixture.py
-          python3 core/make_artifact_001.py --draft || python3 core/make_artifact_001.py
+          PYTHONPATH=src python3 -m simvltanea.make_runtime_fixture
+          PYTHONPATH=src python3 -m simvltanea.make_artifact_001 --draft || PYTHONPATH=src python3 -m simvltanea.make_artifact_001
 
       - name: Verify media pix_fmt (yuv420p H.264)
         run: |
           echo "== ffprobe pix_fmt gate =="
-          for f in runtime-proof/media/*.mp4 artifact-001/media/*.mp4; do
+          for f in var/proofs/media/*.mp4 var/artifact-001/media/*.mp4; do
             [ -f "$f" ] || continue
             echo "== $f =="
             ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,pix_fmt,profile,width,height,avg_frame_rate -of default=noprint_wrappers=1 "$f"
@@ -117,26 +117,26 @@ jobs:
 
       - name: Verify Local Lifecycle Cleanliness
         run: |
-          python3 tools/verify_local_lifecycle.py
+          python3 -m tools.verification.verify_local_lifecycle
 
       - name: Verify Historical Decoded Audio and Video
-        run: python3 tools/verify_legacy_decoded.py
+        run: python3 -m tools.verification.verify_legacy_decoded
 
       - name: Preserve Historical Audio Verification Receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: legacy-audio-verification-${{ github.sha }}
-          path: runtime-proof/legacy-regression/run-*/receipt.json
+          path: var/proofs/legacy-regression/run-*/receipt.json
           if-no-files-found: error
 
       - name: Verify Edition Presets
         run: |
-          python3 tools/verify_editions.py
+          python3 -m tools.verification.verify_editions
 
       - name: Verify Layouts
         run: |
-          python3 tools/verify_layouts.py --examples
+          python3 -m tools.verification.verify_layouts --examples
 
       - name: Report Edition Status
         run: |
-          python3 tools/edition_status.py
+          python3 -m tools.editions.edition_status
