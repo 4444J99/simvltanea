@@ -1,6 +1,5 @@
 """Decoded synthetic-tone evidence for opt-in Audio v1.1; no archival audio claims."""
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 
 import array
 import copy
@@ -17,9 +16,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 HERE = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-sys.path.insert(0, str(HERE / "src" / "simvltanea"))
-import composition as c
-import render_triptych as r
+import simvltanea.authoring.composition as c
+import simvltanea.rendering.render_triptych as r
 
 RATE = 48000
 

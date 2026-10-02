@@ -1,5 +1,4 @@
 """Exercise operational paths across workflow boundaries."""
-import tests  # shared discovery bootstrap
 import importlib
 from pathlib import Path
 import unittest
@@ -20,7 +19,11 @@ class PathContractTests(unittest.TestCase):
             with self.subTest(module=old):
                 canonical = importlib.import_module("simvltanea." + new)
                 self.assertIs(importlib.import_module("simvltanea." + old), canonical)
-                self.assertIs(importlib.import_module(old), canonical)
+                # Bare imports were a historical PYTHONPATH=src/simvltanea interface.
+                import sys
+                from unittest.mock import patch
+                with patch.object(sys, "path", [str(REPO_ROOT / "src" / "simvltanea"), *sys.path]):
+                    self.assertIs(importlib.import_module(old), canonical)
 
     def test_browser_assets_follow_the_runtime_package(self):
         from importlib.resources import files

@@ -1,5 +1,4 @@
 """Architectural regressions for feature APIs."""
-import tests  # shared discovery bootstrap
 import unittest
 from tools.verification.verify_feature_boundaries import violations, verify
 
@@ -21,6 +20,9 @@ class FeatureBoundaryTests(unittest.TestCase):
         import importlib
         for name in ("authoring", "browser", "rendering", "generators"):
             feature = importlib.import_module("simvltanea." + name)
+            if name == "generators":
+                for export in feature.__all__:
+                    importlib.import_module("simvltanea.generators." + export)
             for export in feature.__all__:
                 with self.subTest(feature=name, export=export):
                     self.assertIsNotNone(getattr(feature, export))

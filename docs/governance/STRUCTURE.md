@@ -57,14 +57,16 @@ Run naming checks with `ls-lint --config config/lint/ls-lint.yml`.
 Production declarations live in `editions/registry.json`; examples remain separate.
 
 Active docs are grouped into `architecture/`, `authoring/`, `governance/`,
-`provenance/`, and `plans/`. Retained incubation records live in
+`provenance/`, `plans/`, and `continuations/`. Retained incubation records live in
 `archive/incubation/`, with their original contents preserved.
 
 Engine implementations are grouped into `authoring/`, `browser/`, `rendering/`,
 and `generators/`. Root package modules retain compatibility with existing
 imports and CLI commands. Browser JavaScript is distributed with its subpackage.
+Feature APIs use ordinary imports with explicit `__all__` declarations.
+
 Feature tests live directly in `authoring/`, `browser/`, `rendering/`,
-`tools/editions/`, and `tools/verification/`. Both pytest and the historical
+`tools/editions/`, and `tools/verification/`. Pytest uses importlib mode with qualified test imports. Both pytest and the historical
 `python3 -m unittest discover -s tests` command discover these suites.
 
 Cross-feature imports use explicit exports in feature `__init__.py` files.
@@ -89,3 +91,7 @@ files. CI runs the structure contract before dependency installation.
   Python caches, and local metadata.
 - Unit tests exercise required paths, linked worktrees, staged removals,
   arbitrary filenames, and every generated-output visibility state.
+
+Continuation handoffs live in `docs/continuations/`. Markdown guides follow the
+normal documentation rules; JSON receipts require an explicit
+`documentation_file_exceptions` entry in the layout contract.

@@ -1,6 +1,5 @@
 """Exercise the clean-clone synthetic inaugural fixture generator."""
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 
 import importlib.util
 import json

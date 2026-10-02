@@ -41,7 +41,8 @@ required_files = [".gitignore", "LICENSE", "README.md", "pyproject.toml", "{arch
 required_directories = ["{archive}", "{archive}/chatgpt", "{archive}/incubation", "{archive}/raw", "{artifact_fixture}/baseline", "{config}", "{config}/lint", "{docs}", "{docs}/architecture", "{docs}/authoring", "{docs}/governance", "{docs}/plans", "{docs}/provenance", "{editions}", "{evidence}", "{evidence}/visual-proof", "{evidence}/visual-proof/frames", "{examples}", "{fixtures}", "{generated}", "{github}", "{package}", "{package}/authoring", "{package}/browser", "{package}/generators", "{package}/rendering", "{source}", "{tests}", "{tools}", "{tools}/editions", "{tools}/media", "{tools}/preservation", "{tools}/publishing", "{tools}/verification"]
 source_file_exceptions = ["{package}/layout.toml", "{package}/layouts.json"]
 test_python_exceptions = ["__init__.py", "conftest.py"]
-doc_subdirectories = ["architecture", "authoring", "governance", "plans", "provenance"]
+documentation_file_exceptions = ["{docs}/continuations/pr-20/session-closeout.json"]
+doc_subdirectories = ["continuations", "architecture", "authoring", "governance", "plans", "provenance"]
 archive_categories = ["bundles", "evidence", "extracts", "handoffs", "logs", "media", "prompts", "receipts", "research", "sessions", "threads"]
 proof_files = ["{evidence}/visual-proof/README.md", "{evidence}/visual-proof/ledger.json"]
 

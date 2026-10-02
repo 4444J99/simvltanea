@@ -1,18 +1,13 @@
 """Edition declarations and the boundary around the historical exporter."""
-import tests  # shared discovery bootstrap
 import copy
 import json
 from pathlib import Path
-import sys
 import unittest
 
 ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-for folder in (ROOT / 'src' / 'simvltanea', ROOT / 'tools' / 'editions', ROOT / 'tools' / 'verification'):
-    if str(folder) not in sys.path:
-        sys.path.insert(0, str(folder))
 
-import export_project
-import verify_editions
+import tools.editions.export_project as export_project
+import tools.verification.verify_editions as verify_editions
 
 
 class AudioEditionTests(unittest.TestCase):
@@ -24,10 +19,23 @@ class AudioEditionTests(unittest.TestCase):
     def test_existing_registry_still_valid_and_unchanged(self):
         registry = json.loads((ROOT / 'editions/registry.json').read_text())
         before = copy.deepcopy(registry)
-        errors, records = verify_editions.validate_payload(registry, ROOT / 'site')
+        errors, records = verify_editions.validate_payload(registry, ROOT / 'var/site')
         self.assertEqual(errors, [])
-        self.assertEqual(len(records), 7)
+        self.assertEqual({record['slug'] for record in records}, {
+            'simvl-live', 'simvltanea-inaugural', 'simvltanea-slice',
+            'accidents', 'ballerina', 'noonlight', 'porn', 'glitche',
+        })
         self.assertEqual(before, registry)
+
+    def test_registry_loader_preserves_portable_roles_and_private_checks(self):
+        registry = verify_editions.load_json(ROOT / 'editions/registry.json')
+        inaugural = next(e for e in registry['editions'] if e['slug'] == 'simvltanea-inaugural')
+        self.assertEqual(inaugural['source']['folder'], '@samples/inaugural')
+        errors, _ = verify_editions.validate_payload(registry, ROOT / 'var/site')
+        self.assertEqual(errors, [])
+        inaugural['source']['folder'] = '/Users/private/originals'
+        errors, _ = verify_editions.validate_payload(registry, ROOT / 'var/site')
+        self.assertTrue(any("contains private token '/Users/'" in error for error in errors))
 
     def test_legacy_modes_retain_existing_controls(self):
         for mode in ('none', 'panel', 'mix'):

@@ -2,8 +2,7 @@
 """Validate source edition presets before importing, rendering, or syncing."""
 
 from __future__ import annotations
-from tools.paths import resolve_references
-from tools.paths import EDITIONS_FILE
+from tools.paths import EDITIONS_FILE, resolve_references
 
 import argparse
 import json
@@ -72,8 +71,11 @@ def safe_slug(value: Any) -> str:
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
-        data = resolve_references(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError) as error:
+        # Validate the portable declaration before resolving role references into
+        # machine-local absolute paths. Expansion would create false private tokens.
+        data = json.loads(path.read_text(encoding="utf-8"))
+        resolve_references(data)  # Check role validity without replacing portable text.
+    except (OSError, ValueError) as error:
         raise SystemExit(f"{path}: cannot read JSON: {error}") from error
     if not isinstance(data, dict):
         raise SystemExit(f"{path}: JSON root must be an object")

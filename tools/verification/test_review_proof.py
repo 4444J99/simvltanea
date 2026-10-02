@@ -1,27 +1,21 @@
 """Proof-runner fault controls. Synthetic shards; no composition/browser proof.
 
-Run directly with ``python -m unittest -v test_review_proof``. All outputs live
+Run directly with ``python -m unittest -v tools.verification.test_review_proof``. All outputs live
 in temporary directories. No media, browser, network or provider is launched.
 """
 from __future__ import annotations
-import tests  # shared discovery bootstrap
 
 import contextlib
 import io
 import json
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-_ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-for _p in (_ROOT, _ROOT / "src" / "simvltanea", _ROOT / "tools" / "verification"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
 
-import run_review_proof as proof
+import tools.verification.run_review_proof as proof
 
 
 class ReviewProofTests(unittest.TestCase):

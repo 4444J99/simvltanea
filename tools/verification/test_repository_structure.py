@@ -1,5 +1,4 @@
 """Exercise repository governance against real Git indexes and worktrees."""
-import tests  # shared discovery bootstrap
 
 from contextlib import redirect_stderr, redirect_stdout
 import io
@@ -13,10 +12,9 @@ from unittest.mock import patch
 
 
 ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "pyproject.toml").is_file())
-sys.path.insert(0, str(ROOT / "tools" / "verification"))
 
-import verify_local_lifecycle as lifecycle
-import verify_repository_structure as structure
+import tools.verification.verify_local_lifecycle as lifecycle
+import tools.verification.verify_repository_structure as structure
 
 
 GENERATED_OUTPUTS = (
@@ -122,6 +120,11 @@ class RepositoryStructureTests(unittest.TestCase):
     def test_fixture_satisfies_the_contract(self):
         self.assertEqual(structure.verify_structure(self.root), [])
         self.assertEqual(self.lifecycle_result(self.root)[0], 0)
+
+    def test_registered_continuation_receipt_is_allowed_without_arbitrary_json(self):
+        self.assertIsNone(structure.path_violation('docs/continuations/pr-20/session-closeout.json'))
+        self.assertIsNone(structure.path_violation('docs/continuations/pr-20/photos-session-evidence.md'))
+        self.assertIsNotNone(structure.path_violation('docs/continuations/pr-20/unregistered.json'))
 
     def test_current_repository_layout_satisfies_the_contract(self):
         # Validate the complete working tree without modifying the developer's
