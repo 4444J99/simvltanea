@@ -10,7 +10,9 @@ VS Code extension tools and commands described below.
 ## Workflow
 
 1. Determine the diagram type and generate Mermaid syntax.
-2. Write the diagram to a `.mmd` file in the project.
+2. For create or edit requests, write to the requested or appropriate `.mmd`
+   file. For preview-only requests, preview supplied or existing source without
+   writing a file.
 3. Validate syntax: correct first-line keyword, arrow types, balanced brackets.
 4. Preview via the Mermaid extension — open the `.mmd` file (auto-preview) or run
    **Mermaid: Preview Diagram** (`mermaidChart.preview`).
@@ -83,7 +85,9 @@ For diagrams updated by the Mermaid GitHub Sync app (or pre-commit regenerate):
 2. Always call `mermaid-diagram-preview` after generating a diagram.
 3. Use `get-syntax-docs-mermaid` before generating an unfamiliar diagram type.
 4. Prefer `@mermaid-chart` slash commands for complex generation.
-5. Write diagrams to `.mmd` files; never return unvalidated Mermaid syntax.
+5. Create/edit requests may write `.mmd` files; preview-only requests stay
+   read-only. Never return unvalidated Mermaid syntax. Tracked diagram paths
+   must follow `docs/STRUCTURE.md`; otherwise use ignored local output.
 6. Warn the user before Repair (Mermaid AI credits).
 7. Cooperate with the Sync workflow — do not manually regenerate managed diagrams.
 
