@@ -8,15 +8,20 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+CORE = REPO / 'core'
+if str(CORE) not in sys.path:
+    sys.path.insert(0, str(CORE))
 
 import composition as c
 from make_artifact_001 import probe
 from make_runtime_fixture import prepare
 
-HERE = Path(__file__).resolve().parent
-REPO = HERE.parent
 ROOT = REPO / 'runtime-proof'
 RENDER_CLI = (HERE / 'render_triptych.py') if (HERE / 'render_triptych.py').exists() else (REPO / 'core' / 'render_triptych.py')
 

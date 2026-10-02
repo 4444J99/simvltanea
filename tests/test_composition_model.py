@@ -17,7 +17,7 @@ from composition_model import Composition
 
 class CompositionModelTests(unittest.TestCase):
     def test_acceptance_matrix_has_authored_pairs(self):
-        self.assertEqual(set(AUTHORED), {2, 3, 4, 5, 6})
+        self.assertEqual(set(AUTHORED), {2, 3, 4, 5, 6, 7})
         for count in AUTHORED:
             comp = build_artifact001(count)
             self.assertEqual(len(comp.loops), count)
@@ -84,7 +84,7 @@ class CompositionModelTests(unittest.TestCase):
 
     def test_unsupported_count_is_explicit(self):
         with self.assertRaisesRegex(ValueError, "no reviewed engineering layout pair"):
-            build_artifact001(7)
+            build_artifact001(8)
 
 
 if __name__ == "__main__":

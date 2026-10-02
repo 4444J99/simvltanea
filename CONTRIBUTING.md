@@ -48,7 +48,7 @@ Every edition entry in `editions.json` must satisfy `tools/verify_editions.py` (
 
 ## Invariant
 
-`N` independent loops + authored portrait/landscape layouts + independent rational clocks + simultaneous coexistence + presentation-only orientation changes + no filler (`README.md` Invariant). `N=7` is experimental only — `core/artifact001_layouts.py` rejects 7. See `docs/CANON.md`.
+`N` independent loops + authored portrait/landscape layouts + independent rational clocks + simultaneous coexistence + presentation-only orientation changes + no filler (`README.md` Invariant). Authored engineering pairs currently cover N=2 through N=7; unsupported counts fail explicitly. See `docs/CANON.md`.
 
 ## Secrets
 

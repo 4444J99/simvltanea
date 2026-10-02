@@ -99,7 +99,7 @@ class StateTests(unittest.TestCase):
         self.assertNotEqual(c.resolve_at(s,50)['layouts']['portrait'],old['layouts']['portrait'])
 
     def test_orientation_and_viewports_never_mutate_content(self):
-        for n in (3,4,5,6):
+        for n in (3,4,5,6,7):
             s=get_state(n); serial=c.canonical_json(s)
             for frame in (0,24,73,143):
                 content=c.resolve_at(s,frame)['loops']
@@ -218,7 +218,7 @@ class StateTests(unittest.TestCase):
                 self.assertTrue(all(len(x.panels)==n and len(x.placements)==n for x in segments))
 
     def test_invalid_export_and_unsupported_count(self):
-        with self.assertRaises(ValueError):build_artifact001(7)
+        with self.assertRaises(ValueError):build_artifact001(8)
         s=get_state()
         with self.assertRaisesRegex(c.StateError,'even'):c.compile_segments(s,ROOT,'portrait',361,640)
         with self.assertRaisesRegex(c.StateError,'orientation'):c.compile_segments(s,ROOT,'portrait',640,360)
