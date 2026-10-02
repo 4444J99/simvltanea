@@ -2,7 +2,7 @@
 
 Uses the existing browser fixture/transport (HTTP by default, explicit in-memory
 only where required). Never falls back, mocks media clocks, downloads a browser,
-or relaxes browser policy. Synthetic N=7 remains experimental. See the receipt.
+or relaxes browser policy. N=7 uses the supported synthetic engineering pair.
 """
 from __future__ import annotations
 
@@ -182,7 +182,7 @@ class ContinuityTests(unittest.TestCase):
     def test_4(self): self.continuity(4)
     def test_5(self): self.continuity(5)
     def test_6(self): self.continuity(6)
-    def test_7_experimental(self): self.continuity(7)
+    def test_7(self): self.continuity(7)
     def test_container_only(self): self.continuity(3, container=True)
     def test_held_loop_survives_resize(self): self.continuity(3, held=True)
 

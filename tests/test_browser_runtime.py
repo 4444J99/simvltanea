@@ -297,7 +297,7 @@ class BrowserTests(unittest.TestCase):
     def test_4_loop_native_continuity(self):self.continuity(4)
     def test_5_loop_native_continuity(self):self.continuity(5)
     def test_6_loop_native_continuity(self):self.continuity(6)
-    def test_7_loop_experimental_continuity(self):self.continuity(7)
+    def test_7_loop_native_continuity(self):self.continuity(7)
 
     def test_container_resize_without_viewport_change(self):
         page=self.open_preview(3)

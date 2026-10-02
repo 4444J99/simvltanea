@@ -9,12 +9,18 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import sys
 from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+CORE = REPO / 'core'
+if str(CORE) not in sys.path:
+    sys.path.insert(0, str(CORE))
 
 from PIL import Image, ImageChops, ImageStat
 import composition as c
 
-HERE = Path(__file__).resolve().parent
 ROOT = (HERE.parent / 'runtime-proof') if (HERE.parent / 'runtime-proof').exists() else HERE / 'runtime-proof'
 CHECK_FRAMES = (12, 48, 120)
 

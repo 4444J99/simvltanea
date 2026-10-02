@@ -54,7 +54,7 @@ not a tiled repeat of one feed.
 
 ## Supported configurations
 
-Authored engineering pairs currently exist for **2, 3, 4, 5, and 6** loops:
+Authored engineering pairs currently exist for **2 through 7** loops:
 
 | N | Portrait | Landscape |
 | --- | --- | --- |
@@ -63,10 +63,11 @@ Authored engineering pairs currently exist for **2, 3, 4, 5, and 6** loops:
 | 4 | authored | authored |
 | 5 | authored | authored |
 | 6 | authored | authored |
+| 7 | authored | authored |
 
-Seven-loop exports exist only as a named experimental family in the Portvs
-proof receipts. `artifact001_layouts.py` still rejects 7 as an unsupported
-reviewed pair. Do not advertise 7 as a supported configuration.
+The seven-loop pair promotes the previously experimental Portvs geometry into
+the reviewed engineering family. Counts without an authored pair still fail
+explicitly; eight loops are currently unsupported.
 
 Layouts live in [`core/artifact001_layouts.py`](file:///Users/4jp/Workspace/4444J99/simvltanea/core/artifact001_layouts.py). They are synthetic engineering
 geometries, not artist-approved designs.

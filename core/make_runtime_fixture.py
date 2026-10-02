@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Generate labeled original synthetic media, paired data and an experimental N=7.
-
-The seven-loop pair is an explicitly authored engineering experiment, NOT a
-reviewed extension of artifact001_layouts.AUTHORED and NOT recovered historical art.
-"""
+"""Generate labeled original synthetic media and paired data for N=2 through N=7."""
 from __future__ import annotations
 
 import argparse
@@ -22,19 +18,6 @@ from browser_runtime import build_preview
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
 ROOT = REPO_ROOT / 'runtime-proof'
-# Two deliberately specified compositions, not a generated generic grid.
-SEVEN = {
-    'portrait': [('4/100','3/100','92/100','30/100'),
-                 ('4/100','37/100','44/100','18/100'),('52/100','37/100','44/100','18/100'),
-                 ('4/100','58/100','28/100','17/100'),('36/100','58/100','28/100','17/100'),
-                 ('68/100','58/100','28/100','17/100'),('4/100','79/100','92/100','18/100')],
-    'landscape': [('3/100','5/100','38/100','90/100'),
-                  ('45/100','5/100','24/100','26/100'),('73/100','5/100','24/100','26/100'),
-                  ('45/100','36/100','24/100','28/100'),('73/100','36/100','24/100','28/100'),
-                  ('45/100','69/100','24/100','26/100'),('73/100','69/100','24/100','26/100')],
-}
-
-
 def _get_font(name: str, size: int):
     candidates = [name, 'DejaVuSans-Bold.ttf', 'DejaVuSans.ttf', '/System/Library/Fonts/Supplemental/Arial.ttf', '/System/Library/Fonts/Helvetica.ttc', 'Arial.ttf']
     for cand in candidates:
@@ -89,19 +72,11 @@ def prepare(root: Path = ROOT, slice_width: float = 0.5, slice_height: float = 0
         commands.append(command[:-1]+[str(target.relative_to(root))])
     states = []
     for count in (2,3,4,5,6,7):
-        if count < 7:
-            authored = build_artifact001(count)
-            state = c.from_authoring_model(authored,{f'fixtures/loop-{i+1}.mp4':sources[i] for i in range(count)})
-            for layout in state['layouts'].values():
-                layout['name'] += '-labeled-contain-study'
-                for cell in layout['cells']: cell['fit']='contain'
-        else:
-            state = copy.deepcopy(c.load_state(states[-1]))
-            state['sources']=copy.deepcopy(sources)
-            state['loops'].append(dict(id='loop-7',bank=['source-7'],offset='93/50',rate='71/50',period='8',epoch=0,held=False))
-            state['layouts']={orientation:dict(name=f'experimental-seven-{orientation}',cells=[
-                dict(loop=f'loop-{i+1}',rect=list(rect),fit='contain',focal=['1/2','1/2'])
-                for i,rect in enumerate(rects)]) for orientation,rects in SEVEN.items()}
+        authored = build_artifact001(count)
+        state = c.from_authoring_model(authored,{f'fixtures/loop-{i+1}.mp4':sources[i] for i in range(count)})
+        for layout in state['layouts'].values():
+            layout['name'] += '-labeled-contain-study'
+            for cell in layout['cells']: cell['fit']='contain'
         path=root/f'state-{count}.json';c.save_state(state,path);states.append(path)
         build_preview(path,root/f'preview-{count}')
     # Seamed slice field: N=2 with deterministic random crops + seam blur/merge (all configurable via CLI)

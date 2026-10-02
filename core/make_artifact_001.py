@@ -26,7 +26,7 @@ def prepare(root: Path) -> list[Path]:
         (root / child).mkdir(exist_ok=True)
     commands = []
     sources = []
-    for i in range(6):
+    for i in range(7):
         file = root / 'media' / f'loop-{i+1}.mp4'
         command = ['ffmpeg','-hide_banner','-loglevel','error','-y','-filter_threads','1',
                    '-f','lavfi','-i','testsrc2=s=320x320:r=24:d=3',
@@ -51,7 +51,7 @@ def prepare(root: Path) -> list[Path]:
     write_json(root/'sources.json',dict(kind='synthetic-engineering-media',sources=sources+[still_src]))
     from artifact001_layouts import build_artifact001
     paths = []
-    for count in (2,3,4,5,6):
+    for count in (2,3,4,5,6,7):
         authoring = build_artifact001(count)
         source_map = {f'fixtures/loop-{i+1}.mp4': sources[i] for i in range(count)}
         state = from_authoring_model(authoring, source_map)

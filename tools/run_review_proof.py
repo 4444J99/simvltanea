@@ -21,13 +21,16 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent if HERE.name == "tools" else HERE
+TESTS = REPO_ROOT / 'tests'
+if str(TESTS) not in sys.path:
+    sys.path.insert(0, str(TESTS))
 GROUPS = {
     'model': ['test_review_proof', 'test_composition_model', 'test_authoring_contract',
               'test_composition_render', 'test_browser_runtime.PlanTests',
               'test_browser_boundaries.PlanBoundaryTests'],
     'counts-3-5': [f'test_browser_runtime.BrowserTests.test_{n}_loop_native_continuity' for n in (3,4,5)],
     'counts-6-7': ['test_browser_runtime.BrowserTests.test_6_loop_native_continuity',
-                   'test_browser_runtime.BrowserTests.test_7_loop_experimental_continuity'],
+                   'test_browser_runtime.BrowserTests.test_7_loop_native_continuity'],
     'load-resize': ['test_browser_runtime.BrowserTests.test_container_resize_without_viewport_change',
                     'test_browser_runtime.BrowserTests.test_browser_rejects_altered_media_before_mounting',
                     'test_browser_runtime.BrowserTests.test_resize_while_media_is_loading'],
@@ -40,7 +43,7 @@ GROUPS = {
     'hold-still': ['test_browser_boundaries.NativeBoundaryTests.test_hold_resize_release_and_finish_are_not_restarts',
                    'test_browser_boundaries.NativeBoundaryTests.test_still_video_swap_preserves_loop_boxes_and_unrelated_video'],
     'independent-a': ['test_browser_continuity.ContinuityTests.test_3', 'test_browser_continuity.ContinuityTests.test_4', 'test_browser_continuity.ContinuityTests.test_5', 'test_browser_continuity.ContinuityTests.test_6'],
-    'independent-b': ['test_browser_continuity.ContinuityTests.test_7_experimental', 'test_browser_continuity.ContinuityTests.test_container_only', 'test_browser_continuity.ContinuityTests.test_held_loop_survives_resize', 'test_browser_continuity.ContinuityTests.test_reject_wrong_layout'],
+    'independent-b': ['test_browser_continuity.ContinuityTests.test_7', 'test_browser_continuity.ContinuityTests.test_container_only', 'test_browser_continuity.ContinuityTests.test_held_loop_survives_resize', 'test_browser_continuity.ContinuityTests.test_reject_wrong_layout'],
     'independent-c': ['test_browser_continuity.ContinuityTests.test_reject_time_reset', 'test_browser_continuity.ContinuityTests.test_reject_same_source_reload', 'test_browser_continuity.ContinuityTests.test_reject_source_reroll', 'test_browser_continuity.ContinuityTests.test_reject_transient_duplicate'],
     'independent-d': ['test_browser_continuity.ContinuityTests.test_reject_transient_removal', 'test_browser_continuity.ContinuityTests.test_reject_same_id_replacement', 'test_browser_continuity.ContinuityTests.test_reject_pause', 'test_browser_continuity.ContinuityTests.test_reject_rate_change'],
 }
