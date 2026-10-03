@@ -1,19 +1,34 @@
 # Plans Index — SIMVLTANEA
 
-> Chronological, never overwritten (`YYYY-MM-DD-{slug}.md`). This index is generative with decay — regenerated when plans are added.
+Generated from dated plan filenames and their first level-one headings.
+Regenerate with `python3 -m tools.verification.sync_plan_index --write`.
+Check without writing with `python3 -m tools.verification.sync_plan_index`.
 
-| Date | Slug | Title | Branch |
-| --- | --- | --- | --- |
-| 2026-09-10 | stewardship-plan | Stewardship plan (governance + lane constitution) | main |
-| 2026-09-10 | seamed-slice-field | Seamed slice field spec | main |
-| 2026-09-10 | closeout | Closeout — slice+config lane audit | main |
-| 2026-09-11 | closeout | Closeout — final 00:17 integration | main |
-| 2026-09-11 | glap-closure | GLAP closure plan (5-gap sequenced) | main |
-| 2026-09-11 | glap-closeout | GLAP closeout — healing pending CI | main |
-| 2026-09-11 | final-closeout | Final closeout — glap session verified | main |
-| 2026-09-11 | work-verify-audit | Work audit lane/verify — browser-deps H.264 + layouts guard | lane/verify @ 7342a7c (PR #6 merged work→lane) |
-| 2026-09-11 | work-expand-audit | Work audit lane/expand — 1080p full + seamed slice | lane/expand @ 04e60f2 (PR #7 merged work→lane) |
-| 2026-09-11 | green-trunk | Green trunk — H.264 fix proven, ledger, governance closure | main (this plan) |
-| 2026-10-02 | n7-authored-layouts | N=7 authored layouts spec — geometry decision and acceptance gate | main (this plan) |
+Dated source records remain immutable. A plan title is not current completion
+evidence; branch, PR and workflow state belong in the current status projection.
 
-All plans are tracked, dated, and indexed. Generated lanes (`runtime-proof/`, `artifact-001/renders/`) remain gitignored and proven via `git check-ignore -v`.
+| Date | Plan | Recorded title |
+| --- | --- | --- |
+| 2026-09-10 | [closeout](2026-09-10-closeout.md) | Closeout — SIMVLTANEA (2026-09-10 23:35 UTC) |
+| 2026-09-10 | [seamed-slice-field](2026-09-10-seamed-slice-field.md) | Plan — Seamed Slice Field (2026-09-10) |
+| 2026-09-10 | [stewardship-plan](2026-09-10-stewardship-plan.md) | Stewardship Plan — SIMVLTANEA (2026-09-10) |
+| 2026-09-11 | [closeout-4311a42](2026-09-11-closeout-4311a42.md) | Closeout — SIMVLTANEA (2026-09-11 22:15 UTC) — Lane `main` @ `4311a42` |
+| 2026-09-11 | [closeout](2026-09-11-closeout.md) | Closeout — SIMVLTANEA (2026-09-11 00:17 UTC) |
+| 2026-09-11 | [final-closeout](2026-09-11-final-closeout.md) | Closeout — SIMVLTANEA (2026-09-11 00:52 UTC) |
+| 2026-09-11 | [glap-closeout](2026-09-11-glap-closeout.md) | Closeout — SIMVLTANEA (2026-09-11 20:50 UTC) |
+| 2026-09-11 | [glap-closure](2026-09-11-glap-closure.md) | GLAP Closure — Full Implementation Plan (2026-09-11) |
+| 2026-09-11 | [green-trunk](2026-09-11-green-trunk.md) | Green Trunk — SIMVLTANEA (2026-09-11 21:45 UTC) |
+| 2026-09-11 | [work-expand-audit](2026-09-11-work-expand-audit.md) | Work Audit — lane/expand full-renders (2026-09-11) |
+| 2026-09-11 | [work-verify-audit](2026-09-11-work-verify-audit.md) | Work Audit — lane/verify browser-deps (2026-09-11) |
+| 2026-10-02 | [feature-encapsulation](2026-10-02-feature-encapsulation.md) | Feature encapsulation |
+| 2026-10-02 | [n7-authored-layouts](2026-10-02-n7-authored-layouts.md) | Plan — N=7 Authored Layouts (2026-10-02) |
+| 2026-10-02 | [python-imports-and-verification](2026-10-02-python-imports-and-verification.md) | Python imports and full verification |
+
+## Generated output roles
+
+`artifact_output` → `var/artifact-001`.  
+`proofs` → `var/proofs`.  
+`renders` → `var/renders`.  
+`work` → `var/work`.  
+
+These locations are derived from the current layout authority, not historical paths.
