@@ -2,7 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
-from tools.verification.sync_plan_index import render
+from tools.verification.sync_plan_index import generated_roles, render
 
 
 class PlanIndexTests(unittest.TestCase):
@@ -31,6 +31,21 @@ class PlanIndexTests(unittest.TestCase):
             root = Path(temp); (root / "2026-10-03-title.md").write_text("no heading\n")
             with self.assertRaises(ValueError):
                 render(root, {})
+
+    def test_all_generated_roles_and_path_changes_are_projected(self):
+        from types import SimpleNamespace
+        roles = {name: "var/" + name for name in ("work", "samples", "renders", "site", "packages", "proofs", "artifact_output")}
+        roles.update(generated="var", docs="docs")
+        layout = SimpleNamespace(roles=roles, path=lambda role: Path("/workspace") / roles[role], relative=lambda role: roles[role])
+        self.assertEqual(set(generated_roles(layout)), set(roles) - {"generated", "docs"})
+        with tempfile.TemporaryDirectory() as temp:
+            before = render(Path(temp), generated_roles(layout))
+            for role in ("samples", "site", "packages"):
+                roles[role] = "var/changed-" + role
+                after = render(Path(temp), generated_roles(layout))
+                self.assertNotEqual(before, after)
+                self.assertIn(roles[role], after)
+                before = after
 
     def test_ignores_its_own_projection(self):
         with tempfile.TemporaryDirectory() as temp:

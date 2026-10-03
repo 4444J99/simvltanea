@@ -32,13 +32,20 @@ def render(plans: Path, generated_roles: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def generated_roles(layout) -> dict[str, str]:
+    """Derive every generated child from the effective layout's checked boundary."""
+    boundary = layout.path("generated")
+    return {role: layout.relative(role) for role in layout.roles
+            if role != "generated" and layout.path(role).is_relative_to(boundary)}
+
+
 def main() -> int:
     from tools.paths import LAYOUT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args()
     plans = LAYOUT.path("docs") / "plans"
-    text = render(plans, {role: LAYOUT.relative(role) for role in ("proofs", "artifact_output", "renders", "work")})
+    text = render(plans, generated_roles(LAYOUT))
     target = plans / "INDEX.md"
     if args.write:
         if target.is_symlink():

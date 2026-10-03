@@ -27,8 +27,11 @@ evidence; branch, PR and workflow state belong in the current status projection.
 ## Generated output roles
 
 `artifact_output` → `var/artifact-001`.  
+`packages` → `var/packages`.  
 `proofs` → `var/proofs`.  
 `renders` → `var/renders`.  
+`samples` → `var/samples`.  
+`site` → `var/site`.  
 `work` → `var/work`.  
 
 These locations are derived from the current layout authority, not historical paths.
