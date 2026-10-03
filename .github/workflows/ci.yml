@@ -28,6 +28,7 @@ jobs:
           from tools.paths import LAYOUT
           for key, name in (("naming", "ls-lint.yml"), ("markdown", "markdownlint.json"), ("markdown_ignore", "markdownlintignore")):
               print(f"{key}={LAYOUT.relative('config')}/lint/{name}")
+          print(f"proofs={LAYOUT.relative('proofs')}")
           PY
 
       - name: ls-lint
@@ -87,6 +88,17 @@ jobs:
           python3 -c "import PIL; print(f'Pillow {PIL.__version__}')"
           python3 -c "import importlib.metadata; print(f'playwright {importlib.metadata.version(\"playwright\")}')"
           python3 -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()"
+
+      - name: Measure retained archive media before catalogue repair
+        run: python3 -m tools.verification.verify_archive_media
+
+      - name: Preserve retained-media byte and stream evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: archive-media-${{ github.sha }}
+          path: ${{ steps.layout.outputs.proofs }}/archive-media/run-*/receipt.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Generate runtime proof fixtures
         run: |
