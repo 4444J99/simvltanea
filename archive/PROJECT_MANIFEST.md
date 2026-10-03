@@ -302,10 +302,10 @@ archive/
 
 ---
 
-### [`MEDA-003`](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/chatgpt/media/MEDA-003_visual-form-canon-7-landscape.mp4): Experimental 7-Loop Landscape Render MP4
-- **File**: [`archive/chatgpt/media/MEDA-003_visual-form-canon-7-landscape.mp4`](file:///Users/4jp/Workspace/4444J99/simvltanea/archive/chatgpt/media/MEDA-003_visual-form-canon-7-landscape.mp4)
-- **Size**: 537,344 bytes | **SHA-256**: `3f7dad91e331c9a632e8b61c83c27181057fa75fa05ec68db4c5b3671239c090`
-- **Format**: MP4 Video (H.264 / AAC)
+### [`MEDA-003`](chatgpt/media/MEDA-003_visual-form-canon-7-landscape.mp4): Experimental 7-Loop Landscape Render MP4
+- **File**: [`archive/chatgpt/media/MEDA-003_visual-form-canon-7-landscape.mp4`](chatgpt/media/MEDA-003_visual-form-canon-7-landscape.mp4)
+- **Size**: 537,344 bytes | **SHA-256**: `3f7dad91e3313541744231b16559733e45c4c34b7787d3e05d3de6b04c3d924e`
+- **Format**: MP4 Video (H.264, 640x360, 6 seconds; no audio stream)
 - **Tags**: `#experimental-7-loop`, `#landscape-render`, `#video-mp4`
 - **Annotation**: Moving video export demonstrating the experimental $N=7$ horizontal layout.
 

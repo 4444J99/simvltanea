@@ -98,7 +98,7 @@ write_path = "Append or annotate the canonical catalog; do not rewrite originals
 refresh = "Review provenance additions and refresh this pin in the same PR"
 drift_check = "Git blob pin; not an independent backup or rights verification"
 conflict = "resolved"
-git_blob = "534698868757303d0b109d5584a855f3d0ad8277"
+git_blob = "3ab9ca33ba3a96874be173ab2d59f35032fa18d9"
 
 [repository_profile.concepts.repository-profile]
 term = "repository-profile"
