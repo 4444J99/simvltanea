@@ -1,4 +1,4 @@
-"""Bind the retained portrait study's catalogue entry to its unchanged media."""
+"""Bind the retained N=7 studies' catalogue entry to its unchanged media."""
 import hashlib
 import json
 from pathlib import Path
@@ -16,14 +16,23 @@ EXPECTED_FORMAT = "MP4 Video (H.264, 360x640, 6 seconds; no audio stream)"
 
 class ArchiveMediaProvenanceTests(unittest.TestCase):
     """Check the catalogue against the unchanged, experimental portrait media."""
+    identity = "MEDA-002"
+    relative_media = RELATIVE_MEDIA
+    expected_sha256 = EXPECTED_SHA256
+    expected_format = EXPECTED_FORMAT
+    expected_bytes = 517743
+    width, height = 360, 640
+    orientation = "vertical"
+
     def setUp(self):
-        """Isolate the unique MEDA-002 entry before each assertion."""
+        """Isolate the selected catalogue entry before each assertion."""
         manifest = (ROOT / "archive" / "PROJECT_MANIFEST.md").read_text(encoding="utf-8")
         entries = re.findall(
-            r"^### \[`MEDA-002`\].*?(?=^---|\Z)", manifest, re.MULTILINE | re.DOTALL
+            rf"^### \[`{self.identity}`\].*?(?=^---|\Z)", manifest, re.MULTILINE | re.DOTALL
         )
-        self.assertEqual(len(entries), 1, "MEDA-002 must have one catalogue entry")
+        self.assertEqual(len(entries), 1, f"{self.identity} must have one catalogue entry")
         self.entry = entries[0]
+        self.media = ROOT / "archive" / self.relative_media
 
     def test_manifest_matches_pinned_metadata(self):
         """Require the corrected metadata and retain the experimental boundary."""
@@ -32,22 +41,22 @@ class ArchiveMediaProvenanceTests(unittest.TestCase):
             self.entry,
             re.MULTILINE,
         )
-        self.assertEqual(metadata, [("517,743", EXPECTED_SHA256)])
-        self.assertIn(f"- **Format**: {EXPECTED_FORMAT}\n", self.entry)
+        self.assertEqual(metadata, [(f"{self.expected_bytes:,}", self.expected_sha256)])
+        self.assertIn(f"- **Format**: {self.expected_format}\n", self.entry)
         self.assertIn("`#experimental-7-loop`", self.entry)
-        self.assertIn("experimental $N=7$ vertical layout", self.entry)
+        self.assertIn(f"experimental $N=7$ {self.orientation} layout", self.entry)
 
     def test_manifest_uses_portable_file_links(self):
         """Require both catalogue links to address the repository-relative file."""
         links = re.findall(r"\]\(([^)]+)\)", self.entry)
-        self.assertEqual(links, [RELATIVE_MEDIA, RELATIVE_MEDIA])
+        self.assertEqual(links, [self.relative_media, self.relative_media])
 
     def test_retained_media_bytes(self):
         """Reject a replaced, modified, missing or symlinked media artifact."""
-        self.assertFalse(MEDIA.is_symlink())
-        payload = MEDIA.read_bytes()
-        self.assertEqual(len(payload), 517743)
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), EXPECTED_SHA256)
+        self.assertFalse(self.media.is_symlink())
+        payload = self.media.read_bytes()
+        self.assertEqual(len(payload), self.expected_bytes)
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), self.expected_sha256)
 
     def test_retained_media_streams(self):
         """Probe the actual file for its sole video stream and six-second duration."""
@@ -55,14 +64,14 @@ class ArchiveMediaProvenanceTests(unittest.TestCase):
             [
                 "ffprobe", "-v", "error", "-show_entries",
                 "stream=codec_type,codec_name,width,height:format=duration",
-                "-of", "json", str(MEDIA),
+                "-of", "json", str(self.media),
             ],
             capture_output=True, text=True, check=True, timeout=30,
         )
         probe = json.loads(result.stdout)
         self.assertEqual(
             probe["streams"],
-            [{"codec_name": "h264", "codec_type": "video", "width": 360, "height": 640}],
+            [{"codec_name": "h264", "codec_type": "video", "width": self.width, "height": self.height}],
         )
         self.assertAlmostEqual(float(probe["format"]["duration"]), 6.0, places=3)
 
@@ -70,11 +79,22 @@ class ArchiveMediaProvenanceTests(unittest.TestCase):
         """Decode the complete retained video, failing on any FFmpeg error."""
         subprocess.run(
             [
-                "ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i", str(MEDIA),
+                "ffmpeg", "-nostdin", "-v", "error", "-xerror", "-i", str(self.media),
                 "-map", "0:v:0", "-f", "null", "-",
             ],
             capture_output=True, text=True, check=True, timeout=30,
         )
+
+
+class LandscapeMediaProvenanceTests(ArchiveMediaProvenanceTests):
+    """Apply the same actual-byte, stream and catalogue gates to MEDA-003."""
+    identity = "MEDA-003"
+    relative_media = "chatgpt/media/MEDA-003_visual-form-canon-7-landscape.mp4"
+    expected_sha256 = "3f7dad91e3313541744231b16559733e45c4c34b7787d3e05d3de6b04c3d924e"
+    expected_format = "MP4 Video (H.264, 640x360, 6 seconds; no audio stream)"
+    expected_bytes = 537344
+    width, height = 640, 360
+    orientation = "horizontal"
 
 
 if __name__ == "__main__":
