@@ -33,7 +33,7 @@ class RepositoryProfileTests(unittest.TestCase):
         self.assertEqual(report["classified_roles"], 22)
         self.assertEqual({item["canonical_path"] for item in report["objects"]}, {
             "tools/verification/verify_repository_profile.py",
-            "tests/governance/test_repository_profile.py",
+            "tools/verification/test_repository_profile.py",
             "docs/governance/REPOSITORY_PROFILE.md",
         })
 

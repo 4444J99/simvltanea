@@ -88,7 +88,7 @@ write_path = "Owner-reviewed PR to the existing ls-lint policy; no competing nam
 refresh = "Review consumer compatibility before refreshing this pin"
 drift_check = "Git blob pin plus existing ls-lint execution in CI"
 conflict = "resolved"
-git_blob = "3f3f5a48299fe1ec176ca93bbb6c2c79c904d7df"
+git_blob = "faf6e3b6f0d17c507f696cfdc39a73b3109d9793"
 
 [repository_profile.authorities.provenance]
 fact = "historical-archive-catalog"
@@ -113,12 +113,12 @@ extension = ".py"
 definition = "Read-only operational validation command; tools/verification owns verification rather than runtime authoring"
 
 [repository_profile.classes.governance-test]
-role = "tests"
-area = "governance"
+role = "tools"
+area = "verification"
 prefix = "test"
 case = "snake"
 extension = ".py"
-definition = "Executable governance contract tests discovered by the existing unittest and pytest configurations"
+definition = "Co-located executable governance contract tests discovered by pytest and the historical unittest bridge"
 
 [repository_profile.classes.governance-guide]
 role = "docs"
