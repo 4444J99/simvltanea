@@ -1,0 +1,71 @@
+name: Package Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wheel-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve generated paths
+        id: layout
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          from tools.paths import LAYOUT
+          print(f"packages={LAYOUT.relative('packages')}/installed-wheel")
+          print(f"proofs={LAYOUT.relative('proofs')}/installed-wheel")
+          PY
+
+      - name: Preserve source inputs without generated or personal media
+        env:
+          PACKAGE_DIR: ${{ steps.layout.outputs.packages }}
+        run: |
+          mkdir -p "$PACKAGE_DIR"
+          git rev-parse HEAD > "$PACKAGE_DIR/source-commit.txt"
+          git ls-tree -r HEAD > "$PACKAGE_DIR/source-tree.txt"
+          git archive --format=tar.gz HEAD pyproject.toml README.md LICENSE .gitignore \
+            .github config docs editions examples fixtures src tests tools > "$PACKAGE_DIR/source.tar.gz"
+
+      - name: Install explicit system prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Build wheel and verify isolated consumer
+        env:
+          PACKAGE_DIR: ${{ steps.layout.outputs.packages }}
+        run: |
+          python -m pip wheel --no-deps --wheel-dir "$PACKAGE_DIR" .
+          python -m tools.verification.verify_installed_wheel --wheel "$PACKAGE_DIR"/*.whl
+
+      - name: Preserve wheel and measured verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: installed-wheel-${{ github.sha }}
+          path: |
+            ${{ steps.layout.outputs.packages }}/
+            ${{ steps.layout.outputs.proofs }}/run-*/receipt.json
+          if-no-files-found: error
+          retention-days: 7
