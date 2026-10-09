@@ -14,6 +14,8 @@
 | 2026-09-11 | work-verify-audit | Work audit lane/verify — browser-deps H.264 + layouts guard | lane/verify @ 7342a7c (PR #6 merged work→lane) |
 | 2026-09-11 | work-expand-audit | Work audit lane/expand — 1080p full + seamed slice | lane/expand @ 04e60f2 (PR #7 merged work→lane) |
 | 2026-09-11 | green-trunk | Green trunk — H.264 fix proven, ledger, governance closure | main (this plan) |
-| 2026-10-02 | n7-authored-layouts | N=7 authored layouts spec — geometry decision and acceptance gate | main (this plan) |
+| 2026-10-02 | n7-authored-layouts | N=7 authored layouts spec — geometry decision and acceptance gate | main |
+| 2026-10-02 | feature-encapsulation | Feature encapsulation | main |
+| 2026-10-02 | python-imports-and-verification | Python imports and full verification | main |
 
 All plans are tracked, dated, and indexed. Generated lanes (`runtime-proof/`, `artifact-001/renders/`) remain gitignored and proven via `git check-ignore -v`.
