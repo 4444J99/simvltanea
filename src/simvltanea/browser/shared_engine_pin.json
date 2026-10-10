@@ -5,12 +5,14 @@
   "release": {
     "repository": "time-moment-brief",
     "branch": "agent7-stable-playback-base",
-    "commit": "55e624cd2fdb4450acbd959ca40ca0668e7167a1"
+    "commit": "29f52a269eae997f279e16b8d93441ce999b9b3c"
   },
   "runtime_graph": {
-    "shared-engine/index.js": "bd433fd92c93b3232e23711cb659ca2e94a1f93d60ad5af43c5fd9a9a65cf10a",
-    "shared-engine/src/panoramic-projection.js": "ff4a2d52a82b108c35800bfc81850ddde9913f38c1d351cc9964a7c68c6b3f14",
-    "shared-engine/src/spatial-score.js": "15437959714f12999220e47582e677bc78ae492e3b7f0f0ef59a75bc5beed4ee",
-    "shared-engine/src/video-texture.js": "2090163e7813bb0d3b43667fc9ff315e1847580749daffa93a19a1cd86a26ede"
+    "shared-engine/index.js": "7ce10f4fce00cfe6ab727844353628f2eb282cffc01f6b1113ec2c8df269fed0",
+    "shared-engine/src/foa.js": "b927f3c3c54da29a11b537a136cc1f82dc401d130b3cd5fea532d9d7426a0d4b",
+    "shared-engine/src/orientation-controller.js": "344b82f342099437bdc39a255af9c2bc9244f1b797a2f3005e0c26e74c42aeae",
+    "shared-engine/src/panoramic-projection.js": "2c21b58caad2919dc64933c8246097d0e6f42b2d0f49fd394e669d738ce06027",
+    "shared-engine/src/spatial-score.js": "4a324cd5b596686e3957add86a603df163bc088c4c675d75500c1cef4fa3017e",
+    "shared-engine/src/video-texture.js": "196d356c2bc49fd0b8068dac7818e5d262526dbb88055e3456b96274d8b16603"
   }
 }
