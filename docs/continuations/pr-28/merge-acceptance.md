@@ -28,3 +28,9 @@ transient disk and swap-growth admission denials. Exclusive heavy ownership,
 critical pressure, disk and backup checks remained active. The lease was released.
 No private originals or prior budget records were changed. Physical source/device
 acceptance remains in TMB acceptance PR #4; this receipt certifies integration.
+
+The remote naming gate exposed the adapter's kebab-case source filename. It now
+uses the repository's snake_case convention; staged browser URLs stay unchanged.
+The merge-policy launcher also needs the installed Python 3.14 runtime (which has
+PyYAML); Python 3.15 could not read the deploy registry and misclassified every
+change as a website deployment. No deployment classification or policy was edited.

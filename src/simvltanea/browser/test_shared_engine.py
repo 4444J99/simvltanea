@@ -26,7 +26,7 @@ from simvltanea.browser.shared_engine import (
 
 HERE = Path(__file__).resolve().parent
 TMB_ADAPTER = 'webcodecs-spike/shared-engine-adapter.js'
-SIMVLTANEA_ADAPTER = HERE / 'shared-engine-adapter.js'
+SIMVLTANEA_ADAPTER = HERE / 'shared_engine_adapter.js'
 LAYOUT = {'panels': 4, 'duration': 8.0, 'sweep': 1.4, 'elevation': 0.35}
 
 

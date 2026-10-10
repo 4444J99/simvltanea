@@ -90,7 +90,7 @@ def stage_shared_engine(output: Path) -> dict | None:
         shutil.copyfile(source, target)
     # Authenticate the destination, including mutations between resolve and copy.
     staged_digests = _verify_graph(module_dir, engine.pin)
-    shutil.copyfile(HERE / 'shared-engine-adapter.js', output / 'shared-engine-adapter.js')
+    shutil.copyfile(HERE / 'shared_engine_adapter.js', output / 'shared-engine-adapter.js')
     # The browser entry publishes the module as a global the runtime can reach.
     # It imports rather than inlines, so the bytes the page runs are the bytes
     # that were verified.
