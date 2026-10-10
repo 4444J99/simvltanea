@@ -67,3 +67,16 @@ output arguments still have to satisfy their command's containment rules.
 Inventory reports preserve logical lane IDs for policy decisions and include a
 `directory` field containing the configured generated-root-relative location.
 Generated receipt paths use the configured locations as well.
+
+## Repository-specific semantic derivation
+
+The additive `repository_profile` table characterizes the existing roles and
+registers a bounded set of maintenance objects. Its class and concept facts
+derive proposed paths through these same logical roles. It does not replace
+the effective layout contract or automatically move files.
+
+See the [repository profile and deliverable index](REPOSITORY_PROFILE.md) for
+authority, compatibility, scope, exceptions, evidence, and activation gates.
+Preview locally with `python3 -m tools.verification.verify_repository_profile --json`;
+add `--check` for a read-only, scoped authority and registered-file audit. The
+initial profile is draft; blocking activation is not available.

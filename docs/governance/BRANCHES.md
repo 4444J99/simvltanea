@@ -10,9 +10,9 @@ History: linear, no force-push to `main`. All changes via PR. Preserve history (
 | Branch | Purpose | Merge into | Green means |
 | --- | --- | --- | --- |
 | `main` | Production-true trunk. Always releasable. No direct work commits. | tags / releases | required CI (`CI Verification` on `ubuntu-latest`: full tests, naming, structure, changed Markdown, and lifecycle gates) passes; `visual-form-composition/v1` invariants hold |
-| `lane/verify` | Proof: tests, contracts, CI, reproducibility, visual proof regen | `main` | verification suite strictly stronger or equal; `python3 core/make_artifact_001.py` idempotent; browser continuity probe green |
+| `lane/verify` | Proof: tests, contracts, CI, reproducibility, visual proof regen | `main` | verification suite strictly stronger or equal; `PYTHONPATH=src python3 -m simvltanea.make_artifact_001` idempotent; browser continuity probe green |
 | `lane/heal` | Repair of known broken or rotting behavior, docs/governance debt that blocks shipping | `main` | previously failing paths pass; governance updated |
-| `lane/expand` | Complete already-stated scope: edition coverage N=3..6, ingestion factories, remaining jurisdictions/features | `main` | new coverage verified (`tools/verify_editions.py`, `tools/edition_status.py`), not merely sketched |
+| `lane/expand` | Complete already-stated scope: edition coverage N=3..6, ingestion factories, remaining jurisdictions/features | `main` | new coverage verified (`python3 -m tools.verification.verify_editions`, `python3 -m tools.editions.edition_status`), not merely sketched |
 | `lane/evolve` | Structural improvement implied by current purpose (e.g., Audio v1.1, authored N=7) | `main` | behavior preserved except documented changes; spec PR precedes code |
 
 Dormant lanes stay listed here until explicitly retired by a PR updating this file. A lane with no work for a long time is marked "dormant" — not deleted.
@@ -40,7 +40,7 @@ Rules:
 
 ## Worktree map
 
-One worktree per active working branch. The `work/` directory itself is a gitignored lane cache (see `.gitignore:work/*`), not a worktree container.
+One worktree per active working branch. The `var/work/` directory itself is a gitignored lane cache (see the `work` role in `src/simvltanea/layout.toml`), not a worktree container.
 
 ```bash
 # Example: create lane worktrees adjacent to the repo
@@ -50,7 +50,7 @@ git worktree add ../simvltanea-wt-expand lane/expand
 git worktree list
 ```
 
-Do not create worktrees inside `work/` — that directory is ignored and disposable.
+Do not create worktrees inside `var/work/` — that directory is ignored and disposable.
 
 ## What must never live on `main`
 

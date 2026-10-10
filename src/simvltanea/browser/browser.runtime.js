@@ -453,34 +453,38 @@ runtime.seek = async seconds => {
   record('transport-seek',null,{time:seconds}); setStatus('paused','Paused · click or Space to resume');
   if (wasRunning) await runtime.start();
 };
-runtime.snapshot = () => ({
-  frame: runtime.frame, wall: performance.now(), orientation: runtime.orientation,
-  running: runtime.running, finished: runtime.finished, error: runtime.error,
-  compositionTime:compositionTime(),
-  /* The shared engine's contribution, reported so a test can assert the module
-   * actually ran rather than inferring it from unchanged panel framing. */
-  sharedEngine:{
-    build:runtime.sharedEngineBuild??null,
-    panels:runtime.sharedEnginePanels??0,
-    error:runtime.sharedEngineError??null,
-    poses:panelDriver ? panelDriver.evaluate(compositionTime()).map(
-      pose=>({azimuth:pose.azimuth,elevation:pose.elevation,fov:pose.fov})) : [],
-  },
-  audio:{mode:runtime.audio.mode,enabled:runtime.audio.enabled,contextState:runtime.audio.context?.state??null,
-    blocked:runtime.audio.blocked??null,
-    soundtrackPlaying:!!runtime.audio.source,gain:runtime.audio.gain?.gain.value??null},
-  loops: [...runtime.nodes.values()].map(n => ({
-    id:n.id, source:n.source, kind:n.kind, currentTime:n.media.currentTime ?? null,
-    rate:n.media.playbackRate ?? 0, paused:n.media.paused ?? true, readyState:n.media.readyState ?? null,
-    busy:n.busy, callbacks:n.callbacks, decoded:n.decoded,
-    audio:n.audio ? {gain:n.audio.gain.gain.value,pan:n.audio.pan.pan.value}:null,
-    rect:n.box.getBoundingClientRect().toJSON(),
-    quality:n.media.getVideoPlaybackQuality?.().toJSON?.() ?? (n.kind === 'video' ? {
-      totalVideoFrames:n.media.getVideoPlaybackQuality().totalVideoFrames,
-      droppedVideoFrames:n.media.getVideoPlaybackQuality().droppedVideoFrames} : null),
-  })),
-  eventCount: runtime.events.length,
-});
+runtime.snapshot = () => {
+  // Bind every derived value to the same instant, including while playing.
+  const sampledTime = compositionTime();
+  return {
+    frame: runtime.frame, wall: performance.now(), orientation: runtime.orientation,
+    running: runtime.running, finished: runtime.finished, error: runtime.error,
+    compositionTime:sampledTime,
+    /* The shared engine's contribution, reported so a test can assert the module
+     * actually ran rather than inferring it from unchanged panel framing. */
+    sharedEngine:{
+      build:runtime.sharedEngineBuild??null,
+      panels:runtime.sharedEnginePanels??0,
+      error:runtime.sharedEngineError??null,
+      poses:panelDriver ? panelDriver.evaluate(sampledTime).map(
+        pose=>({azimuth:pose.azimuth,elevation:pose.elevation,fov:pose.fov})) : [],
+    },
+    audio:{mode:runtime.audio.mode,enabled:runtime.audio.enabled,contextState:runtime.audio.context?.state??null,
+      blocked:runtime.audio.blocked??null,
+      soundtrackPlaying:!!runtime.audio.source,gain:runtime.audio.gain?.gain.value??null},
+    loops: [...runtime.nodes.values()].map(n => ({
+      id:n.id, source:n.source, kind:n.kind, currentTime:n.media.currentTime ?? null,
+      rate:n.media.playbackRate ?? 0, paused:n.media.paused ?? true, readyState:n.media.readyState ?? null,
+      busy:n.busy, callbacks:n.callbacks, decoded:n.decoded,
+      audio:n.audio ? {gain:n.audio.gain.gain.value,pan:n.audio.pan.pan.value}:null,
+      rect:n.box.getBoundingClientRect().toJSON(),
+      quality:n.media.getVideoPlaybackQuality?.().toJSON?.() ?? (n.kind === 'video' ? {
+        totalVideoFrames:n.media.getVideoPlaybackQuality().totalVideoFrames,
+        droppedVideoFrames:n.media.getVideoPlaybackQuality().droppedVideoFrames} : null),
+    })),
+    eventCount: runtime.events.length,
+  };
+};
 // Tests may supply file-backed IO without enabling network access. Playback,
 // layout, integrity comparisons and event handling use the identical code path.
 const io = window.compositionIO || {

@@ -4,8 +4,8 @@
   "entrypoint": "shared-engine/index.js",
   "release": {
     "repository": "time-moment-brief",
-    "branch": "agent7-stable-playback-base",
-    "commit": "7fa91812369b5b60f09b733565c9a2507ea177ab"
+    "branch": "main",
+    "commit": "e5900ef98fa7a9644af1708e0e6c6cbbcde5b180"
   },
   "runtime_graph": {
     "shared-engine/index.js": "7ce10f4fce00cfe6ab727844353628f2eb282cffc01f6b1113ec2c8df269fed0",
