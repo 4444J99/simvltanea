@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import unittest
@@ -80,10 +81,22 @@ class ResolutionTest(unittest.TestCase):
         return load_pin()['runtime_graph']
 
     def test_release_is_accepted_not_stale(self) -> None:
+        """The ambient owner checkout is accepted, or provably unprovable.
+
+        A shallow clone of the accepted branch is a legitimate checkout: its bytes
+        are verified, but ancestry cannot be walked. The test asserts the reported
+        status is honest about which of those it is, rather than hardcoding
+        "accepted" -- which is what made it fail in a fresh-path clone where the
+        owner is shallow.
+        """
         pinned = self.pin_graph_release()
-        self.assertTrue(
-            _contains(self.engine.root, pinned),
-            f'{self.engine.root} does not contain the accepted release {pinned[:12]}')
+        shallow = _is_shallow(self.engine.root)
+        if shallow:
+            self.assertIn('shallow', self.engine.release_status)
+        else:
+            self.assertEqual(self.engine.release_status, 'accepted')
+            self.assertTrue(_contains(self.engine.root, pinned),
+                            f'{self.engine.root} does not contain {pinned[:12]}')
 
     @staticmethod
     def pin_graph_release() -> str:
@@ -120,6 +133,13 @@ def _contains(root: Path, commit: str) -> bool:
     return result.returncode == 0
 
 
+def _is_shallow(root: Path) -> bool:
+    result = subprocess.run(
+        ['git', '-C', str(root), 'rev-parse', '--is-shallow-repository'],
+        capture_output=True, text=True, timeout=15, check=False)
+    return result.returncode == 0 and result.stdout.strip() == 'true'
+
+
 class RefusalTest(unittest.TestCase):
     """Each case is a defect the review probe found and the old resolver accepted."""
 
@@ -129,17 +149,83 @@ class RefusalTest(unittest.TestCase):
         self.owner = self.staging / 'time-moment-brief'
 
     def clone_owner(self) -> Path:
-        """A real git checkout of the owner, so release checks are meaningful.
+        """A self-contained owner fixture with full, known history.
 
-        A plain directory copy would have no history, and the resolver would
-        refuse it for the wrong reason -- which would make every refusal test
-        below pass for a reason that has nothing to do with what it tests.
+        Cloning the ambient owner checkout made these tests depend on that
+        checkout's depth: a shallow ambient clone produced a shallow fixture whose
+        ancestry could not be walked, so a genuine staleness case read as
+        unprovable. A tiny repository built here has exactly the history each case
+        needs, and the module bytes are copied from the verified source so the
+        digest checks still exercise real content.
         """
-        subprocess.run(
-            ['git', 'clone', '-q', '--no-hardlinks', '--shared', '--branch',
-             'agent7-stable-playback-base', str(self.engine.root), str(self.owner)],
-            capture_output=True, text=True, check=True, timeout=120)
+        subprocess.run(['git', 'init', '-q', '-b', 'main', str(self.owner)],
+                       capture_output=True, text=True, check=True, timeout=60)
+        shutil.copytree(self.engine.module_root, self.owner / 'shared-engine')
+        git = ['git', '-C', str(self.owner)]
+        env = dict(os.environ, GIT_AUTHOR_NAME='fixture', GIT_AUTHOR_EMAIL='f@x',
+                   GIT_COMMITTER_NAME='fixture', GIT_COMMITTER_EMAIL='f@x')
+        def run(*args, check=True):
+            return subprocess.run([*git, *args], capture_output=True, text=True,
+                                  check=check, timeout=60, env=env)
+        run('add', '-A')
+        run('-c', 'user.name=fixture', '-c', 'user.email=f@x',
+            'commit', '-q', '-m', 'accepted release')
+        self.fixture_commit = subprocess.run(
+            [*git, 'rev-parse', 'HEAD'], capture_output=True, text=True,
+            check=True, timeout=60).stdout.strip()
         return self.owner / 'shared-engine'
+
+    def fixture_pin(self) -> dict:
+        """The real pin, pointed at this fixture's own accepted commit.
+
+        The digests stay the verified ones -- the fixture copies the real module
+        bytes -- so digest and manifest checks still exercise real content. Only
+        the release moves, which is what lets each case below isolate the defect it
+        names instead of tripping the release check first.
+        """
+        pin = load_pin()
+        return dict(pin, release=dict(pin['release'], commit=self.fixture_commit))
+
+    def orphan_commit(self) -> str:
+        """A real commit object that HEAD does not contain.
+
+        Made on a side branch and then left behind by returning to main, so the
+        object exists in the repository while the ancestry walk proves it is not
+        part of this checkout's history. A sha that was never in the repository
+        would fail the same check for an unrelated reason.
+        """
+        git = ['git', '-C', str(self.owner)]
+        env = dict(os.environ, GIT_AUTHOR_NAME='fixture', GIT_AUTHOR_EMAIL='f@x',
+                   GIT_COMMITTER_NAME='fixture', GIT_COMMITTER_EMAIL='f@x')
+        subprocess.run([*git, 'checkout', '-q', '-b', 'side'], capture_output=True,
+                       text=True, check=True, timeout=60, env=env)
+        subprocess.run([*git, 'commit', '-q', '--allow-empty',
+                        '-m', 'a line never merged into the accepted release'],
+                       capture_output=True, text=True, check=True, timeout=60, env=env)
+        divergent = subprocess.run([*git, 'rev-parse', 'HEAD'], capture_output=True,
+                                   text=True, check=True, timeout=60).stdout.strip()
+        subprocess.run([*git, 'checkout', '-q', 'main'], capture_output=True,
+                       text=True, check=True, timeout=60, env=env)
+        return divergent
+
+    def probe(self, name: str) -> Path:
+        """A minimal consumer that resolves to exactly one owner.
+
+        ``repository_root`` walks up to the project marker, so the probe's
+        repository root is the directory holding ``pyproject.toml`` -- not the
+        ``src/simvltanea`` path. Getting that wrong silently moves every candidate
+        root, and a case about ambiguity then resolves a single owner and passes
+        for the wrong reason. The assertion below pins the relationship instead of
+        relying on it.
+        """
+        probe = self.staging / name
+        (probe / 'src' / 'simvltanea').mkdir(parents=True)
+        (probe / 'pyproject.toml').write_text('[project]\nname = "probe"\n')
+        resolved = {candidate.resolve() for candidate
+                      in candidate_roots(probe / 'src' / 'simvltanea')}
+        self.assertIn(self.owner.resolve(), resolved,
+                      'the probe does not resolve to the fixture owner')
+        return probe / 'src' / 'simvltanea'
 
     def test_absent_engine_raises_with_the_searched_locations(self) -> None:
         empty = self.staging / 'empty'
@@ -154,60 +240,68 @@ class RefusalTest(unittest.TestCase):
                       'the refusal must name where it looked')
 
     def test_ambiguous_owners_are_refused(self) -> None:
-        """Two copies would mean two implementations."""
-        # The documented layout offers the owner beside the repository and beside its
-        # parent. Two owners in those two slots is the ambiguous case.
-        project = self.staging / 'proj'
-        (project / 'src' / 'simvltanea').mkdir(parents=True)
-        (project / 'pyproject.toml').write_text('[project]\nname = "probe"\n')
-        far = self.staging / 'time-moment-brief'
-        for destination in (project / 'time-moment-brief', far):
-            clone = subprocess.run(
-                ['git', 'clone', '-q', '--no-hardlinks',
-                 '--branch', load_pin()['release']['branch'],
-                 str(self.engine.root), str(destination)],
-                capture_output=True, text=True, check=False, timeout=120)
-            assert clone.returncode == 0, clone.stderr
+        """Two copies would mean two implementations.
+
+        The documented layout offers the owner beside the repository and beside its
+        parent. Two owners in those two slots is the ambiguous case.
+        """
+        # Two owners in the two documented slots: beside the probe's repository root, and
+        # beside the staging root one level up. Both carry the same fixture commit,
+        # so both verify and the refusal is genuinely about the ambiguity rather
+        # than about one copy being stale.
+        self.clone_owner()
+        pin = self.fixture_pin()
+        probe = self.probe('ambiguous')
+        shutil.copytree(self.owner, probe.parents[1] / 'time-moment-brief')
+        resolved = {candidate.resolve() for candidate
+                    in candidate_roots(probe)}
+        self.assertEqual(len({c for c in resolved if (c / 'shared-engine' / 'PROVENANCE.json').is_file()}),
+                         2, 'the fixture did not produce two discoverable owners')
         with self.assertRaises(SharedEngineUnavailable) as caught:
-            resolve_shared_engine(project / 'src' / 'simvltanea')
+            resolve_shared_engine(probe, pin=pin)
         self.assertIn('ambiguously', str(caught.exception))
+        self.assertIn('Two owners', str(caught.exception))
 
     def test_altered_entrypoint_is_refused(self) -> None:
         module = self.clone_owner()
+        pin = self.fixture_pin()
         target = module / 'index.js'
         target.write_text(target.read_text() + '\nexport const reimplemented = () => {};\n')
         with self.assertRaises(SharedEngineUnavailable) as caught:
-            resolve_shared_engine(module / 'tests')
+            resolve_shared_engine(self.probe('altered-entry'), pin=pin)
         message = str(caught.exception)
         self.assertIn('does not match the accepted build', message)
         self.assertIn('index.js', message)
 
     def test_altered_implementation_module_is_refused(self) -> None:
         module = self.clone_owner()
+        pin = self.fixture_pin()
         target = module / 'src' / 'spatial-score.js'
         target.write_text(target.read_text() + '\n// local edit\n')
         with self.assertRaises(SharedEngineUnavailable) as caught:
-            resolve_shared_engine(module / 'tests')
+            resolve_shared_engine(self.probe('altered-module'), pin=pin)
         self.assertIn('spatial-score.js', str(caught.exception))
 
     def test_empty_graph_manifest_is_refused(self) -> None:
-        module = self.clone_owner()
+        self.clone_owner()
+        pin = self.fixture_pin()
         manifest = self.owner / 'shared-engine' / 'PROVENANCE.json'
         data = json.loads(manifest.read_text())
         data['runtime_graph'] = {}
         manifest.write_text(json.dumps(data))
         with self.assertRaises(SharedEngineUnavailable) as caught:
-            resolve_shared_engine(module / 'tests')
+            resolve_shared_engine(self.probe('empty-graph'), pin=pin)
         self.assertIn('no runtime graph', str(caught.exception))
 
     def test_manifest_omitting_the_entrypoint_is_refused(self) -> None:
-        module = self.clone_owner()
+        self.clone_owner()
+        pin = self.fixture_pin()
         manifest = self.owner / 'shared-engine' / 'PROVENANCE.json'
         data = json.loads(manifest.read_text())
         data['runtime_graph'].pop(ENTRYPOINT, None)
         manifest.write_text(json.dumps(data))
         with self.assertRaises(SharedEngineUnavailable) as caught:
-            resolve_shared_engine(module / 'tests')
+            resolve_shared_engine(self.probe('omitted-entrypoint'), pin=pin)
         self.assertIn('does not cover the full executable graph',
                       str(caught.exception))
         self.assertIn(ENTRYPOINT, str(caught.exception))
@@ -244,50 +338,51 @@ class RefusalTest(unittest.TestCase):
                          len(load_pin()['runtime_graph']))
 
     def test_full_clone_of_the_accepted_branch_reports_an_accepted_release(self) -> None:
-        engine = resolve_shared_engine()
+        """The accepted-reporting case is proved on a full clone, not on ambient state.
+
+        Asserting this against whatever checkout happens to be beside the repository
+        makes the test's meaning depend on the machine. A full clone is the fixture.
+        """
+        probe = self.staging / 'proj-full'
+        (probe / 'src' / 'simvltanea').mkdir(parents=True)
+        (probe / 'pyproject.toml').write_text('[project]\nname = "probe"\n')
+        clone = subprocess.run(
+            ['git', 'clone', '-q', '--no-hardlinks',
+             '--branch', load_pin()['release']['branch'],
+             str(self.engine.root), str(probe / 'time-moment-brief')],
+            capture_output=True, text=True, check=False, timeout=120)
+        assert clone.returncode == 0, clone.stderr
+        self.assertFalse(_is_shallow(probe / 'time-moment-brief'))
+        engine = resolve_shared_engine(probe / 'src' / 'simvltanea')
         self.assertEqual(engine.release_status, 'accepted')
         self.assertEqual(engine.verify()['release_status'], 'accepted')
 
     def test_stale_release_is_refused(self) -> None:
-        """A checkout that predates the accepted release must not supply the engine."""
+        """A checkout that predates the accepted release must not supply the engine.
+
+        The bytes and the manifest stay the accepted ones; only the pinned release
+        moves to a real commit this checkout does not contain. Checking out an
+        older commit instead would change the manifest too, and the refusal would
+        fire on incompleteness rather than staleness -- a different defect that
+        happens to share a code path.
+        """
         self.clone_owner()
-        module = self.owner / 'shared-engine'
-        # Isolate the release check: the bytes and the manifest stay the accepted
-        # ones, and only the pinned release moves to a commit this checkout does
-        # not contain. Checking out an older commit instead would change the
-        # manifest too, and the refusal would fire on incompleteness rather than
-        # on staleness -- a different defect that happens to share a code path.
-        # A real commit in this repository that HEAD does not contain: an orphan commit,
-        # then reset back. A sha that does not exist at all would also fail the
-        # ancestry check, but for the wrong reason -- it would prove the commit is
-        # unknown rather than that this checkout is behind the accepted release.
-        head = subprocess.run(
-            ['git', '-C', str(self.owner), 'rev-parse', 'HEAD'],
-            capture_output=True, text=True, check=True, timeout=60).stdout.strip()
-        subprocess.run(
-            ['git', '-C', str(self.owner), 'commit', '-q', '--allow-empty',
-             '-m', 'a line that was never merged into the accepted release'],
-            capture_output=True, text=True, check=True, timeout=60)
-        older = subprocess.run(
-            ['git', '-C', str(self.owner), 'rev-parse', 'HEAD'],
-            capture_output=True, text=True, check=True, timeout=60).stdout.strip()
-        subprocess.run(
-            ['git', '-C', str(self.owner), 'reset', '-q', '--hard', head],
-            capture_output=True, text=True, check=True, timeout=60)
-        pin = load_pin()
-        stale_pin = dict(pin, release=dict(pin['release'], commit=older))
+        pin = self.fixture_pin()
+        divergent = self.orphan_commit()
+        stale_pin = dict(pin, release=dict(pin['release'], commit=divergent))
         with self.assertRaises(SharedEngineUnavailable) as caught:
-            resolve_shared_engine(module / 'tests', pin=stale_pin)
+            resolve_shared_engine(self.probe('stale-release'), pin=stale_pin)
         message = str(caught.exception)
         self.assertIn('stale', message)
-        self.assertIn(older[:12], message)
+        self.assertIn(divergent[:12], message)
         self.assertIn('accepted', message)
 
     def test_non_git_checkout_is_refused(self) -> None:
-        module = self.clone_owner()
+        self.clone_owner()
+        pin = self.fixture_pin()
         shutil.rmtree(self.owner / '.git')
         with self.assertRaises(SharedEngineUnavailable) as caught:
-            resolve_shared_engine(module / 'tests')
+            resolve_shared_engine(self.probe('non-git'), pin=pin)
         self.assertIn('git checkout', str(caught.exception))
 
     def test_environment_cannot_redirect_the_engine(self) -> None:
