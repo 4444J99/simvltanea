@@ -51,7 +51,8 @@ class SharedEngineResolutionTest(unittest.TestCase):
     def test_resolves_relative_to_the_checkout(self) -> None:
         self.assertTrue(self.engine.entrypoint.is_file(),
                         'resolved entrypoint does not exist')
-        self.assertIn('shared-engine', str(self.engine.root))
+        self.assertEqual(self.engine.module_root.name, 'shared-engine')
+        self.assertEqual(self.engine.entrypoint.parent, self.engine.module_root)
 
     def test_every_recorded_digest_matches_the_bytes_on_disk(self) -> None:
         recorded = {e['generated']: e['generated_sha256']
