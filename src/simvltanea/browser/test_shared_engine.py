@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import unittest
+import tempfile
 from pathlib import Path
 
 from simvltanea.browser.shared_engine import (
@@ -61,14 +62,42 @@ class AcceptedPinTest(unittest.TestCase):
             self.assertRegex(digest, r'^[0-9a-f]{64}$', relative)
 
 
-class ResolutionTest(unittest.TestCase):
+class HermeticEngineFixture:
+    """Synthetic graph and real git history; no ambient checkout or runtime claim."""
 
     def setUp(self) -> None:
-        self.engine = resolve_shared_engine()
+        self.fixture_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        owner = self.fixture_root / 'time-moment-brief'
+        module = owner / 'shared-engine'
+        self.pin = load_pin()
+        graph = {}
+        for relative in self.pin['runtime_graph']:
+            target = owner / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            content = f'// synthetic resolver fixture: {relative}\n'.encode()
+            target.write_bytes(content)
+            graph[relative] = hashlib.sha256(content).hexdigest()
+        self.pin['runtime_graph'] = graph
+        self.pin['entrypoint_sha256'] = graph[ENTRYPOINT]
+        (module / 'PROVENANCE.json').write_text(json.dumps(dict(
+            entrypoint=ENTRYPOINT, runtime_graph=graph)))
+        subprocess.run(['git', 'init', '-q', '-b', 'main', str(owner)], check=True)
+        subprocess.run(['git', '-C', str(owner), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(owner), '-c', 'user.name=fixture',
+                        '-c', 'user.email=f@x', 'commit', '-q', '-m', 'fixture'], check=True)
+        commit = subprocess.check_output(['git', '-C', str(owner), 'rev-parse', 'HEAD'], text=True).strip()
+        self.pin['release'] = dict(self.pin['release'], commit=commit, branch='main')
+        self.start = self.fixture_root / 'consumer' / 'src'
+        self.start.mkdir(parents=True)
+        (self.start.parent / 'pyproject.toml').write_text('[project]\nname="fixture"\n')
+        self.engine = resolve_shared_engine(self.start, pin=self.pin)
+
+
+class ResolutionTest(HermeticEngineFixture, unittest.TestCase):
 
     def test_resolves_at_the_documented_sibling_location(self) -> None:
         self.assertEqual(self.engine.owner_directory, 'time-moment-brief')
-        self.assertIn(self.engine.root, list(candidate_roots(HERE)))
+        self.assertIn(self.engine.root, list(candidate_roots(self.start)))
 
     def test_every_pinned_digest_matches_the_bytes_on_disk(self) -> None:
         for relative, expected in self.pin_graph().items():
@@ -78,10 +107,10 @@ class ResolutionTest(unittest.TestCase):
                              expected, relative)
 
     def pin_graph(self) -> dict:
-        return load_pin()['runtime_graph']
+        return self.pin['runtime_graph']
 
     def test_release_is_accepted_not_stale(self) -> None:
-        """The ambient owner checkout is accepted, or provably unprovable.
+        """The hermetic owner checkout is accepted, or provably unprovable.
 
         A shallow clone of the accepted branch is a legitimate checkout: its bytes
         are verified, but ancestry cannot be walked. The test asserts the reported
@@ -98,9 +127,8 @@ class ResolutionTest(unittest.TestCase):
             self.assertTrue(_contains(self.engine.root, pinned),
                             f'{self.engine.root} does not contain {pinned[:12]}')
 
-    @staticmethod
-    def pin_graph_release() -> str:
-        return load_pin()['release']['commit']
+    def pin_graph_release(self) -> str:
+        return self.pin['release']['commit']
 
     def test_owner_manifest_agrees_with_this_consumer(self) -> None:
         graph = self.engine.provenance['runtime_graph']
@@ -140,11 +168,11 @@ def _is_shallow(root: Path) -> bool:
     return result.returncode == 0 and result.stdout.strip() == 'true'
 
 
-class RefusalTest(unittest.TestCase):
+class RefusalTest(HermeticEngineFixture, unittest.TestCase):
     """Each case is a defect the review probe found and the old resolver accepted."""
 
     def setUp(self) -> None:
-        self.engine = resolve_shared_engine()
+        super().setUp()
         self.staging = Path(self.enterContext(__import__('tempfile').TemporaryDirectory()))
         self.owner = self.staging / 'time-moment-brief'
 
@@ -155,8 +183,8 @@ class RefusalTest(unittest.TestCase):
         checkout's depth: a shallow ambient clone produced a shallow fixture whose
         ancestry could not be walked, so a genuine staleness case read as
         unprovable. A tiny repository built here has exactly the history each case
-        needs, and the module bytes are copied from the verified source so the
-        digest checks still exercise real content.
+        needs, and the module bytes are copied from the synthetic source so the
+        digest checks still exercise actual file content.
         """
         subprocess.run(['git', 'init', '-q', '-b', 'main', str(self.owner)],
                        capture_output=True, text=True, check=True, timeout=60)
@@ -176,14 +204,14 @@ class RefusalTest(unittest.TestCase):
         return self.owner / 'shared-engine'
 
     def fixture_pin(self) -> dict:
-        """The real pin, pointed at this fixture's own accepted commit.
+        """The synthetic pin, pointed at this fixture's own accepted commit.
 
-        The digests stay the verified ones -- the fixture copies the real module
-        bytes -- so digest and manifest checks still exercise real content. Only
+        The digests describe synthetic fixture bytes, so the checks exercise
+        hashing and manifest agreement without claiming owner integration. Only
         the release moves, which is what lets each case below isolate the defect it
         names instead of tripping the release check first.
         """
-        pin = load_pin()
+        pin = self.pin
         return dict(pin, release=dict(pin['release'], commit=self.fixture_commit))
 
     def orphan_commit(self) -> str:
@@ -319,23 +347,23 @@ class RefusalTest(unittest.TestCase):
         # Cloned directly into its final slot. Cloning into the staging root first
         # would leave a second owner one level up, and the resolver would refuse it
         # as ambiguous -- correctly, but for a reason this case is not about.
+        subprocess.run(['git', '-C', str(self.engine.root), '-c', 'user.name=fixture',
+                        '-c', 'user.email=f@x', 'commit', '-q', '--allow-empty',
+                        '-m', 'successor'], check=True)
         shallow = subprocess.run(
             ['git', 'clone', '-q', '--depth', '1', '--no-hardlinks',
-             '--branch', load_pin()['release']['branch'],
+             '--branch', self.pin['release']['branch'],
              # file:// is required: git silently ignores --depth for a plain local
              # path, which would hand back a full clone and prove nothing.
              f'file://{self.engine.root}', str(probe / 'time-moment-brief')],
             capture_output=True, text=True, check=False, timeout=120)
         assert shallow.returncode == 0, shallow.stderr
-        assert 'shallow' not in ' '.join(
-            subprocess.run(['git', '-C', str(probe / 'time-moment-brief'),
-                            'rev-parse', '--is-shallow-repository'],
-                           capture_output=True, text=True, check=True).stdout), (
-            'the clone is not shallow, so this case would pass for the wrong reason')
-        engine = resolve_shared_engine(probe / 'src' / 'simvltanea')
+        self.assertTrue(_is_shallow(probe / 'time-moment-brief'),
+                        'the clone is not shallow, so this case would pass for the wrong reason')
+        engine = resolve_shared_engine(probe / 'src' / 'simvltanea', pin=self.pin)
         self.assertIn('shallow', engine.release_status)
         self.assertEqual(engine.verify()['files_verified'],
-                         len(load_pin()['runtime_graph']))
+                         len(self.pin['runtime_graph']))
 
     def test_full_history_of_the_accepted_release_reports_accepted(self) -> None:
         """The accepted-reporting case is proved on a full-history fixture.
@@ -391,7 +419,7 @@ class RefusalTest(unittest.TestCase):
                       SHARED_ENGINE_STAGE_SOURCE='/tmp/not-the-shared-engine')
         import unittest.mock
         with unittest.mock.patch.dict('os.environ', forged):
-            self.assertEqual(resolve_shared_engine().module_root, expected)
+            self.assertEqual(resolve_shared_engine(self.start, pin=self.pin).module_root, expected)
 
     def test_malformed_manifest_is_refused_not_treated_as_empty(self) -> None:
         module = self.clone_owner()
@@ -402,10 +430,11 @@ class RefusalTest(unittest.TestCase):
         self.assertIn('not readable JSON', str(caught.exception))
 
     def test_pin_path_escaping_the_module_is_refused(self) -> None:
-        pin = load_pin()
+        pin = dict(self.pin)
         pin['runtime_graph'] = dict(pin['runtime_graph'],
                                     **{'shared-engine/../../etc/passwd': '0' * 64})
         module = self.clone_owner()
+        pin['release'] = dict(pin['release'], commit=self.fixture_commit)
         with self.assertRaises(SharedEngineUnavailable) as caught:
             resolve_shared_engine(module / 'tests', pin=pin)
         self.assertIn('escapes', str(caught.exception))
@@ -415,8 +444,14 @@ class RefusalTest(unittest.TestCase):
 class BothConsumersBindOneImplementationTest(unittest.TestCase):
     """The cross-repository reuse proof: one module object, two consumers."""
 
-    def setUp(self) -> None:
-        self.engine = resolve_shared_engine()
+    @classmethod
+    def setUpClass(cls) -> None:
+        try:
+            cls.engine = resolve_shared_engine()
+        except SharedEngineUnavailable as error:
+            if not str(error).startswith('shared engine not found.'):
+                raise
+            raise unittest.SkipTest(f'owner integration not available: {error}') from error
 
     def test_both_adapters_bind_the_same_module_object(self) -> None:
         self.assertTrue((self.engine.root / TMB_ADAPTER).is_file(),

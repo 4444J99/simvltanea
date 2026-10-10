@@ -230,7 +230,7 @@ let panelDriver = null;
 function installPanelDriver(layout) {
   const adapter = window.SimvltaneaSharedEngineAdapter;
   if (!adapter) {
-    runtime.sharedEngineError = 'shared-engine adapter did not load';
+    runtime.sharedEngineError = window.__sharedEngineUnavailable || 'shared-engine adapter did not load';
     return false;
   }
   try {
@@ -242,6 +242,7 @@ function installPanelDriver(layout) {
     });
     runtime.sharedEngineBuild = adapter.BUILD_ID;
     runtime.sharedEnginePanels = panelDriver.score.blocks.length;
+    runtime.sharedEngineError = null;
     return true;
   } catch (error) {
     runtime.sharedEngineError = String(error.message);
@@ -655,6 +656,7 @@ async function initialize() {
   setStatus('ready',runtime.audio.mode==='none' ? 'Click or press Space to play the silent field.' :
     'Click or press Space to play with sound.');
   applyLayout();
+  if (runtime.sharedEngineError) setStatus('error', 'Shared engine unavailable: ' + runtime.sharedEngineError);
 }
 initialize().catch(fail);
 
