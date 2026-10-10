@@ -212,6 +212,42 @@ class RefusalTest(unittest.TestCase):
                       str(caught.exception))
         self.assertIn(ENTRYPOINT, str(caught.exception))
 
+    def test_shallow_clone_of_the_accepted_branch_is_not_mistaken_for_stale(self) -> None:
+        """Ancestry is unknowable in a shallow clone, which is not the same as false.
+
+        Refusing here would refuse a correct checkout of the accepted branch over a
+        missing-history artefact, and would push an operator toward re-pinning
+        whatever happened to be present -- the exact habit the pin exists to stop.
+        """
+        probe = self.staging / 'proj-shallow'
+        (probe / 'src' / 'simvltanea').mkdir(parents=True)
+        (probe / 'pyproject.toml').write_text('[project]\nname = "probe"\n')
+        # Cloned directly into its final slot. Cloning into the staging root first
+        # would leave a second owner one level up, and the resolver would refuse it
+        # as ambiguous -- correctly, but for a reason this case is not about.
+        shallow = subprocess.run(
+            ['git', 'clone', '-q', '--depth', '1', '--no-hardlinks',
+             '--branch', load_pin()['release']['branch'],
+             # file:// is required: git silently ignores --depth for a plain local
+             # path, which would hand back a full clone and prove nothing.
+             f'file://{self.engine.root}', str(probe / 'time-moment-brief')],
+            capture_output=True, text=True, check=False, timeout=120)
+        assert shallow.returncode == 0, shallow.stderr
+        assert 'shallow' not in ' '.join(
+            subprocess.run(['git', '-C', str(probe / 'time-moment-brief'),
+                            'rev-parse', '--is-shallow-repository'],
+                           capture_output=True, text=True, check=True).stdout), (
+            'the clone is not shallow, so this case would pass for the wrong reason')
+        engine = resolve_shared_engine(probe / 'src' / 'simvltanea')
+        self.assertIn('shallow', engine.release_status)
+        self.assertEqual(engine.verify()['files_verified'],
+                         len(load_pin()['runtime_graph']))
+
+    def test_full_clone_of_the_accepted_branch_reports_an_accepted_release(self) -> None:
+        engine = resolve_shared_engine()
+        self.assertEqual(engine.release_status, 'accepted')
+        self.assertEqual(engine.verify()['release_status'], 'accepted')
+
     def test_stale_release_is_refused(self) -> None:
         """A checkout that predates the accepted release must not supply the engine."""
         self.clone_owner()

@@ -57,6 +57,7 @@ class SharedEngine:
     digests: dict
     git_commit: str | None
     owner_directory: str
+    release_status: str = 'accepted'
 
     @property
     def entrypoint(self) -> Path:
@@ -80,6 +81,7 @@ class SharedEngine:
             'module': 'time-moment-brief/shared-engine',
             'entrypoint': ENTRYPOINT,
             'release': self.git_commit,
+            'release_status': self.release_status,
             'runtime_graph': dict(sorted(self.pin['runtime_graph'].items())),
         }
 
@@ -101,6 +103,7 @@ class SharedEngine:
         return {
             'module': 'time-moment-brief/shared-engine',
             'release': self.git_commit,
+            'release_status': self.release_status,
             'files_verified': len(self.digests),
             'entrypoint': ENTRYPOINT,
         }
@@ -190,14 +193,36 @@ def _git_commit(root: Path) -> str | None:
     return result.stdout.strip() or None
 
 
-def _git_contains(root: Path, commit: str) -> bool:
+def _git_is_shallow(root: Path) -> bool:
+    """True when the checkout has truncated history and cannot answer ancestry."""
+    try:
+        result = subprocess.run(
+            ['git', '-C', str(root), 'rev-parse', '--is-shallow-repository'],
+            capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and result.stdout.strip() == 'true'
+
+
+def _git_contains(root: Path, commit: str) -> bool | None:
+    """True if the commit is an ancestor of HEAD, False if provably not.
+
+    None means the question could not be answered -- a shallow clone has no
+    history to walk. That is different from "no", and an earlier version conflated
+    the two, so a correct shallow clone of the accepted branch was refused as
+    stale.
+    """
     try:
         result = subprocess.run(
             ['git', '-C', str(root), 'merge-base', '--is-ancestor', commit, 'HEAD'],
             capture_output=True, text=True, timeout=15, check=False)
     except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0
+        return None
+    if result.returncode == 0:
+        return True
+    if _git_is_shallow(root):
+        return None
+    return False
 
 
 def _verify_graph(module_root: Path, pin: dict) -> dict:
@@ -281,14 +306,24 @@ def resolve_shared_engine(start: Path = HERE, pin: dict | None = None) -> Shared
                 f'{candidate} is not a readable git checkout, so its release cannot be '
                 f'checked against the accepted commit {pinned[:12]}. A checkout of '
                 f'unknown vintage is not an accepted release.')
-        if not _git_contains(candidate, pinned):
+        contains = _git_contains(candidate, pinned)
+        if contains is False:
             raise SharedEngineUnavailable(
                 f'{candidate} is at {commit[:12]}, which does not contain the accepted '
                 f'release {pinned[:12]}. The engine is stale; check out the accepted '
                 f'release rather than re-pinning to whatever is present.')
+        # contains is None on a shallow clone: ancestry is unknowable, not false.
+        # Every pinned digest was already verified byte-for-byte above, so the
+        # build is authenticated by content. The provenance gap is reported rather
+        # than hidden, because "verified by digest, release unconfirmed" is a
+        # weaker claim than "verified as the accepted release" and a receipt that
+        # cannot tell them apart is worth nothing.
+        release_status = ('accepted' if contains else
+                          'digest-verified, release unconfirmed (shallow clone)')
         found.append(SharedEngine(
             root=candidate, module_root=module_root, provenance=provenance, pin=pin,
-            digests=digests, git_commit=commit, owner_directory=candidate.name))
+            digests=digests, git_commit=commit, owner_directory=candidate.name,
+            release_status=release_status))
 
     if not found:
         raise SharedEngineUnavailable(
