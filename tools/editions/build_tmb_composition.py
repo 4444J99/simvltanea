@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 
 from simvltanea.authoring import (
     Composition, SpatialLoopsAudio, build_artifact001, composition as c,
@@ -142,6 +143,27 @@ def packet_digest(path: Path, stream: str) -> str:
                 '-c', 'copy', '-f', 'hash', '-hash', 'sha256', '-']).strip()
 
 
+def normalized_timeline(facts: dict) -> list[dict]:
+    """Compare media time exactly even when a container changes its time base."""
+    c.require(len(facts.get('streams', [])) == 1, 'expected one packet timeline')
+    scale = Fraction(facts['streams'][0]['time_base'])
+    packets = facts.get('packets', [])
+    c.require(bool(packets), 'packet timeline is empty')
+    return [dict(pts=str(int(packet['pts']) * scale),
+                 dts=str(int(packet['dts']) * scale),
+                 duration=str(int(packet['duration']) * scale),
+                 flags=packet.get('flags'), side_data=packet.get('side_data_list', []))
+            for packet in packets]
+
+
+def timeline_digest(path: Path, stream: str) -> str:
+    facts = json.loads(run(['ffprobe', '-v', 'error', '-select_streams', stream,
+        '-show_packets', '-show_streams', '-show_entries',
+        'packet=pts,dts,duration,flags:packet_side_data=side_data_type,skip_samples,discard_padding:stream=time_base',
+        '-of', 'json', str(path)]))
+    return hashlib.sha256(c.canonical_json(normalized_timeline(facts)).encode()).hexdigest()
+
+
 def mux_generation(root: Path, source: dict, output: Path) -> dict:
     video = root / source['video']['path']
     audio = root / source['audio']['path']
@@ -153,10 +175,18 @@ def mux_generation(root: Path, source: dict, output: Path) -> dict:
     video_hash, audio_hash = packet_digest(output, '0:v:0'), packet_digest(output, '0:a:0')
     c.require(video_hash == packet_digest(video, '0:v:0'), 'mux changed encoded video packets')
     c.require(audio_hash == packet_digest(audio, '0:a:0'), 'mux changed encoded audio packets')
+    facts = probe(output)
+    for kind in ('video', 'audio'):
+        validate_streams(dict(streams=[s for s in facts['streams'] if s['codec_type'] == kind]), kind)
+    video_timing = timeline_digest(output, 'v:0')
+    audio_timing = timeline_digest(output, 'a:0')
+    c.require(video_timing == timeline_digest(video, 'v:0'), 'mux changed video packet timing')
+    c.require(audio_timing == timeline_digest(audio, 'a:0'), 'mux changed audio packet timing')
     c.require(digest(video) == source['video']['sha256'] and
               digest(audio) == source['audio']['sha256'], 'source changed during mux')
     return dict(path=f'media/{output.name}', sha256=digest(output),
                 video_packet_hash=video_hash, audio_packet_hash=audio_hash,
+                video_timeline_sha256=video_timing, audio_timeline_sha256=audio_timing,
                 operation='stream copy; no reencoding')
 
 
@@ -207,39 +237,76 @@ def preview_digests(root: Path) -> dict[str, str]:
     return result
 
 
+def consumer_identity() -> str:
+    """A commit is a reproducible code identity only for a clean consumer tree."""
+    dirty = run(['git', '-C', str(REPO_ROOT), 'status', '--porcelain=v1', '--untracked-files=all'])
+    c.require(not dirty.strip(), 'consumer worktree must be clean before building an edition')
+    return run(['git', '-C', str(REPO_ROOT), 'rev-parse', 'HEAD']).strip()
+
+
+def verify_staged_engine(preview: Path, engine) -> None:
+    c.require(not (preview / 'shared-engine-unavailable.txt').exists(),
+              'preview failed to stage the accepted engine')
+    for relative, expected in engine.pin['runtime_graph'].items():
+        target = preview / relative
+        c.require(target.is_file() and not target.is_symlink() and digest(target) == expected,
+                  f'preview does not contain the accepted engine: {relative}')
+    loader = preview / 'shared-engine.js'
+    c.require(loader.is_file() and (preview / 'shared-engine-adapter.js').is_file(),
+              'preview is missing the shared-engine binding')
+    match = re.search(r'globalThis\.__sharedEngineReceipt = (\{[^\n]+\});', loader.read_text())
+    c.require(match is not None, 'preview has no staged engine receipt')
+    staged = json.loads(match.group(1))
+    c.require(staged.get('release') == engine.pin['release']['commit'] and
+              staged.get('release_status') == 'accepted' and
+              staged.get('files_verified') == len(engine.pin['runtime_graph']),
+              'staged engine receipt differs from the accepted release')
+
+
 def build(tmb_root: Path, output: Path, source_revision: str = SOURCE_REVISION,
           atlas_revision: str = ATLAS_REVISION) -> dict:
+    c.require(source_revision == SOURCE_REVISION and atlas_revision == ATLAS_REVISION,
+              'source revisions must equal the accepted edition pins')
     output = validate_output(output)
+    consumer_revision = consumer_identity()
     tmb_root = tmb_root.resolve()
     engine = browser_runtime.resolve_shared_engine()
     c.require(engine.release_status == 'accepted', 'composition requires an accepted engine release')
     c.require(engine.root.resolve() == tmb_root, 'TMB sources and accepted engine must share one owner')
     admission = admit_sources(tmb_root, source_revision, atlas_revision)
-    output.mkdir(parents=True, exist_ok=False)
-    (output / 'media').mkdir()
     receipt = dict(schema='tmb-simvltanea-edition/v1', status='building',
                    created_at=datetime.now(timezone.utc).isoformat(), source=admission,
                    engine=dict(engine.describe(), accepted_commit=engine.pin['release']['commit'],
                                observed_head=engine.git_commit),
-                   consumer_revision=run(['git', '-C', str(REPO_ROOT), 'rev-parse', 'HEAD']).strip(),
+                   consumer_revision=consumer_revision,
                    recipe=dict(path='tools/editions/build_tmb_composition.py',
                                sha256=digest(Path(__file__))),
                    scope='local engineering edition; artistic approval and device acceptance pending')
-    write_json(output / 'source-admission.json', admission)
-    media = [mux_generation(tmb_root, source, output / 'media' / f'generation-{index:02d}.mp4')
-             for index, source in enumerate(admission['generations'], 1)]
-    authored, state = composition_state(media)
-    write_json(output / 'authoring.json', json.loads(authored.to_json()))
-    write_json(output / 'composition.json', state)
-    plan = build_preview(output / 'composition.json', output / 'preview')
-    receipt.update(status='built; browser acceptance pending', media=media,
-                   composition=dict(path='composition.json', sha256=digest(output / 'composition.json'),
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f'.{output.name}-stage-', dir=output.parent) as directory:
+        staging = Path(directory)
+        (staging / 'media').mkdir()
+        write_json(staging / 'source-admission.json', admission)
+        media = [mux_generation(tmb_root, source, staging / 'media' / f'generation-{index:02d}.mp4')
+                 for index, source in enumerate(admission['generations'], 1)]
+        authored, state = composition_state(media)
+        write_json(staging / 'authoring.json', json.loads(authored.to_json()))
+        write_json(staging / 'composition.json', state)
+        plan = build_preview(staging / 'composition.json', staging / 'preview')
+        verify_staged_engine(staging / 'preview', engine)
+        c.require(engine.verify()['release_status'] == 'accepted', 'engine release changed during build')
+        c.require(consumer_identity() == consumer_revision, 'consumer changed during build')
+        receipt.update(status='built; browser acceptance pending', media=media,
+                   composition=dict(path='composition.json', sha256=digest(staging / 'composition.json'),
                                     schema_version=state['schema_version'], frames=state['frames'],
                                     fps=FPS, phase_offsets_seconds=[0, 1],
                                     atlas_views='four aligned source views per atomic generation'),
                    preview=dict(path='preview/index.html', state_sha256=plan['state_sha256'],
-                                files=preview_digests(output / 'preview')))
-    write_json(output / 'edition-receipt.json', receipt)
+                                files=preview_digests(staging / 'preview')))
+        write_json(staging / 'edition-receipt.json', receipt)
+        # Reuse the browser publisher's native atomic no-clobber operation.
+        # An output created by another writer is preserved even if it is empty.
+        browser_runtime._rename_preview(staging, output, exchange=False)
     return receipt
 
 
@@ -247,10 +314,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tmb-root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--source-revision', default=SOURCE_REVISION)
-    parser.add_argument('--atlas-revision', default=ATLAS_REVISION)
     args = parser.parse_args()
-    receipt = build(args.tmb_root, args.output, args.source_revision, args.atlas_revision)
+    receipt = build(args.tmb_root, args.output)
     print(json.dumps(dict(status=receipt['status'], output=str(args.output), loops=2)))
 
 

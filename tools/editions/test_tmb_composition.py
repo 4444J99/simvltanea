@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -31,6 +32,32 @@ def bound_media() -> list[dict]:
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_unaccepted_source_pin_is_refused_before_build(self):
+        with self.assertRaisesRegex(c.StateError, 'accepted edition pins'):
+            importer.build(Path('.'), Path('unused'), source_revision='a' * 40)
+
+    def test_dirty_consumer_is_not_described_by_head(self):
+        with patch.object(importer, 'run', return_value=' M src/simvltanea/authoring/composition.py'):
+            with self.assertRaisesRegex(c.StateError, 'worktree must be clean'):
+                importer.consumer_identity()
+
+    def test_packet_timeline_compares_media_time_and_aac_priming(self):
+        facts = dict(streams=[dict(time_base='1/48000')], packets=[dict(
+            pts=-1024, dts=-1024, duration=1024, flags='KD_',
+            side_data_list=[dict(skip_samples=1024, discard_padding=0)])])
+        equivalent = copy.deepcopy(facts)
+        equivalent['streams'][0]['time_base'] = '1/96000'
+        for key in ('pts', 'dts', 'duration'):
+            equivalent['packets'][0][key] *= 2
+        self.assertEqual(importer.normalized_timeline(facts), importer.normalized_timeline(equivalent))
+        for key in ('pts', 'dts', 'duration'):
+            altered = copy.deepcopy(facts)
+            altered['packets'][0][key] += 1
+            self.assertNotEqual(importer.normalized_timeline(facts), importer.normalized_timeline(altered))
+        altered = copy.deepcopy(facts)
+        altered['packets'][0]['side_data_list'][0]['skip_samples'] = 0
+        self.assertNotEqual(importer.normalized_timeline(facts), importer.normalized_timeline(altered))
+
     def test_missing_source_is_refused_before_git_blob_read(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(importer, 'run') as run:
             with self.assertRaisesRegex(c.StateError, 'missing regular source'):
@@ -178,6 +205,86 @@ class CompositionTests(unittest.TestCase):
         media[1]['sha256'] = media[0]['sha256']
         with self.assertRaisesRegex(c.StateError, 'two distinct generations'):
             importer.composition_state(media)
+
+
+class PublicationTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.output = self.root / 'edition'
+        self.engine = SimpleNamespace(root=self.root, git_commit='a' * 40,
+            release_status='accepted', pin=dict(release=dict(commit='a' * 40),
+            runtime_graph={'shared-engine/index.js': hashlib.sha256(b'engine').hexdigest()}),
+            describe=lambda: {}, verify=lambda: dict(release_status='accepted'))
+        for name, value in [('validate_output', self.output), ('consumer_identity', 'b' * 40),
+                            ('admit_sources', dict(generations=[{}, {}]))]:
+            patcher = patch.object(importer, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.object(importer.browser_runtime, 'resolve_shared_engine', return_value=self.engine)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def mux(self, root, source, output):
+        output.write_bytes(output.name.encode())
+        return dict(path=f'media/{output.name}', sha256=importer.digest(output))
+
+    def preview(self, state, output):
+        output.mkdir()
+        (output / 'shared-engine').mkdir()
+        (output / 'shared-engine/index.js').write_bytes(b'engine')
+        (output / 'shared-engine-adapter.js').write_text('adapter')
+        staged = dict(release='a' * 40, release_status='accepted', files_verified=1)
+        (output / 'shared-engine.js').write_text('globalThis.__sharedEngineReceipt = ' + json.dumps(staged) + ';\n')
+        return dict(state_sha256='c' * 64)
+
+    def test_failed_mux_leaves_no_final_or_partial_directory(self):
+        with patch.object(importer, 'mux_generation', side_effect=RuntimeError('mux failed')):
+            with self.assertRaisesRegex(RuntimeError, 'mux failed'):
+                importer.build(self.root, self.output)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_unavailable_staged_engine_prevents_publication(self):
+        def missing(state, output):
+            output.mkdir()
+            (output / 'shared-engine-unavailable.txt').write_text('owner changed')
+            return dict(state_sha256='c' * 64)
+        with patch.object(importer, 'mux_generation', side_effect=self.mux), patch.object(
+                importer, 'build_preview', side_effect=missing):
+            with self.assertRaisesRegex(c.StateError, 'failed to stage'):
+                importer.build(self.root, self.output)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_changed_consumer_prevents_publication(self):
+        with patch.object(importer, 'mux_generation', side_effect=self.mux), patch.object(
+                importer, 'build_preview', side_effect=self.preview), patch.object(
+                importer, 'consumer_identity', side_effect=['b' * 40, 'c' * 40]):
+            with self.assertRaisesRegex(c.StateError, 'consumer changed'):
+                importer.build(self.root, self.output)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_success_publishes_complete_portable_edition(self):
+        with patch.object(importer, 'mux_generation', side_effect=self.mux), patch.object(
+                importer, 'build_preview', side_effect=self.preview):
+            receipt = importer.build(self.root, self.output)
+        self.assertEqual(list(self.root.iterdir()), [self.output])
+        self.assertEqual(json.loads((self.output / 'edition-receipt.json').read_text()), receipt)
+        self.assertEqual(importer.preview_digests(self.output / 'preview'), receipt['preview']['files'])
+        self.assertNotIn('-stage-', (self.output / 'composition.json').read_text())
+
+    def test_output_created_during_build_is_preserved(self):
+        def raced(state, output):
+            plan = self.preview(state, output)
+            self.output.mkdir()
+            (self.output / 'human.txt').write_text('preserve')
+            return plan
+        with patch.object(importer, 'mux_generation', side_effect=self.mux), patch.object(
+                importer, 'build_preview', side_effect=raced):
+            with self.assertRaises(OSError):
+                importer.build(self.root, self.output)
+        self.assertEqual(list(self.root.iterdir()), [self.output])
+        self.assertEqual((self.output / 'human.txt').read_text(), 'preserve')
 
 
 if __name__ == '__main__':

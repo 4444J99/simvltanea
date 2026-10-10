@@ -7,7 +7,8 @@ second. Both layouts contain the full atlas. The edition lasts sixteen seconds,
 so both sources wrap during playback.
 
 The matching F6 stereo excerpts are muxed without re-encoding. Encoded video and
-audio packet hashes must match the inputs. Schema 1.1 enables per-loop gains and
+audio packet hashes, exact packet times and AAC priming must match the inputs.
+Schema 1.1 enables per-loop gains and
 layout-derived stereo panning. These recordings are stereo, not four-channel
 ambisonic material. The accepted shared engine continues to drive panel poses.
 
@@ -15,7 +16,9 @@ ambisonic material. The accepted shared engine continues to drive panel poses.
 
 Use a TMB checkout containing the pinned source history, accepted engine, and
 the two private derivative generations. The importer refuses missing or changed
-sources. It does not download media or reconstruct missing private material.
+sources. Source revisions are fixed by this reviewed recipe. The consumer
+worktree must be clean so its recorded commit identifies the code executed.
+It does not download media or reconstruct missing private material.
 
 ```bash
 PYTHONPATH=src python3 -m tools.editions.build_tmb_composition \
@@ -23,7 +26,10 @@ PYTHONPATH=src python3 -m tools.editions.build_tmb_composition \
   --output var/proofs/tmb-composition
 ```
 
-The output must be a fresh directory inside the ignored proof lane. It contains
+The output must be a fresh directory inside the ignored proof lane. A sibling
+staging directory is published atomically after every check succeeds; failed
+builds leave no incomplete edition at the final path. Concurrent destinations
+are preserved. The edition contains
 the authoring model, composition state, muxed media, portable browser preview,
 source admission and edition receipt. The receipt records the source revisions,
 recipe digest, accepted engine commit, observed owner HEAD and every served
