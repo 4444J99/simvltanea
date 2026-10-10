@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 from simvltanea.browser.browser_runtime import build_preview
-from simvltanea.browser.shared_engine import resolve_shared_engine
+from simvltanea.browser.shared_engine import resolve_shared_engine, SharedEngineUnavailable
 from simvltanea.generators.make_runtime_fixture import ROOT, prepare
 
 
@@ -40,6 +40,12 @@ class SharedEngineRuntimeTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        try:
+            resolve_shared_engine()
+        except SharedEngineUnavailable as error:
+            if not str(error).startswith('shared engine not found.'):
+                raise
+            raise unittest.SkipTest(f'owner integration not available: {error}') from error
         prepare()
         cls.preview = ROOT / 'preview-shared-engine'
         cls.plan = build_preview(ROOT / 'state-3.json', cls.preview)
@@ -155,7 +161,7 @@ class SharedEngineRuntimeTest(unittest.TestCase):
             elevation: 0.12,
           });
           return driver.evaluate(t);
-        }""", [observed['time']])
+        }""", observed['time'])
         for index, pose in enumerate(observed['poses']):
             self.assertAlmostEqual(pose['azimuth'], direct[index]['azimuth'], places=12)
             self.assertAlmostEqual(pose['elevation'], direct[index]['elevation'], places=12)

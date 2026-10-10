@@ -123,7 +123,10 @@ def _load_json(path: Path, what: str) -> dict:
             f'{what} is absent at {path.name}. This composition has no local copy of '
             f'the shared engine and cannot proceed without it.')
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
+        value = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(value, dict):
+            raise SharedEngineUnavailable(f'{path.name} must contain a JSON object')
+        return value
     except json.JSONDecodeError as error:
         raise SharedEngineUnavailable(
             f'{path.name} is not readable JSON ({error}). A malformed manifest is a '
