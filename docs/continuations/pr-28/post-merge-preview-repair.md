@@ -12,8 +12,10 @@ pin and its digests remain unchanged.
 - Atomic publication accepts children of the declared generated storage only,
   rejects tracked paths, and refuses replacement of unrelated directories.
   New generations carry an ownership marker. Legacy previews can be replaced
-  only when their saved state and plan agree and every media file is a referenced,
-  hash-verified derivative; loose or unknown media remains untouched.
+  only when their complete file/directory inventory and bytes reproduce from
+  their portable state. This includes executable files and nested directories;
+  loose or modified content remains untouched. The exact runtime shipped by #28
+  is recognized by its digest, with narrow allowances for its old receipt format.
 - First publication follows ordinary directory creation permissions and the
   caller's umask. Replacement retains the old preview root's permission bits.
 - Installed use resolves the engine relative to the workspace already selected
@@ -21,12 +23,16 @@ pin and its digests remain unchanged.
 - Malformed digest values and invalid UTF-8 provenance fail through the ordinary
   unavailable-engine path. Containment uses paths rather than platform separators.
   `verify()` reloads provenance, hashes the graph, and checks current Git ancestry.
+  An ancestry command failure in a full checkout is refused, never mislabeled
+  as the documented shallow-history exception.
 - Runtime snapshot identity names the verified pin. Poses and their rendered
   time are cached when applied, so pausing or sampling between frames cannot
   manufacture a pose absent from the screen. Track identity survives reordered
   portrait/landscape cell arrays. Positive left/up poses move the source focal
   point in that direction. Sliced panels move through bounded source offsets
   instead of silently bypassing choreography.
+  Slice offsets use percentage `left` and `top`, so vertical motion follows the
+  panel height on both wide and tall panels rather than CSS margin percentages.
 
 ## Verification
 
@@ -47,8 +53,15 @@ missing-module reporting and per-panel rendered motion.
 
 An isolated installed wheel produced verified portrait and landscape renders.
 Structure, feature boundaries, layout, lifecycle, edition presets, example
-layouts and JavaScript syntax checks passed. Broad-suite and hosted-CI results
-will be recorded on the successor PR rather than inferred from earlier evidence.
+layouts and JavaScript syntax checks passed. The uncontended broad run passed
+361 tests and 370 subtests, with 14 owner-dependent tests skipped; those 14 passed
+separately using the verified byte fixture. Hosted CI and package verification
+also passed on the first successor head. Review then identified legacy nested
+extras, vertical slice positioning and ancestry-error classification; the
+corrected-head results are recorded on the successor PR.
+The review corrections passed 56 focused tests and 14 subtests, followed by all
+15 owner-fixture integration tests, including nested-engine preservation and
+actual portrait/wide-panel vertical slice bounds.
 Linux directory exchange was exercised; macOS and Windows were not exercised here.
 
 ## Acceptance boundary

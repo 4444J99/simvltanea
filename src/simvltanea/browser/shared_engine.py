@@ -305,6 +305,9 @@ def _verify_release(root: Path, pin: dict) -> tuple[str, str]:
             f'checked against the accepted commit {pinned[:12]}. A checkout of '
             f'unknown vintage is not an accepted release.')
     contains = _git_contains(root, pinned)
+    if contains is None and not _git_is_shallow(root):
+        raise SharedEngineUnavailable(
+            'accepted release ancestry could not be checked in a full checkout')
     if contains is False:
         raise SharedEngineUnavailable(
             f'{root} is at {commit[:12]}, which does not contain the accepted '

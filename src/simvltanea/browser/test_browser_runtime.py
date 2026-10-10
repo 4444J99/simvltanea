@@ -138,6 +138,25 @@ class PlanTests(unittest.TestCase):
             target=Path(temp)/'preview';target.mkdir();(target/'media').symlink_to(Path(temp),target_is_directory=True)
             with self.assertRaises(c.StateError):build_preview(ROOT/'state-3.json',target)
 
+    def test_legacy_nested_extras_and_modified_executables_are_preserved(self):
+        from simvltanea.browser.browser_runtime import PREVIEW_MARKER
+        import tempfile
+        for relative, content in (('shared-engine/src/personal.js', b'preserve'),
+                                  ('runtime.js', b'user-authored runtime'),
+                                  ('media/empty-directory', None)):
+            with self.subTest(relative=relative):
+                target=Path(self.enterContext(tempfile.TemporaryDirectory(dir=ROOT)))/'legacy'
+                build_preview(ROOT/'state-3.json',target)
+                (target/PREVIEW_MARKER).unlink()
+                extra=target/relative
+                extra.parent.mkdir(parents=True,exist_ok=True)
+                if content is None:extra.mkdir()
+                else:extra.write_bytes(content)
+                before={p.relative_to(target):p.read_bytes() for p in target.rglob('*') if p.is_file()}
+                with self.assertRaises(c.StateError):build_preview(ROOT/'state-3.json',target)
+                self.assertEqual(before,{p.relative_to(target):p.read_bytes() for p in target.rglob('*') if p.is_file()})
+                self.assertTrue(extra.exists())
+
     def test_preview_rejects_unverified_browser_container(self):
         import tempfile
         with tempfile.TemporaryDirectory(dir=ROOT) as temp:

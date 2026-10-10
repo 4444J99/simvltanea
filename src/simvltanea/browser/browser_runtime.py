@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import stat
+import re
 from fractions import Fraction
 from pathlib import Path
 
@@ -34,6 +35,8 @@ from simvltanea.paths import REPO_ROOT, LAYOUT
 HERE = Path(__file__).resolve().parent
 PLAN_VERSION = 1
 PREVIEW_MARKER = '.simvltanea-preview'
+# Runtime shipped by merged PR #28, before generation ownership markers.
+LEGACY_RUNTIME_SHA256 = '56800aa10e46ef95a0987c92284e97cfd71d6e964f74def5de34178b8ac4cd40'
 MAX_MEDIA_BYTES = 256 * 1024 * 1024
 # Explicit native-preview capability, not a restriction on the offline model.
 # The installed Chromium rejects smaller nonzero playbackRate values.
@@ -307,7 +310,11 @@ def _publish_preview(staging: Path, output: Path) -> None:
 
 
 def _legacy_preview(output: Path) -> bool:
-    """Recognize an intact pre-marker generation without admitting loose media."""
+    """Recognize a complete reproducible generation, including executable bytes.
+
+    Rebuilding from the saved portable state authenticates the entire inventory,
+    not just media. Unknown or modified content is preserved by refusing exchange.
+    """
     required = {'index.html', 'runtime.js', 'plan.json', 'state.json', 'media'}
     allowed = required | {'shared-engine', 'shared-engine.js',
                           'shared-engine-adapter.js', 'shared-engine-unavailable.txt'}
@@ -326,11 +333,46 @@ def _legacy_preview(output: Path) -> bool:
         soundtrack = c.soundtrack_path(state, output)
         if soundtrack:
             assets.add(soundtrack)
-        # Every media byte is a referenced, hash-verified derivative. Preserve
-        # unknown originals or unrelated files rather than exchanging them away.
         present = {path.resolve() for path in (output / 'media').rglob('*') if path.is_file()}
-        return present == {path.resolve() for path in assets}
-    except (OSError, UnicodeError, ValueError, c.StateError):
+        if present != {path.resolve() for path in assets}:
+            return False
+        with tempfile.TemporaryDirectory(prefix='.legacy-check-', dir=output.parent) as temp:
+            reference = Path(temp)
+            expected_plan = _build_preview_generation(output / 'state.json', reference)
+            # A rebuilt portable state has a new origin receipt, but all runtime
+            # decisions and media facts must still match.
+            if not re.fullmatch(r'[0-9a-f]{64}', str(plan.get('origin_state_sha256', ''))):
+                return False
+            plan.pop('origin_state_sha256')
+            expected_plan.pop('origin_state_sha256')
+            if plan != expected_plan:
+                return False
+            inventory = lambda root: {p.relative_to(root): p.is_dir() for p in root.rglob('*')}
+            expected_inventory = inventory(reference)
+            if inventory(output) != expected_inventory:
+                return False
+            for relative, directory in expected_inventory.items():
+                if directory or relative == Path('plan.json'):
+                    continue
+                actual = (output / relative).read_bytes()
+                expected = (reference / relative).read_bytes()
+                if actual == expected:
+                    continue
+                if relative == Path('runtime.js') and hashlib.sha256(actual).hexdigest() == LEGACY_RUNTIME_SHA256:
+                    continue
+                # The old loader had no global receipt. Its executable import is
+                # identical, and every imported byte was compared above.
+                if relative == Path('shared-engine.js') and actual == expected.split(b'globalThis.__sharedEngineReceipt = ')[0]:
+                    continue
+                if relative == Path('index.html'):
+                    normalize = lambda value: re.sub(rb'<!-- shared-engine release [0-9a-f]{12},',
+                                                     b'<!-- shared-engine release VERIFIED,', value)
+                    if normalize(actual) == normalize(expected):
+                        continue
+                return False
+            return True
+    except (OSError, UnicodeError, ValueError, c.StateError, SharedEngineUnavailable,
+            subprocess.SubprocessError, KeyError, TypeError):
         return False
 
 

@@ -151,9 +151,9 @@ function applySlice(node) {
   // Deterministic source crop: show only slice region stretched to fill placement via overflow:hidden
   // Loop box is overflow:hidden; media is scaled 1/w,1/h and offset -x/w, -y/h
   Object.assign(node.media.style, {
-    position:'absolute', left:'0', top:'0',
+    position:'absolute', left:`${-100*sx/sw}%`, top:`${-100*sy/sh}%`,
     width:`${100/sw}%`, height:`${100/sh}%`,
-    marginLeft:`${-100*sx/sw}%`, marginTop:`${-100*sy/sh}%`,
+    marginLeft:'0', marginTop:'0',
     objectFit:'fill'
   });
 }
@@ -268,8 +268,8 @@ function applyPanelOrientation(seconds) {
       const [sx, sy, sw, sh] = node.span.slice_rect.map(number);
       const x = Math.max(0, Math.min(1-sw, sx - pose.azimuth/(2*Math.PI)));
       const y = Math.max(0, Math.min(1-sh, sy - pose.elevation/(2*Math.PI)));
-      node.media.style.marginLeft = `${-100*x/sw}%`;
-      node.media.style.marginTop = `${-100*y/sh}%`;
+      node.media.style.left = `${-100*x/sw}%`;
+      node.media.style.top = `${-100*y/sh}%`;
       return;
     }
     /* Azimuth is the score's horizontal sweep; the panel's own focal point is

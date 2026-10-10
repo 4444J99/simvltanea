@@ -83,6 +83,23 @@ class SharedEngineRuntimeTest(unittest.TestCase):
 
     # ------------------------------------------------------------- staging
 
+    def test_legacy_engine_inventory_rejects_nested_extras(self):
+        import tempfile
+        from pathlib import Path
+        from simvltanea.browser.browser_runtime import PREVIEW_MARKER
+        from simvltanea.authoring.composition import StateError
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp:
+            target=Path(temp)/'legacy'
+            build_preview(ROOT/'state-3.json',target)
+            (target/PREVIEW_MARKER).unlink()
+            build_preview(ROOT/'state-3.json',target)
+            (target/PREVIEW_MARKER).unlink()
+            extra=target/'shared-engine/src/personal.js'
+            extra.write_bytes(b'preserve user-authored bytes')
+            before={p.relative_to(target):p.read_bytes() for p in target.rglob('*') if p.is_file()}
+            with self.assertRaises(StateError):build_preview(ROOT/'state-3.json',target)
+            self.assertEqual(before,{p.relative_to(target):p.read_bytes() for p in target.rglob('*') if p.is_file()})
+
     def test_preview_stages_the_verified_module_rather_than_a_copy_of_the_maths(self):
         """The bytes in the preview are the bytes that were digest-verified."""
         engine = resolve_shared_engine()
@@ -231,12 +248,28 @@ class SharedEngineRuntimeTest(unittest.TestCase):
         self.page.goto(f'http://127.0.0.1:{self.port}/preview-shared-slice/index.html')
         self.page.wait_for_function('window.compositionRuntime && window.compositionRuntime.ready')
         before = self.page.locator('.loop video, .loop img').evaluate_all(
-            '(nodes) => nodes.map(n=>[n.style.marginLeft,n.style.marginTop])')
+            '(nodes) => nodes.map(n=>[n.style.left,n.style.top])')
         self.page.evaluate('() => window.compositionRuntime.start()')
         self.page.wait_for_timeout(500)
         after = self.page.locator('.loop video, .loop img').evaluate_all(
-            '(nodes) => nodes.map(n=>[n.style.marginLeft,n.style.marginTop])')
+            '(nodes) => nodes.map(n=>[n.style.left,n.style.top])')
         self.assertNotEqual(before, after)
+        self.page.evaluate('() => window.compositionRuntime.pause()')
+        for width, height in ((480,800),(1200,400)):
+            with self.subTest(width=width,height=height):
+                self.page.set_viewport_size({'width':width,'height':height})
+                self.page.wait_for_timeout(150)
+                geometry=self.page.evaluate("""() => [...window.compositionRuntime.nodes.values()]
+                  .filter(n=>n.span.slice_rect).map(n=>{
+                    const box=n.box.getBoundingClientRect(), media=n.media.getBoundingClientRect();
+                    return {delta:media.top-box.top, expected:parseFloat(n.media.style.top)*box.height/100,
+                            top:media.top, bottom:media.bottom, boxTop:box.top, boxBottom:box.bottom};
+                  })""")
+                self.assertTrue(geometry)
+                for item in geometry:
+                    self.assertAlmostEqual(item['delta'],item['expected'],delta=1)
+                    self.assertLessEqual(item['top'],item['boxTop']+1)
+                    self.assertGreaterEqual(item['bottom'],item['boxBottom']-1)
         self.assertEqual(self.errors, [])
 
     def test_no_page_errors_during_playback(self):

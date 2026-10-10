@@ -52,14 +52,15 @@ vm.runInContext(`
   runtime.position=7;
   if(JSON.stringify(runtime.snapshot().sharedEngine.poses)!==paused)throw Error('snapshot reevaluated an unapplied pose');
   const node=runtime.nodes.get('a');node.span.slice_rect=['1/4','1/4','1/2','1/2'];
-  applySlice(node); const initial=node.media.style.marginLeft;
+  applySlice(node); const initial=node.media.style.left;
   applyPanelOrientation(2);
-  if(node.media.style.marginLeft===initial)throw Error('slice transform ignored pose');
-  const offset2=node.media.style.marginLeft;
+  if(node.media.style.left===initial)throw Error('slice transform ignored pose');
+  const offset2=node.media.style.left;
   applyPanelOrientation(3);
-  if(node.media.style.marginLeft===offset2)throw Error('slice did not continue moving');
-  const x=-parseFloat(node.media.style.marginLeft)*0.5/100;
+  if(node.media.style.left===offset2)throw Error('slice did not continue moving');
+  const x=-parseFloat(node.media.style.left)*0.5/100;
   if(x<0 || x>0.5)throw Error('slice escaped source bounds');
+  if(node.media.style.marginTop!=='0' || !node.media.style.top.endsWith('%'))throw Error('slice vertical offset must use height-relative top');
   console.log(JSON.stringify({direction:true,identity:true,snapshot:true,slice:true,release:true}));
 `,context);
 '''

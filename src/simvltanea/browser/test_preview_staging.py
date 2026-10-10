@@ -64,7 +64,7 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
             with self.assertRaises(SharedEngineUnavailable):
                 self.build()
         self.assertEqual(self.snapshot(), before)
-        self.assertEqual(list(self.fixture_root.glob('.preview-stage-*')), [])
+        self.assertEqual(list(self.generated.glob('.preview-stage-*')), [])
 
     def test_destination_mutation_is_detected_even_when_source_still_matches(self):
         copyfile = shutil.copyfile
@@ -97,7 +97,7 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
                 with self.assertRaises(OSError):
                     self.build()
         self.assertEqual(self.snapshot(), before)
-        self.assertEqual(list(self.fixture_root.glob('.preview-stage-*')), [])
+        self.assertEqual(list(self.generated.glob('.preview-stage-*')), [])
 
     def test_existing_preview_is_replaced_as_one_generation(self):
         self.build()
@@ -105,7 +105,7 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
         self.build()
         self.assertFalse((self.output / 'stale.js').exists())
         self.assertTrue((self.output / 'index.html').exists())
-        self.assertEqual(list(self.fixture_root.glob('.preview-stage-*')), [])
+        self.assertEqual(list(self.generated.glob('.preview-stage-*')), [])
 
     def test_resolution_failure_replaces_receipt_with_clean_fallback(self):
         self.build()

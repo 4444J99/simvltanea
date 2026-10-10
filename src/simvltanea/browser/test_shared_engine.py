@@ -441,6 +441,13 @@ class RefusalTest(HermeticEngineFixture, unittest.TestCase):
 
 
 class RefreshedVerificationTest(HermeticEngineFixture, unittest.TestCase):
+    def test_ancestry_command_failure_is_not_a_shallow_checkout(self):
+        from unittest.mock import patch
+        from simvltanea.browser import shared_engine
+        with patch.object(shared_engine, '_git_contains', return_value=None):
+            with self.assertRaisesRegex(SharedEngineUnavailable, 'full checkout'):
+                self.engine.verify()
+
     def test_default_resolution_uses_the_selected_workspace(self):
         from unittest.mock import patch
         from simvltanea import paths
