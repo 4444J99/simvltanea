@@ -19,7 +19,9 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
         self.state = self.fixture_root / 'input' / 'state.json'
         self.state.parent.mkdir()
         self.state.write_text('{}')
-        self.enterContext(patch.object(runtime, 'REPO_ROOT', self.fixture_root))
+        # macOS exposes /var through /private/var; compare canonical paths just
+        # as build_preview does for the destination, preserving containment.
+        self.enterContext(patch.object(runtime, 'REPO_ROOT', self.fixture_root.resolve()))
         self.enterContext(patch.object(runtime, 'resolve_shared_engine', return_value=self.engine))
 
     def build_generation(self, state, output):
