@@ -151,9 +151,9 @@ function applySlice(node) {
   // Deterministic source crop: show only slice region stretched to fill placement via overflow:hidden
   // Loop box is overflow:hidden; media is scaled 1/w,1/h and offset -x/w, -y/h
   Object.assign(node.media.style, {
-    position:'absolute', left:'0', top:'0',
+    position:'absolute', left:`${-100*sx/sw}%`, top:`${-100*sy/sh}%`,
     width:`${100/sw}%`, height:`${100/sh}%`,
-    marginLeft:`${-100*sx/sw}%`, marginTop:`${-100*sy/sh}%`,
+    marginLeft:'0', marginTop:'0',
     objectFit:'fill'
   });
 }
@@ -227,6 +227,7 @@ function renderSeams() {
  * absent module is reported in the status line rather than silently leaving every
  * panel centred, which would look like a working composition. */
 let panelDriver = null;
+let renderedSharedEngine = {time:null, poses:[], loops:[]};
 function installPanelDriver(layout) {
   const adapter = window.SimvltaneaSharedEngineAdapter;
   if (!adapter) {
@@ -240,7 +241,8 @@ function installPanelDriver(layout) {
       sweep: 0.35,
       elevation: 0.12,
     });
-    runtime.sharedEngineBuild = adapter.BUILD_ID;
+    runtime.sharedEngineBuild = window.__sharedEngineReceipt
+      ? 'shared-engine@time-moment-brief/' + window.__sharedEngineReceipt.release : null;
     runtime.sharedEnginePanels = panelDriver.score.blocks.length;
     runtime.sharedEngineError = null;
     return true;
@@ -254,17 +256,29 @@ function applyPanelOrientation(seconds) {
   if (!panelDriver) return;
   const layout = runtime.plan.layout_keyframes[runtime.layoutIndex].layouts[runtime.orientation];
   if (!layout) return;
-  layout.cells.forEach((cell, index) => {
+  const poses = panelDriver.evaluate(seconds);
+  const indices = new Map(runtime.plan.tracks.map((track, index) => [track.id, index]));
+  renderedSharedEngine = {time:seconds, poses:poses.map(pose=>({...pose})),
+    loops:runtime.plan.tracks.map(track=>track.id)};
+  layout.cells.forEach((cell) => {
     const node = runtime.nodes.get(cell.loop);
-    if (!node || node.span?.slice_rect) return;
-    const pose = panelDriver.panelAt(index, seconds);
+    if (!node || !node.media) return;
+    const pose = poses[indices.get(cell.loop)];
+    if (node.span?.slice_rect) {
+      const [sx, sy, sw, sh] = node.span.slice_rect.map(number);
+      const x = Math.max(0, Math.min(1-sw, sx - pose.azimuth/(2*Math.PI)));
+      const y = Math.max(0, Math.min(1-sh, sy - pose.elevation/(2*Math.PI)));
+      node.media.style.left = `${-100*x/sw}%`;
+      node.media.style.top = `${-100*y/sh}%`;
+      return;
+    }
     /* Azimuth is the score's horizontal sweep; the panel's own focal point is
      * the centre it returns to, so the sweep moves the frame around it rather
      * than replacing the composition's declared framing. */
     const focal = cell.focal.map((value, axis) => {
       const centre = number(value);
       const offset = axis === 0 ? pose.azimuth : pose.elevation;
-      return Math.max(0, Math.min(1, centre + offset / (2 * Math.PI)));
+      return Math.max(0, Math.min(1, centre - offset / (2 * Math.PI)));
     });
     node.media.style.objectPosition = focal.map(v => `${v * 100}%`).join(' ');
   });
@@ -466,8 +480,9 @@ runtime.snapshot = () => {
       build:runtime.sharedEngineBuild??null,
       panels:runtime.sharedEnginePanels??0,
       error:runtime.sharedEngineError??null,
-      poses:panelDriver ? panelDriver.evaluate(sampledTime).map(
-        pose=>({azimuth:pose.azimuth,elevation:pose.elevation,fov:pose.fov})) : [],
+      renderedTime:renderedSharedEngine.time,
+      loops:renderedSharedEngine.loops,
+      poses:renderedSharedEngine.poses.map(pose=>({...pose})),
     },
     audio:{mode:runtime.audio.mode,enabled:runtime.audio.enabled,contextState:runtime.audio.context?.state??null,
       blocked:runtime.audio.blocked??null,

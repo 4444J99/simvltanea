@@ -440,6 +440,62 @@ class RefusalTest(HermeticEngineFixture, unittest.TestCase):
         self.assertIn('escapes', str(caught.exception))
 
 
+class RefreshedVerificationTest(HermeticEngineFixture, unittest.TestCase):
+    def test_ambient_git_repository_cannot_change_verified_release(self):
+        from unittest.mock import patch
+        unrelated = self.fixture_root / 'unrelated'
+        subprocess.run(['git', 'init', '-q', str(unrelated)], check=True)
+        with patch.dict(os.environ, {'GIT_DIR':str(unrelated / '.git'), 'GIT_WORK_TREE':str(unrelated)}):
+            receipt = self.engine.verify()
+        self.assertEqual(receipt['release'], self.pin['release']['commit'])
+        self.assertEqual(receipt['release_status'], 'accepted')
+
+    def test_ancestry_command_failure_is_not_a_shallow_checkout(self):
+        from unittest.mock import patch
+        from simvltanea.browser import shared_engine
+        with patch.object(shared_engine, '_git_contains', return_value=None):
+            with self.assertRaisesRegex(SharedEngineUnavailable, 'full checkout'):
+                self.engine.verify()
+
+    def test_default_resolution_uses_the_selected_workspace(self):
+        from unittest.mock import patch
+        from simvltanea import paths
+        with patch.object(paths, 'REPO_ROOT', self.start.parent):
+            self.assertEqual(resolve_shared_engine(pin=self.pin).root, self.engine.root)
+
+    def test_verify_reloads_provenance(self):
+        manifest = self.engine.module_root / 'PROVENANCE.json'
+        manifest.write_text('{}')
+        with self.assertRaises(SharedEngineUnavailable):
+            self.engine.verify()
+
+    def test_verify_refreshes_git_release_and_rejects_lost_ancestry(self):
+        git = ['git', '-C', str(self.engine.root)]
+        subprocess.run([*git, '-c', 'user.name=f', '-c', 'user.email=f@x',
+                        'commit', '-q', '--allow-empty', '-m', 'successor'], check=True)
+        receipt = self.engine.verify()
+        self.assertNotEqual(receipt['release'], self.engine.git_commit)
+        subprocess.run([*git, 'checkout', '-q', '--orphan', 'unrelated'], check=True)
+        subprocess.run([*git, '-c', 'user.name=f', '-c', 'user.email=f@x',
+                        'commit', '-q', '-m', 'unrelated'], check=True)
+        with self.assertRaisesRegex(SharedEngineUnavailable, 'stale'):
+            self.engine.verify()
+
+    def test_malformed_digest_values_are_refused(self):
+        manifest = self.engine.module_root / 'PROVENANCE.json'
+        for digest in (None, 42, [], 'bad'):
+            with self.subTest(digest=digest):
+                graph = dict(self.pin['runtime_graph'], **{ENTRYPOINT:digest})
+                manifest.write_text(json.dumps(dict(entrypoint=ENTRYPOINT, runtime_graph=graph)))
+                with self.assertRaisesRegex(SharedEngineUnavailable, 'SHA-256'):
+                    resolve_shared_engine(self.start, pin=self.pin)
+
+    def test_non_utf8_provenance_is_unavailable(self):
+        (self.engine.module_root / 'PROVENANCE.json').write_bytes(b'\xff')
+        with self.assertRaisesRegex(SharedEngineUnavailable, 'not readable JSON'):
+            resolve_shared_engine(self.start, pin=self.pin)
+
+
 @unittest.skipUnless(node_available(), 'node is required for adapter identity proof')
 class BothConsumersBindOneImplementationTest(unittest.TestCase):
     """The cross-repository reuse proof: one module object, two consumers."""

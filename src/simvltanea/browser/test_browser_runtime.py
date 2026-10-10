@@ -117,11 +117,107 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(len(c.media_paths(saved,target)),3)
         self.assertEqual(c.resolve_at(saved,95)['loops'],c.resolve_at(c.load_state(ROOT/'state-3.json'),95)['loops'])
 
+    def test_verified_legacy_preview_can_be_replaced_but_loose_media_is_preserved(self):
+        from simvltanea.browser.browser_runtime import PREVIEW_MARKER
+        import tempfile
+        target=Path(self.enterContext(tempfile.TemporaryDirectory(dir=ROOT)))/'preview-legacy'
+        build_preview(ROOT/'state-3.json',target)
+        (target/PREVIEW_MARKER).unlink()
+        build_preview(ROOT/'state-3.json',target)
+        self.assertTrue((target/PREVIEW_MARKER).is_file())
+        (target/PREVIEW_MARKER).unlink()
+        extra=target/'media'/'personal-original.mp4'
+        extra.write_bytes(b'preserve original')
+        with self.assertRaises(c.StateError):
+            build_preview(ROOT/'state-3.json',target)
+        self.assertEqual(extra.read_bytes(),b'preserve original')
+
     def test_preview_media_symlink_escape_rejected(self):
         import tempfile
         with tempfile.TemporaryDirectory(dir=ROOT) as temp:
             target=Path(temp)/'preview';target.mkdir();(target/'media').symlink_to(Path(temp),target_is_directory=True)
             with self.assertRaises(c.StateError):build_preview(ROOT/'state-3.json',target)
+
+    def test_legacy_nested_extras_and_modified_executables_are_preserved(self):
+        from simvltanea.browser.browser_runtime import PREVIEW_MARKER
+        import tempfile
+        for relative, content in (('shared-engine/src/personal.js', b'preserve'),
+                                  ('runtime.js', b'user-authored runtime'),
+                                  ('media/empty-directory', None)):
+            with self.subTest(relative=relative):
+                target=Path(self.enterContext(tempfile.TemporaryDirectory(dir=ROOT)))/'legacy'
+                build_preview(ROOT/'state-3.json',target)
+                (target/PREVIEW_MARKER).unlink()
+                extra=target/relative
+                extra.parent.mkdir(parents=True,exist_ok=True)
+                if content is None:extra.mkdir()
+                else:extra.write_bytes(content)
+                before={p.relative_to(target):p.read_bytes() for p in target.rglob('*') if p.is_file()}
+                with self.assertRaises(c.StateError):build_preview(ROOT/'state-3.json',target)
+                self.assertEqual(before,{p.relative_to(target):p.read_bytes() for p in target.rglob('*') if p.is_file()})
+                self.assertTrue(extra.exists())
+
+    def test_legacy_plan_byte_edits_are_preserved(self):
+        from simvltanea.browser.browser_runtime import PREVIEW_MARKER
+        import tempfile
+        for variant in ('compact','reordered','duplicate-key'):
+            with self.subTest(variant=variant):
+                target=Path(self.enterContext(tempfile.TemporaryDirectory(dir=ROOT)))/'legacy'
+                build_preview(ROOT/'state-3.json',target)
+                (target/PREVIEW_MARKER).unlink()
+                path=target/'plan.json';raw=path.read_text();plan=json.loads(raw)
+                if variant=='compact':edited=json.dumps(plan)+'\n'
+                elif variant=='reordered':edited=json.dumps(dict(reversed(list(plan.items()))),indent=2)+'\n'
+                else:edited=raw.replace('"plan_version": 1,','"plan_version": 99,\n  "plan_version": 1,')
+                self.assertNotEqual(raw,edited)
+                self.assertEqual(plan,json.loads(edited))
+                path.write_text(edited)
+                with self.assertRaises(c.StateError):build_preview(ROOT/'state-3.json',target)
+                self.assertEqual(path.read_text(),edited)
+
+    def test_late_legacy_plan_edit_is_restored_after_exchange(self):
+        from simvltanea.browser import browser_runtime as runtime
+        from unittest.mock import patch
+        import tempfile
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp:
+            target=Path(temp)/'legacy'
+            build_preview(ROOT/'state-3.json',target)
+            (target/runtime.PREVIEW_MARKER).unlink()
+            raw=(target/'plan.json').read_text()
+            rename=runtime._rename_preview;calls=0
+            def edit_after_exchange(staging, output, *, exchange):
+                nonlocal calls
+                calls+=1
+                rename(staging,output,exchange=exchange)
+                if calls==1:(staging/'plan.json').write_text(raw+' ')
+            with patch.object(runtime,'_rename_preview',side_effect=edit_after_exchange):
+                with self.assertRaises(c.StateError):build_preview(ROOT/'state-3.json',target)
+            self.assertEqual((target/'plan.json').read_text(),raw+' ')
+
+    def test_late_writes_through_displaced_legacy_handle_are_retained(self):
+        from simvltanea.browser import browser_runtime as runtime
+        from unittest.mock import patch
+        import tempfile
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp:
+            target=Path(temp)/'legacy'
+            build_preview(ROOT/'state-3.json',target)
+            (target/runtime.PREVIEW_MARKER).unlink()
+            descriptor=os.open(target,os.O_RDONLY|getattr(os,'O_DIRECTORY',0))
+            try:
+                validate=runtime._validate_preview_destination
+                def write_after_validation(state, path, **kwargs):
+                    identity=validate(state,path,**kwargs)
+                    if kwargs.get('tracked_output') == target:
+                        file=os.open('personal-original',os.O_WRONLY|os.O_CREAT,0o600,dir_fd=descriptor)
+                        with os.fdopen(file,'wb') as stream:stream.write(b'preserve late original')
+                    return identity
+                with patch.object(runtime,'_validate_preview_destination',side_effect=write_after_validation):
+                    build_preview(ROOT/'state-3.json',target)
+                archived=list(target.parent.glob('.legacy-retained-*/generation'))
+                self.assertEqual(len(archived),1)
+                self.assertEqual((archived[0]/'personal-original').read_bytes(),b'preserve late original')
+                self.assertFalse((target/'personal-original').exists())
+            finally:os.close(descriptor)
 
     def test_preview_rejects_unverified_browser_container(self):
         import tempfile

@@ -19,6 +19,8 @@ import json
 import shutil
 import subprocess
 import sys
+import stat
+import re
 from fractions import Fraction
 from pathlib import Path
 
@@ -27,11 +29,15 @@ from simvltanea.browser.shared_engine import (
     SharedEngineUnavailable,
     resolve_shared_engine,
     _verify_graph,
+    _git_environment,
 )
-from simvltanea.paths import REPO_ROOT
+from simvltanea.paths import REPO_ROOT, LAYOUT
 
 HERE = Path(__file__).resolve().parent
 PLAN_VERSION = 1
+PREVIEW_MARKER = '.simvltanea-preview'
+# Runtime shipped by merged PR #28, before generation ownership markers.
+LEGACY_RUNTIME_SHA256 = '56800aa10e46ef95a0987c92284e97cfd71d6e964f74def5de34178b8ac4cd40'
 MAX_MEDIA_BYTES = 256 * 1024 * 1024
 # Explicit native-preview capability, not a restriction on the offline model.
 # The installed Chromium rejects smaller nonzero playbackRate values.
@@ -103,7 +109,11 @@ def stage_shared_engine(output: Path) -> dict | None:
                    release_status=engine.release_status,
                    files_verified=len(staged_digests),
                    entrypoint=engine.pin['entrypoint'])
-    receipt['release'] = engine.release or ''
+    receipt['release'] = engine.pin['release']['commit']
+    (output / 'shared-engine.js').write_text(
+        (output / 'shared-engine.js').read_text()
+        + 'globalThis.__sharedEngineReceipt = '
+        + json.dumps(receipt).replace('<', '\\u003c') + ';\n', encoding='utf-8')
     return receipt
 
 
@@ -177,6 +187,9 @@ def _build_preview_generation(state_path: Path, output: Path) -> dict:
     """Copy verified media to an incubator-local preview; no public upload occurs."""
     state_path, output = state_path.resolve(), output.resolve()
     c.require(output.is_relative_to(REPO_ROOT), 'preview must remain inside the incubator')
+    generated = LAYOUT.path('generated')
+    c.require(output.is_relative_to(generated) and output != generated,
+              'preview output must be a child of generated storage')
     c.require(output != state_path.parent and not state_path.is_relative_to(output),
               'preview output must not contain or replace the source state')
     state = c.load_state(state_path)
@@ -269,27 +282,30 @@ def _build_preview_generation(state_path: Path, output: Path) -> dict:
     return plan
 
 
-def _publish_preview(staging: Path, output: Path) -> None:
-    """Atomically publish a complete directory, retaining old bytes on failure.
+def _directory_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        facts = path.lstat()
+    except FileNotFoundError:
+        return None
+    return facts.st_dev, facts.st_ino
 
-    Nonempty directories cannot be replaced with ordinary rename. Linux and
-    macOS supply atomic exchange; unsupported hosts refuse replacement rather
-    than exposing a gap or mixing generations. After exchange, staging holds the
-    old generation and the caller removes it.
-    """
-    if not output.exists():
-        os.replace(staging, output)
+
+def _rename_preview(staging: Path, output: Path, *, exchange: bool) -> None:
+    """Use a native atomic exchange or no-clobber rename, never an existence race."""
+    if sys.platform == 'win32' and not exchange:
+        # Windows rename refuses an existing destination atomically.
+        os.rename(staging, output)
         return
     libc = ctypes.CDLL(None, use_errno=True)
     if sys.platform.startswith('linux'):
-        exchange = libc.renameat2
-        exchange.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+        rename = libc.renameat2
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
                              ctypes.c_char_p, ctypes.c_uint]
-        result = exchange(-100, os.fsencode(staging), -100, os.fsencode(output), 2)
+        result = rename(-100, os.fsencode(staging), -100, os.fsencode(output), 2 if exchange else 1)
     elif sys.platform == 'darwin':
-        exchange = libc.renamex_np
-        exchange.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
-        result = exchange(os.fsencode(staging), os.fsencode(output), 2)
+        rename = libc.renamex_np
+        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        result = rename(os.fsencode(staging), os.fsencode(output), 2 if exchange else 4)
     else:
         raise OSError(errno.ENOTSUP, 'atomic preview directory exchange unavailable')
     if result != 0:
@@ -297,26 +313,174 @@ def _publish_preview(staging: Path, output: Path) -> None:
         raise OSError(code, os.strerror(code), str(output))
 
 
-def build_preview(state_path: Path, output: Path) -> dict:
-    """Build privately and publish the HTML, receipt and executable bytes together."""
+def _publish_preview(staging: Path, output: Path, expected_identity, validate_old) -> None:
+    """Bind publication and cleanup to the validated destination, preserving races."""
+    if _directory_identity(output) != expected_identity:
+        raise OSError(errno.ESTALE, 'preview destination changed during staging', str(output))
+    if expected_identity is None:
+        _rename_preview(staging, output, exchange=False)
+        return
+    new_identity = _directory_identity(staging)
+    _rename_preview(staging, output, exchange=True)
+    try:
+        if _directory_identity(staging) != expected_identity:
+            raise OSError(errno.ESTALE, 'preview destination changed during exchange')
+        # Check the displaced directory before authorizing its removal. This
+        # catches late legacy edits and tracked-index changes as well as swaps.
+        validate_old(staging)
+    except Exception as error:
+        if _directory_identity(output) == new_identity:
+            try:
+                _rename_preview(staging, output, exchange=True)
+            except Exception as rollback_error:
+                raise OSError(errno.ESTALE,
+                              'preview rollback failed; displaced directory retained; see preservation notice') from rollback_error
+            raise
+        raise OSError(errno.ESTALE,
+                      'preview changed after publication; displaced directory retained; see preservation notice') from error
+
+
+def _legacy_preview(output: Path) -> bool:
+    """Recognize a complete reproducible generation, including executable bytes.
+
+    Rebuilding from the saved portable state authenticates the entire inventory,
+    not just media. Unknown or modified content is preserved by refusing exchange.
+    """
+    required = {'index.html', 'runtime.js', 'plan.json', 'state.json', 'media'}
+    allowed = required | {'shared-engine', 'shared-engine.js',
+                          'shared-engine-adapter.js', 'shared-engine-unavailable.txt'}
+    entries = {path.name for path in output.iterdir()}
+    if not required <= entries or not entries <= allowed:
+        return False
+    try:
+        state = c.load_state(output / 'state.json')
+        plan = json.loads((output / 'plan.json').read_text())
+        if not isinstance(plan, dict) or plan.get('state_sha256') != hashlib.sha256(
+                c.canonical_json(state).encode()).hexdigest():
+            return False
+        if '<title>Composition runtime proof</title>' not in (output / 'index.html').read_text():
+            return False
+        assets = set(c.media_paths(state, output).values())
+        soundtrack = c.soundtrack_path(state, output)
+        if soundtrack:
+            assets.add(soundtrack)
+        present = {path.resolve() for path in (output / 'media').rglob('*') if path.is_file()}
+        if present != {path.resolve() for path in assets}:
+            return False
+        with tempfile.TemporaryDirectory(prefix='.legacy-check-', dir=output.parent) as temp:
+            reference = Path(temp)
+            expected_plan = _build_preview_generation(output / 'state.json', reference)
+            # Retain the original input receipt in the reproduced serialization.
+            # Parsed-value equality alone admits modified bytes or duplicate keys.
+            if not re.fullmatch(r'[0-9a-f]{64}', str(plan.get('origin_state_sha256', ''))):
+                return False
+            expected_plan['origin_state_sha256'] = plan['origin_state_sha256']
+            (reference / 'plan.json').write_text(json.dumps(expected_plan, indent=2) + '\n')
+            inventory = lambda root: {p.relative_to(root): p.is_dir() for p in root.rglob('*')}
+            expected_inventory = inventory(reference)
+            if inventory(output) != expected_inventory:
+                return False
+            for relative, directory in expected_inventory.items():
+                if directory:
+                    continue
+                actual = (output / relative).read_bytes()
+                expected = (reference / relative).read_bytes()
+                if actual == expected:
+                    continue
+                if relative == Path('runtime.js') and hashlib.sha256(actual).hexdigest() == LEGACY_RUNTIME_SHA256:
+                    continue
+                # The old loader had no global receipt. Its executable import is
+                # identical, and every imported byte was compared above.
+                if relative == Path('shared-engine.js') and actual == expected.split(b'globalThis.__sharedEngineReceipt = ')[0]:
+                    continue
+                return False
+            return True
+    except (OSError, UnicodeError, ValueError, c.StateError, SharedEngineUnavailable,
+            subprocess.SubprocessError, KeyError, TypeError):
+        return False
+
+
+def _validate_preview_destination(state_path: Path, output: Path, *, tracked_output: Path | None = None):
     c.require(not output.is_symlink(), 'preview destination must not be a symlink')
-    state_path, output = state_path.resolve(), output.resolve()
     c.require(output.is_relative_to(REPO_ROOT), 'preview must remain inside the incubator')
+    generated = LAYOUT.path('generated')
+    c.require(output.is_relative_to(generated) and output != generated,
+              'preview output must be a child of generated storage')
     c.require(output != state_path.parent and not state_path.is_relative_to(output),
               'preview output must not contain or replace the source state')
+    # Installed workspaces need no Git executable. A checkout (including a
+    # worktree or a project nested inside a repository) must pass the guard.
+    if any((base / '.git').exists() or (base / '.git').is_symlink()
+           for base in (REPO_ROOT, *REPO_ROOT.parents)):
+        try:
+            tracked_path = output if tracked_output is None else tracked_output
+            tracked = subprocess.run(['git', '--literal-pathspecs', '-C', str(REPO_ROOT), 'ls-files', '-z', '--',
+                                      tracked_path.relative_to(REPO_ROOT).as_posix()],
+                                     capture_output=True, check=True, timeout=15, env=_git_environment())
+        except (OSError, subprocess.SubprocessError) as error:
+            raise c.StateError('preview tracked-file protection could not be verified') from error
+        c.require(not tracked.stdout, 'preview output must not replace tracked files')
     if output.exists():
         c.require(output.is_dir(), 'preview destination must be a directory')
         c.require(not any(path.is_symlink() for path in output.rglob('*')),
                   'preview destination must not be a symlink')
+        marker = output / PREVIEW_MARKER
+        owned = marker.is_file() and marker.read_text() == 'simvltanea-preview-v1\n'
+        c.require(not any(output.iterdir()) or owned or _legacy_preview(output),
+                  'existing preview destination lacks a generation ownership marker')
+    return _directory_identity(output)
+
+
+def _retain_preview(staging: Path, output: Path) -> None:
+    """Quarantine exposed generations without deleting bytes written via old handles."""
+    try:
+        archive = Path(tempfile.mkdtemp(prefix=f'.{output.name}-retained-', dir=output.parent))
+        # The destination is inside our fresh 0700 container. Moving the directory
+        # preserves cached handles and any concurrent writes; no recursive delete.
+        os.rename(staging, archive / 'generation')
+        retained = archive / 'generation'
+    except OSError:
+        retained = staging  # Publication/rollback result stands; preserve in place.
+    print(f'preview generation retained for preservation at {retained}', file=sys.stderr)
+
+
+def build_preview(state_path: Path, output: Path) -> dict:
+    """Build privately and publish the HTML, receipt and executable bytes together."""
+    c.require(not output.is_symlink(), 'preview destination must not be a symlink')
+    state_path, output = state_path.resolve(), output.resolve()
+    expected_identity = _validate_preview_destination(state_path, output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    # Match ordinary mkdir/umask for first publication; preserve existing mode.
+    mode_probe = Path(tempfile.mkdtemp(prefix='.preview-mode-', dir=output.parent))
+    try:
+        probe = mode_probe / 'directory'
+        probe.mkdir()
+        publish_mode = stat.S_IMODE(output.stat().st_mode if output.exists() else probe.stat().st_mode)
+    finally:
+        shutil.rmtree(mode_probe)
     staging = Path(tempfile.mkdtemp(prefix=f'.{output.name}-stage-', dir=output.parent))
+    new_identity = _directory_identity(staging)
+    publication_attempted = False
     try:
         plan = _build_preview_generation(state_path, staging)
-        _publish_preview(staging, output)
+        (staging / PREVIEW_MARKER).write_text('simvltanea-preview-v1\n')
+        if _validate_preview_destination(state_path, output) != expected_identity:
+            raise OSError(errno.ESTALE, 'preview destination changed during staging', str(output))
+        if expected_identity is not None:
+            publish_mode = stat.S_IMODE(output.stat().st_mode)
+        staging.chmod(publish_mode)
+        publication_attempted = True
+        _publish_preview(staging, output, expected_identity,
+                         lambda old: _validate_preview_destination(state_path, old, tracked_output=output))
         return plan
     finally:
-        # On success this is the previous generation; on failure the private build.
-        if staging.exists():
+        # Once publication is attempted, retained directory handles can outlive
+        # any inventory check. Preserve all remaining generations, even rollback
+        # builds. Only our never-published private build is disposable.
+        identity = _directory_identity(staging)
+        if identity is not None and publication_attempted:
+            _retain_preview(staging, output)
+        elif identity == new_identity:
             shutil.rmtree(staging, ignore_errors=True)
 
 
