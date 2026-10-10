@@ -15,16 +15,21 @@ pin and its digests remain unchanged.
   only when their complete file/directory inventory and bytes reproduce from
   their portable state. This includes executable files and nested directories;
   loose or modified content remains untouched. The exact runtime shipped by #28
-  is recognized by its digest, with narrow allowances for its old receipt format.
+  is recognized by its digest, and its exact old loader bytes are recognized.
+  HTML receipts must match the reconstructed accepted receipt exactly; arbitrary
+  hexadecimal release substitutions are refused.
   The tracked-file guard runs for checkouts and worktrees and fails closed on
   Git errors; installed workspaces without checkout metadata need no Git binary.
   Repository-selection `GIT_*` variables are removed from both consumer and
   owner Git verification, and output names are treated as literal Git paths.
   Publication is bound to the directory identity validated before staging.
   New targets use atomic no-clobber rename. Existing targets are checked again
-  before exchange and the displaced generation is validated before deletion.
-  A concurrent swap is rolled back; if rollback fails, displaced content is
-  retained at the staging path reported in the error.
+  before exchange and the displaced generation is checked before completing
+  publication. A concurrent swap is rolled back. Any directory remaining after
+  publication is attempted is retained in a fresh private archive; a preservation
+  notice reports its path. Displaced generations are never recursively deleted,
+  including after successful replacement or rollback, so writes through old
+  directory handles survive. Only never-published private builds are disposable.
   Legacy plans must match the reproduced serialization byte for byte, including
   formatting and duplicate-key checks, with the original input digest retained.
 - First publication follows ordinary directory creation permissions and the
@@ -77,6 +82,11 @@ The publication race and Git-environment corrections passed 68 focused tests
 and 17 subtests, followed by all 15 owner-fixture integration tests. Coverage
 includes concurrent target creation/swaps, failed rollback preservation, late
 tracked-index and legacy-plan edits, and ambient Git repository selection.
+The final retention correction passed 69 focused tests and 17 subtests, including
+a write through an open handle after legacy validation. Altered HTML release
+receipts are covered by the owner-fixture suite. Retained directories are
+preservation material, not current published previews; this builder does not
+prune them automatically.
 Linux directory exchange was exercised; macOS and Windows were not exercised here.
 
 ## Acceptance boundary

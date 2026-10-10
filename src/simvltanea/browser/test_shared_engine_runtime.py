@@ -100,6 +100,21 @@ class SharedEngineRuntimeTest(unittest.TestCase):
             with self.assertRaises(StateError):build_preview(ROOT/'state-3.json',target)
             self.assertEqual(before,{p.relative_to(target):p.read_bytes() for p in target.rglob('*') if p.is_file()})
 
+    def test_modified_legacy_release_receipt_is_preserved(self):
+        import tempfile
+        from simvltanea.browser.browser_runtime import PREVIEW_MARKER
+        from simvltanea.authoring.composition import StateError
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp:
+            target=Path(temp)/'legacy'
+            build_preview(ROOT/'state-3.json',target)
+            (target/PREVIEW_MARKER).unlink()
+            path=target/'index.html';original=path.read_text()
+            edited=original.replace(resolve_shared_engine().pin['release']['commit'][:12],'0'*12)
+            self.assertNotEqual(original,edited)
+            path.write_text(edited)
+            with self.assertRaises(StateError):build_preview(ROOT/'state-3.json',target)
+            self.assertEqual(path.read_text(),edited)
+
     def test_preview_stages_the_verified_module_rather_than_a_copy_of_the_maths(self):
         """The bytes in the preview are the bytes that were digest-verified."""
         engine = resolve_shared_engine()

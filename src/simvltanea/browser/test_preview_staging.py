@@ -107,6 +107,10 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
         self.build()
         self.assertFalse((self.output / 'stale.js').exists())
         self.assertTrue((self.output / 'index.html').exists())
+        kept = list(self.generated.glob('.preview-retained-*'))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual((kept[0] / 'generation' / 'stale.js').read_text(), 'old generation')
+        self.assertEqual(stat.S_IMODE(kept[0].stat().st_mode), 0o700)
         self.assertEqual(list(self.generated.glob('.preview-stage-*')), [])
 
     def test_resolution_failure_replaces_receipt_with_clean_fallback(self):
@@ -240,9 +244,9 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
 
     def test_failed_rollback_preserves_the_displaced_directory(self):
         self._race_existing_exchange(rollback_fails=True)
-        kept = list(self.generated.glob('.preview-stage-*'))
+        kept = list(self.generated.glob('.preview-retained-*'))
         self.assertEqual(len(kept), 1)
-        self.assertEqual((kept[0] / 'personal').read_text(), 'preserve')
+        self.assertEqual((kept[0] / 'generation' / 'personal').read_text(), 'preserve')
         self.assertEqual((self.output / 'index.html').read_text(), 'verified 6')
 
     def test_git_environment_cannot_hide_real_tracked_files(self):

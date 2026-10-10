@@ -194,6 +194,31 @@ class PlanTests(unittest.TestCase):
                 with self.assertRaises(c.StateError):build_preview(ROOT/'state-3.json',target)
             self.assertEqual((target/'plan.json').read_text(),raw+' ')
 
+    def test_late_writes_through_displaced_legacy_handle_are_retained(self):
+        from simvltanea.browser import browser_runtime as runtime
+        from unittest.mock import patch
+        import tempfile
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp:
+            target=Path(temp)/'legacy'
+            build_preview(ROOT/'state-3.json',target)
+            (target/runtime.PREVIEW_MARKER).unlink()
+            descriptor=os.open(target,os.O_RDONLY|getattr(os,'O_DIRECTORY',0))
+            try:
+                validate=runtime._validate_preview_destination
+                def write_after_validation(state, path, **kwargs):
+                    identity=validate(state,path,**kwargs)
+                    if kwargs.get('tracked_output') == target:
+                        file=os.open('personal-original',os.O_WRONLY|os.O_CREAT,0o600,dir_fd=descriptor)
+                        with os.fdopen(file,'wb') as stream:stream.write(b'preserve late original')
+                    return identity
+                with patch.object(runtime,'_validate_preview_destination',side_effect=write_after_validation):
+                    build_preview(ROOT/'state-3.json',target)
+                archived=list(target.parent.glob('.legacy-retained-*/generation'))
+                self.assertEqual(len(archived),1)
+                self.assertEqual((archived[0]/'personal-original').read_bytes(),b'preserve late original')
+                self.assertFalse((target/'personal-original').exists())
+            finally:os.close(descriptor)
+
     def test_preview_rejects_unverified_browser_container(self):
         import tempfile
         with tempfile.TemporaryDirectory(dir=ROOT) as temp:

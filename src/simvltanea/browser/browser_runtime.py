@@ -334,10 +334,10 @@ def _publish_preview(staging: Path, output: Path, expected_identity, validate_ol
                 _rename_preview(staging, output, exchange=True)
             except Exception as rollback_error:
                 raise OSError(errno.ESTALE,
-                              f'preview rollback failed; displaced directory preserved at {staging}') from rollback_error
+                              'preview rollback failed; displaced directory retained; see preservation notice') from rollback_error
             raise
         raise OSError(errno.ESTALE,
-                      f'preview changed after publication; displaced directory preserved at {staging}') from error
+                      'preview changed after publication; displaced directory retained; see preservation notice') from error
 
 
 def _legacy_preview(output: Path) -> bool:
@@ -393,11 +393,6 @@ def _legacy_preview(output: Path) -> bool:
                 # identical, and every imported byte was compared above.
                 if relative == Path('shared-engine.js') and actual == expected.split(b'globalThis.__sharedEngineReceipt = ')[0]:
                     continue
-                if relative == Path('index.html'):
-                    normalize = lambda value: re.sub(rb'<!-- shared-engine release [0-9a-f]{12},',
-                                                     b'<!-- shared-engine release VERIFIED,', value)
-                    if normalize(actual) == normalize(expected):
-                        continue
                 return False
             return True
     except (OSError, UnicodeError, ValueError, c.StateError, SharedEngineUnavailable,
@@ -436,6 +431,19 @@ def _validate_preview_destination(state_path: Path, output: Path, *, tracked_out
     return _directory_identity(output)
 
 
+def _retain_preview(staging: Path, output: Path) -> None:
+    """Quarantine exposed generations without deleting bytes written via old handles."""
+    try:
+        archive = Path(tempfile.mkdtemp(prefix=f'.{output.name}-retained-', dir=output.parent))
+        # The destination is inside our fresh 0700 container. Moving the directory
+        # preserves cached handles and any concurrent writes; no recursive delete.
+        os.rename(staging, archive / 'generation')
+        retained = archive / 'generation'
+    except OSError:
+        retained = staging  # Publication/rollback result stands; preserve in place.
+    print(f'preview generation retained for preservation at {retained}', file=sys.stderr)
+
+
 def build_preview(state_path: Path, output: Path) -> dict:
     """Build privately and publish the HTML, receipt and executable bytes together."""
     c.require(not output.is_symlink(), 'preview destination must not be a symlink')
@@ -452,7 +460,7 @@ def build_preview(state_path: Path, output: Path) -> dict:
         shutil.rmtree(mode_probe)
     staging = Path(tempfile.mkdtemp(prefix=f'.{output.name}-stage-', dir=output.parent))
     new_identity = _directory_identity(staging)
-    published = False
+    publication_attempted = False
     try:
         plan = _build_preview_generation(state_path, staging)
         (staging / PREVIEW_MARKER).write_text('simvltanea-preview-v1\n')
@@ -461,14 +469,18 @@ def build_preview(state_path: Path, output: Path) -> dict:
         if expected_identity is not None:
             publish_mode = stat.S_IMODE(output.stat().st_mode)
         staging.chmod(publish_mode)
+        publication_attempted = True
         _publish_preview(staging, output, expected_identity,
                          lambda old: _validate_preview_destination(state_path, old, tracked_output=output))
-        published = True
         return plan
     finally:
-        # Never delete an unexpected displaced directory or a failed rollback.
+        # Once publication is attempted, retained directory handles can outlive
+        # any inventory check. Preserve all remaining generations, even rollback
+        # builds. Only our never-published private build is disposable.
         identity = _directory_identity(staging)
-        if identity == new_identity or (published and identity == expected_identity and identity is not None):
+        if identity is not None and publication_attempted:
+            _retain_preview(staging, output)
+        elif identity == new_identity:
             shutil.rmtree(staging, ignore_errors=True)
 
 
