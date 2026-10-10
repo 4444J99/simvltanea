@@ -337,25 +337,23 @@ class RefusalTest(unittest.TestCase):
         self.assertEqual(engine.verify()['files_verified'],
                          len(load_pin()['runtime_graph']))
 
-    def test_full_clone_of_the_accepted_branch_reports_an_accepted_release(self) -> None:
-        """The accepted-reporting case is proved on a full clone, not on ambient state.
+    def test_full_history_of_the_accepted_release_reports_accepted(self) -> None:
+        """The accepted-reporting case is proved on a full-history fixture.
 
-        Asserting this against whatever checkout happens to be beside the repository
-        makes the test's meaning depend on the machine. A full clone is the fixture.
+        Cloning the ambient owner cannot supply one: git propagates the source's
+        shallowness, so the fixture would be shallow wherever the machine happens
+        to have a shallow checkout. The local fixture repository has exactly the
+        history this case needs.
         """
-        probe = self.staging / 'proj-full'
-        (probe / 'src' / 'simvltanea').mkdir(parents=True)
-        (probe / 'pyproject.toml').write_text('[project]\nname = "probe"\n')
-        clone = subprocess.run(
-            ['git', 'clone', '-q', '--no-hardlinks',
-             '--branch', load_pin()['release']['branch'],
-             str(self.engine.root), str(probe / 'time-moment-brief')],
-            capture_output=True, text=True, check=False, timeout=120)
-        assert clone.returncode == 0, clone.stderr
-        self.assertFalse(_is_shallow(probe / 'time-moment-brief'))
-        engine = resolve_shared_engine(probe / 'src' / 'simvltanea')
+        self.clone_owner()
+        pin = self.fixture_pin()
+        self.assertFalse(_is_shallow(self.owner))
+        probe = self.probe('full-history')
+        engine = resolve_shared_engine(probe, pin=pin)
         self.assertEqual(engine.release_status, 'accepted')
         self.assertEqual(engine.verify()['release_status'], 'accepted')
+        self.assertEqual(engine.verify()['files_verified'],
+                         len(pin['runtime_graph']))
 
     def test_stale_release_is_refused(self) -> None:
         """A checkout that predates the accepted release must not supply the engine.
