@@ -19,6 +19,7 @@ import json
 import shutil
 import subprocess
 import sys
+import stat
 from fractions import Fraction
 from pathlib import Path
 
@@ -28,10 +29,11 @@ from simvltanea.browser.shared_engine import (
     resolve_shared_engine,
     _verify_graph,
 )
-from simvltanea.paths import REPO_ROOT
+from simvltanea.paths import REPO_ROOT, LAYOUT
 
 HERE = Path(__file__).resolve().parent
 PLAN_VERSION = 1
+PREVIEW_MARKER = '.simvltanea-preview'
 MAX_MEDIA_BYTES = 256 * 1024 * 1024
 # Explicit native-preview capability, not a restriction on the offline model.
 # The installed Chromium rejects smaller nonzero playbackRate values.
@@ -103,7 +105,11 @@ def stage_shared_engine(output: Path) -> dict | None:
                    release_status=engine.release_status,
                    files_verified=len(staged_digests),
                    entrypoint=engine.pin['entrypoint'])
-    receipt['release'] = engine.release or ''
+    receipt['release'] = engine.pin['release']['commit']
+    (output / 'shared-engine.js').write_text(
+        (output / 'shared-engine.js').read_text()
+        + 'globalThis.__sharedEngineReceipt = '
+        + json.dumps(receipt).replace('<', '\\u003c') + ';\n', encoding='utf-8')
     return receipt
 
 
@@ -177,6 +183,9 @@ def _build_preview_generation(state_path: Path, output: Path) -> dict:
     """Copy verified media to an incubator-local preview; no public upload occurs."""
     state_path, output = state_path.resolve(), output.resolve()
     c.require(output.is_relative_to(REPO_ROOT), 'preview must remain inside the incubator')
+    generated = LAYOUT.path('generated')
+    c.require(output.is_relative_to(generated) and output != generated,
+              'preview output must be a child of generated storage')
     c.require(output != state_path.parent and not state_path.is_relative_to(output),
               'preview output must not contain or replace the source state')
     state = c.load_state(state_path)
@@ -297,21 +306,70 @@ def _publish_preview(staging: Path, output: Path) -> None:
         raise OSError(code, os.strerror(code), str(output))
 
 
+def _legacy_preview(output: Path) -> bool:
+    """Recognize an intact pre-marker generation without admitting loose media."""
+    required = {'index.html', 'runtime.js', 'plan.json', 'state.json', 'media'}
+    allowed = required | {'shared-engine', 'shared-engine.js',
+                          'shared-engine-adapter.js', 'shared-engine-unavailable.txt'}
+    entries = {path.name for path in output.iterdir()}
+    if not required <= entries or not entries <= allowed:
+        return False
+    try:
+        state = c.load_state(output / 'state.json')
+        plan = json.loads((output / 'plan.json').read_text())
+        if not isinstance(plan, dict) or plan.get('state_sha256') != hashlib.sha256(
+                c.canonical_json(state).encode()).hexdigest():
+            return False
+        if '<title>Composition runtime proof</title>' not in (output / 'index.html').read_text():
+            return False
+        assets = set(c.media_paths(state, output).values())
+        soundtrack = c.soundtrack_path(state, output)
+        if soundtrack:
+            assets.add(soundtrack)
+        # Every media byte is a referenced, hash-verified derivative. Preserve
+        # unknown originals or unrelated files rather than exchanging them away.
+        present = {path.resolve() for path in (output / 'media').rglob('*') if path.is_file()}
+        return present == {path.resolve() for path in assets}
+    except (OSError, UnicodeError, ValueError, c.StateError):
+        return False
+
+
 def build_preview(state_path: Path, output: Path) -> dict:
     """Build privately and publish the HTML, receipt and executable bytes together."""
     c.require(not output.is_symlink(), 'preview destination must not be a symlink')
     state_path, output = state_path.resolve(), output.resolve()
     c.require(output.is_relative_to(REPO_ROOT), 'preview must remain inside the incubator')
+    generated = LAYOUT.path('generated')
+    c.require(output.is_relative_to(generated) and output != generated,
+              'preview output must be a child of generated storage')
     c.require(output != state_path.parent and not state_path.is_relative_to(output),
               'preview output must not contain or replace the source state')
+    tracked = subprocess.run(['git', '-C', str(REPO_ROOT), 'ls-files', '-z', '--',
+                              output.relative_to(REPO_ROOT).as_posix()],
+                             capture_output=True, check=False)
+    c.require(not tracked.stdout, 'preview output must not replace tracked files')
     if output.exists():
         c.require(output.is_dir(), 'preview destination must be a directory')
         c.require(not any(path.is_symlink() for path in output.rglob('*')),
                   'preview destination must not be a symlink')
+        marker = output / PREVIEW_MARKER
+        owned = marker.is_file() and marker.read_text() == 'simvltanea-preview-v1\n'
+        c.require(not any(output.iterdir()) or owned or _legacy_preview(output),
+                  'existing preview destination lacks a generation ownership marker')
     output.parent.mkdir(parents=True, exist_ok=True)
+    # Match ordinary mkdir/umask for first publication; preserve existing mode.
+    mode_probe = Path(tempfile.mkdtemp(prefix='.preview-mode-', dir=output.parent))
+    try:
+        probe = mode_probe / 'directory'
+        probe.mkdir()
+        publish_mode = stat.S_IMODE(output.stat().st_mode if output.exists() else probe.stat().st_mode)
+    finally:
+        shutil.rmtree(mode_probe)
     staging = Path(tempfile.mkdtemp(prefix=f'.{output.name}-stage-', dir=output.parent))
     try:
         plan = _build_preview_generation(state_path, staging)
+        (staging / PREVIEW_MARKER).write_text('simvltanea-preview-v1\n')
+        staging.chmod(publish_mode)
         _publish_preview(staging, output)
         return plan
     finally:

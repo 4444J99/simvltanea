@@ -5,6 +5,7 @@ import hashlib
 import shutil
 import unittest
 from pathlib import Path
+import stat
 from unittest.mock import patch
 
 from simvltanea.browser import browser_runtime as runtime
@@ -15,13 +16,17 @@ from simvltanea.browser.test_shared_engine import HermeticEngineFixture
 class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
-        self.output = self.fixture_root / 'preview'
+        self.generated = self.fixture_root / 'var'
+        self.generated.mkdir()
+        self.output = self.generated / 'preview'
         self.state = self.fixture_root / 'input' / 'state.json'
         self.state.parent.mkdir()
         self.state.write_text('{}')
         # macOS exposes /var through /private/var; compare canonical paths just
         # as build_preview does for the destination, preserving containment.
         self.enterContext(patch.object(runtime, 'REPO_ROOT', self.fixture_root.resolve()))
+        self.enterContext(patch.object(runtime, 'LAYOUT'))
+        runtime.LAYOUT.path.return_value = self.generated.resolve()
         self.enterContext(patch.object(runtime, 'resolve_shared_engine', return_value=self.engine))
 
     def build_generation(self, state, output):
@@ -111,7 +116,7 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
         with patch.object(runtime, 'resolve_shared_engine', side_effect=SharedEngineUnavailable('rejected')):
             with patch.object(runtime, '_build_preview_generation', side_effect=fallback):
                 runtime.build_preview(self.state, self.output)
-        self.assertEqual(set(self.snapshot()), {'index.html', 'shared-engine-unavailable.txt'})
+        self.assertEqual(set(self.snapshot()), {'index.html', 'shared-engine-unavailable.txt', runtime.PREVIEW_MARKER})
         self.assertEqual((self.output / 'index.html').read_text(), 'unavailable')
 
     def test_reused_or_symlinked_staging_destination_is_rejected(self):
@@ -124,6 +129,34 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
         with self.assertRaises(runtime.c.StateError):
             self.build()
         self.assertEqual(external.read_text(), 'preserve')
+
+    def test_publication_permissions_match_mkdir_and_preserve_existing_mode(self):
+        probe = self.generated / 'normal'
+        probe.mkdir()
+        self.build()
+        self.assertEqual(stat.S_IMODE(self.output.stat().st_mode), stat.S_IMODE(probe.stat().st_mode))
+        self.output.chmod(0o750)
+        self.build()
+        self.assertEqual(stat.S_IMODE(self.output.stat().st_mode), 0o750)
+
+    def test_repository_and_unowned_generated_directories_are_preserved(self):
+        for target in (self.fixture_root / 'src', self.generated / 'personal-media'):
+            target.mkdir()
+            (target / 'preserve').write_text('irreplaceable')
+            with self.subTest(target=target):
+                with patch.object(self, 'output', target):
+                    with self.assertRaises(runtime.c.StateError):
+                        self.build()
+            self.assertEqual((target / 'preserve').read_text(), 'irreplaceable')
+
+    def test_tracked_generated_files_are_preserved(self):
+        self.build()
+        before = self.snapshot()
+        from subprocess import CompletedProcess
+        with patch.object(runtime.subprocess, 'run', return_value=CompletedProcess([], 0, stdout=b'tracked')):
+            with self.assertRaisesRegex(runtime.c.StateError, 'tracked'):
+                self.build()
+        self.assertEqual(self.snapshot(), before)
 
     def test_non_object_owner_manifest_is_a_refusal(self):
         from simvltanea.browser.shared_engine import resolve_shared_engine

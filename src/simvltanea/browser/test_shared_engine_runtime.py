@@ -110,7 +110,7 @@ class SharedEngineRuntimeTest(unittest.TestCase):
         self.assertIsNone(shared['error'], shared['error'])
         self.assertEqual(shared['panels'], len(self.plan['tracks']))
         self.assertEqual(shared['build'],
-                         'shared-engine@time-moment-brief/agent7-shared-engine')
+                         'shared-engine@time-moment-brief/' + resolve_shared_engine().pin['release']['commit'])
 
     def test_shared_evaluator_moves_the_rendered_panel_framing(self):
         """The claim under test: a score drives a rendered view, not a test fixture."""
@@ -148,7 +148,7 @@ class SharedEngineRuntimeTest(unittest.TestCase):
         observed = self.page.evaluate("""async () => {
           await new Promise((r) => setTimeout(r, 400));
           const snapshot = window.compositionRuntime.snapshot();
-          return { poses: snapshot.sharedEngine.poses, time: snapshot.compositionTime };
+          return { poses: snapshot.sharedEngine.poses, time: snapshot.sharedEngine.renderedTime };
         }""")
         # Recompile the same score in the page and evaluate it at the same time.
         direct = self.page.evaluate("""async (t) => {
@@ -172,7 +172,7 @@ class SharedEngineRuntimeTest(unittest.TestCase):
         sample = self.page.evaluate("""async () => {
           await new Promise((r) => setTimeout(r, 500));
           const snapshot = window.compositionRuntime.snapshot();
-          return { poses: snapshot.sharedEngine.poses, time: snapshot.compositionTime };
+          return { poses: snapshot.sharedEngine.poses, time: snapshot.sharedEngine.renderedTime };
         }""")
         azimuths = [pose['azimuth'] for pose in sample['poses']]
         self.assertEqual(len(set(round(a, 6) for a in azimuths)), len(azimuths),
@@ -197,6 +197,47 @@ class SharedEngineRuntimeTest(unittest.TestCase):
             self.assertEqual(shared['poses'], [], 'poses were reported without a module')
         finally:
             page.close()
+
+    def test_snapshot_describes_the_visible_frame_after_pause(self):
+        self.page.evaluate('() => window.compositionRuntime.start()')
+        self.page.wait_for_timeout(350)
+        self.page.evaluate('() => window.compositionRuntime.pause()')
+        before = self.page.evaluate('() => window.compositionRuntime.snapshot().sharedEngine')
+        styles = self.page.locator('.loop video, .loop img').evaluate_all(
+            '(nodes) => nodes.map(n=>n.style.objectPosition)')
+        self.page.wait_for_timeout(120)
+        after = self.page.evaluate('() => window.compositionRuntime.snapshot().sharedEngine')
+        self.assertEqual(before, after)
+        self.assertEqual(styles, self.page.locator('.loop video, .loop img').evaluate_all(
+            '(nodes) => nodes.map(n=>n.style.objectPosition)'))
+
+    def test_reordered_orientation_preserves_pose_identity(self):
+        self.page.evaluate("""() => {
+          const runtime=window.compositionRuntime;
+          const landscape=structuredClone(runtime.plan.layout_keyframes[0].layouts.landscape);
+          landscape.cells.reverse();
+          runtime.plan.layout_keyframes[0].layouts.portrait=landscape;
+        }""")
+        before = self.page.locator('.loop video, .loop img').evaluate_all(
+            '(nodes) => nodes.map(n=>n.style.objectPosition)')
+        self.page.set_viewport_size({'width':480,'height':800})
+        self.page.wait_for_function('window.compositionRuntime.orientation === "portrait"')
+        after = self.page.locator('.loop video, .loop img').evaluate_all(
+            '(nodes) => nodes.map(n=>n.style.objectPosition)')
+        self.assertEqual(before, after)
+
+    def test_slice_preview_renders_motion_in_source_offsets(self):
+        build_preview(ROOT / 'state-slice-3.json', ROOT / 'preview-shared-slice')
+        self.page.goto(f'http://127.0.0.1:{self.port}/preview-shared-slice/index.html')
+        self.page.wait_for_function('window.compositionRuntime && window.compositionRuntime.ready')
+        before = self.page.locator('.loop video, .loop img').evaluate_all(
+            '(nodes) => nodes.map(n=>[n.style.marginLeft,n.style.marginTop])')
+        self.page.evaluate('() => window.compositionRuntime.start()')
+        self.page.wait_for_timeout(500)
+        after = self.page.locator('.loop video, .loop img').evaluate_all(
+            '(nodes) => nodes.map(n=>[n.style.marginLeft,n.style.marginTop])')
+        self.assertNotEqual(before, after)
+        self.assertEqual(self.errors, [])
 
     def test_no_page_errors_during_playback(self):
         self.page.evaluate('() => window.compositionRuntime.start()')

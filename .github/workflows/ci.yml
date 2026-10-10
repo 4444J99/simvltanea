@@ -91,7 +91,7 @@ jobs:
 
       - name: Verify shared-engine resolution and atomic staging without an owner checkout
         run: |
-          PYTHONPATH=src python3 -m unittest simvltanea.browser.test_shared_engine.AcceptedPinTest simvltanea.browser.test_shared_engine.ResolutionTest simvltanea.browser.test_shared_engine.RefusalTest simvltanea.browser.test_preview_staging -v
+          PYTHONPATH=src python3 -m unittest simvltanea.browser.test_shared_engine.AcceptedPinTest simvltanea.browser.test_shared_engine.ResolutionTest simvltanea.browser.test_shared_engine.RefusalTest simvltanea.browser.test_shared_engine.RefreshedVerificationTest simvltanea.browser.test_shared_engine_rendering simvltanea.browser.test_preview_staging -v
 
       - name: Measure retained archive media before catalogue repair
         run: python3 -m tools.verification.verify_archive_media

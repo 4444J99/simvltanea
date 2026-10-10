@@ -117,6 +117,21 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(len(c.media_paths(saved,target)),3)
         self.assertEqual(c.resolve_at(saved,95)['loops'],c.resolve_at(c.load_state(ROOT/'state-3.json'),95)['loops'])
 
+    def test_verified_legacy_preview_can_be_replaced_but_loose_media_is_preserved(self):
+        from simvltanea.browser.browser_runtime import PREVIEW_MARKER
+        import tempfile
+        target=Path(self.enterContext(tempfile.TemporaryDirectory(dir=ROOT)))/'preview-legacy'
+        build_preview(ROOT/'state-3.json',target)
+        (target/PREVIEW_MARKER).unlink()
+        build_preview(ROOT/'state-3.json',target)
+        self.assertTrue((target/PREVIEW_MARKER).is_file())
+        (target/PREVIEW_MARKER).unlink()
+        extra=target/'media'/'personal-original.mp4'
+        extra.write_bytes(b'preserve original')
+        with self.assertRaises(c.StateError):
+            build_preview(ROOT/'state-3.json',target)
+        self.assertEqual(extra.read_bytes(),b'preserve original')
+
     def test_preview_media_symlink_escape_rejected(self):
         import tempfile
         with tempfile.TemporaryDirectory(dir=ROOT) as temp:

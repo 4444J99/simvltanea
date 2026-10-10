@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,24 +88,15 @@ class SharedEngine:
 
     def verify(self) -> dict:
         """Re-run every check. Returns a receipt; raises on any failure."""
-        mismatches = []
-        for relative, expected in sorted(self.pin['runtime_graph'].items()):
-            target = self.module_root / Path(relative).relative_to('shared-engine')
-            if not target.is_file():
-                mismatches.append(f'{relative}: absent')
-            elif _sha256(target) != expected:
-                mismatches.append(f'{relative}: sha256 {_short(_sha256(target))} != accepted {_short(expected)}')
-        if mismatches:
-            raise SharedEngineUnavailable(
-                'shared engine no longer matches the accepted build:\n  '
-                + '\n  '.join(mismatches)
-                + '\nThis checkout was edited after acceptance. Re-pin deliberately; '
-                  'do not silently adopt it.')
+        provenance = _load_json(self.root / PROVENANCE_RELATIVE, 'the owner provenance record')
+        _verify_provenance(provenance, self.pin)
+        digests = _verify_graph(self.module_root, self.pin)
+        commit, release_status = _verify_release(self.root, self.pin)
         return {
             'module': 'time-moment-brief/shared-engine',
-            'release': self.git_commit,
-            'release_status': self.release_status,
-            'files_verified': len(self.digests),
+            'release': commit,
+            'release_status': release_status,
+            'files_verified': len(digests),
             'entrypoint': ENTRYPOINT,
         }
 
@@ -127,10 +119,20 @@ def _load_json(path: Path, what: str) -> dict:
         if not isinstance(value, dict):
             raise SharedEngineUnavailable(f'{path.name} must contain a JSON object')
         return value
-    except json.JSONDecodeError as error:
+    except (json.JSONDecodeError, UnicodeError, OSError) as error:
         raise SharedEngineUnavailable(
             f'{path.name} is not readable JSON ({error}). A malformed manifest is a '
             f'refusal, not an empty verification.') from error
+
+
+def _validate_graph(graph: dict) -> None:
+    if not isinstance(graph, dict) or not graph:
+        raise SharedEngineUnavailable('the runtime graph must be a nonempty object')
+    for relative, digest in graph.items():
+        if not isinstance(relative, str) or not relative.startswith('shared-engine/'):
+            raise SharedEngineUnavailable('runtime graph paths must be shared-engine-relative')
+        if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+            raise SharedEngineUnavailable(f'{relative}: expected a SHA-256 digest string')
 
 
 def load_pin() -> dict:
@@ -155,23 +157,27 @@ def load_pin() -> dict:
         raise SharedEngineUnavailable(
             f'{PIN_NAME} pins no release commit. A pin without a version cannot '
             f'reject a stale checkout.')
+    _validate_graph(graph)
     return pin
 
 
-def repository_root(start: Path = HERE) -> Path:
+def repository_root(start: Path | None = None) -> Path:
     """The checkout root, found by walking up to the project marker.
 
     Resolved from this file rather than assumed to be three levels up, so the
     layout survives the package moving and works identically for a plain checkout
     and for a worktree.
     """
+    if start is None:
+        from simvltanea.paths import REPO_ROOT
+        return REPO_ROOT
     for base in [start.resolve(), *start.resolve().parents]:
         if (base / 'pyproject.toml').is_file():
             return base
     return start.resolve().parents[2]
 
 
-def candidate_roots(start: Path = HERE):
+def candidate_roots(start: Path | None = None):
     """Yield the documented sibling locations only, nearest first.
 
     Deliberately not an ancestor-wide scan. An earlier version walked six levels
@@ -230,12 +236,13 @@ def _git_contains(root: Path, commit: str) -> bool | None:
 
 def _verify_graph(module_root: Path, pin: dict) -> dict:
     """Hash every pinned file. All must match; partial verification is a refusal."""
+    _validate_graph(pin['runtime_graph'])
     digests, mismatches = {}, []
     for relative, expected in sorted(pin['runtime_graph'].items()):
         inner = Path(relative).relative_to('shared-engine')
         target = module_root / inner
         # A pin path that escapes the module is a malformed pin, not a file to read.
-        if not str(target.resolve()).startswith(str(module_root.resolve()) + '/'):
+        if not target.resolve().is_relative_to(module_root.resolve()):
             raise SharedEngineUnavailable(
                 f'pinned path {relative} escapes the shared-engine module.')
         if not target.is_file():
@@ -261,6 +268,7 @@ def _verify_provenance(provenance: dict, pin: dict) -> None:
         raise SharedEngineUnavailable(
             'the owner manifest records no runtime graph. Refusing to treat an '
             'incomplete manifest as verified.')
+    _validate_graph(graph)
     if provenance.get('entrypoint') != ENTRYPOINT:
         raise SharedEngineUnavailable(
             f'the owner manifest declares entrypoint {provenance.get("entrypoint")!r}, '
@@ -288,7 +296,32 @@ def _verify_provenance(provenance: dict, pin: dict) -> None:
               'happened to be found.')
 
 
-def resolve_shared_engine(start: Path = HERE, pin: dict | None = None) -> SharedEngine:
+def _verify_release(root: Path, pin: dict) -> tuple[str, str]:
+    commit = _git_commit(root)
+    pinned = pin['release']['commit']
+    if commit is None:
+        raise SharedEngineUnavailable(
+            f'{root} is not a readable git checkout, so its release cannot be '
+            f'checked against the accepted commit {pinned[:12]}. A checkout of '
+            f'unknown vintage is not an accepted release.')
+    contains = _git_contains(root, pinned)
+    if contains is False:
+        raise SharedEngineUnavailable(
+            f'{root} is at {commit[:12]}, which does not contain the accepted '
+            f'release {pinned[:12]}. The engine is stale; check out the accepted '
+            f'release rather than re-pinning to whatever is present.')
+    # contains is None on a shallow clone: ancestry is unknowable, not false.
+    # Every pinned digest was already verified byte-for-byte above, so the
+    # build is authenticated by content. The provenance gap is reported rather
+    # than hidden, because "verified by digest, release unconfirmed" is a
+    # weaker claim than "verified as the accepted release" and a receipt that
+    # cannot tell them apart is worth nothing.
+    release_status = ('accepted' if contains else
+                      'digest-verified, release unconfirmed (shallow clone)')
+    return commit, release_status
+
+
+def resolve_shared_engine(start: Path | None = None, pin: dict | None = None) -> SharedEngine:
     """Resolve, verify and pin-check the shared engine, or raise with what was tried."""
     pin = pin or load_pin()
     searched = []
@@ -302,27 +335,7 @@ def resolve_shared_engine(start: Path = HERE, pin: dict | None = None) -> Shared
         module_root = candidate / 'shared-engine'
         digests = _verify_graph(module_root, pin)
         _verify_provenance(provenance, pin)
-        commit = _git_commit(candidate)
-        pinned = pin['release']['commit']
-        if commit is None:
-            raise SharedEngineUnavailable(
-                f'{candidate} is not a readable git checkout, so its release cannot be '
-                f'checked against the accepted commit {pinned[:12]}. A checkout of '
-                f'unknown vintage is not an accepted release.')
-        contains = _git_contains(candidate, pinned)
-        if contains is False:
-            raise SharedEngineUnavailable(
-                f'{candidate} is at {commit[:12]}, which does not contain the accepted '
-                f'release {pinned[:12]}. The engine is stale; check out the accepted '
-                f'release rather than re-pinning to whatever is present.')
-        # contains is None on a shallow clone: ancestry is unknowable, not false.
-        # Every pinned digest was already verified byte-for-byte above, so the
-        # build is authenticated by content. The provenance gap is reported rather
-        # than hidden, because "verified by digest, release unconfirmed" is a
-        # weaker claim than "verified as the accepted release" and a receipt that
-        # cannot tell them apart is worth nothing.
-        release_status = ('accepted' if contains else
-                          'digest-verified, release unconfirmed (shallow clone)')
+        commit, release_status = _verify_release(candidate, pin)
         found.append(SharedEngine(
             root=candidate, module_root=module_root, provenance=provenance, pin=pin,
             digests=digests, git_commit=commit, owner_directory=candidate.name,
