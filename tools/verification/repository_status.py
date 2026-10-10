@@ -34,11 +34,11 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class GitHubReader:
-    def __init__(self, repository: str, token: str | None = None):
+    def __init__(self, repository: str, token: str | None = None):  # allow-secret: optional parameter, no credential literal
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
             raise ValueError("invalid repository identity")
         self.base = "https://api.github.com/repos/" + repository
-        self.token = token
+        self.token = token  # allow-secret: caller-provided reference, no credential literal
         self.opener = build_opener(NoRedirect())
 
     def get(self, path: str, params: dict | None = None) -> tuple[Any, dict]:

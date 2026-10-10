@@ -25,7 +25,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 simvltanea = ["py.typed", "layout.toml"]
-"simvltanea.browser" = ["*.js"]
+"simvltanea.browser" = ["*.js", "shared_engine_pin.json"]
 
 [tool.simvltanea]
 layout = "src/simvltanea/layout.toml"

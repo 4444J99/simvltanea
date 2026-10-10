@@ -101,7 +101,7 @@ class RepositoryStatusTests(unittest.TestCase):
 
     def test_reader_rejects_foreign_or_traversing_endpoints(self):
         reader = GitHubReader("owner/repo", "not-a-real-token")
-        for path in ("https://other.example", "/../secrets", "/branches?token=x"):
+        for path in ("https://other.example", "/../secrets", "/branches?token=x"):  # allow-secret: adversarial URL fixture
             with self.subTest(path=path), self.assertRaises(ValueError):
                 reader.get(path)
 

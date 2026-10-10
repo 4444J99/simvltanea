@@ -214,6 +214,62 @@ function renderSeams() {
     }
   }
 }
+/* Shared-engine consumer.
+ *
+ * `SimvltaneaSharedEngineAdapter` compiles this composition's panel layout into a
+ * choreography score and evaluates it with the shared module's
+ * evaluateSpatialScore. The result is the per-panel viewing orientation, applied
+ * to each panel's focal point. That is a real rendered effect: the panel framing
+ * moves as the score sweeps.
+ *
+ * The module is shared with time-moment-brief and injected by build_preview after
+ * digest verification. This file holds no copy and re-derives no timeline math. An
+ * absent module is reported in the status line rather than silently leaving every
+ * panel centred, which would look like a working composition. */
+let panelDriver = null;
+function installPanelDriver(layout) {
+  const adapter = window.SimvltaneaSharedEngineAdapter;
+  if (!adapter) {
+    runtime.sharedEngineError = window.__sharedEngineUnavailable || 'shared-engine adapter did not load';
+    return false;
+  }
+  try {
+    panelDriver = adapter.createPanelDriver(window.SharedEngine, {
+      panels: layout.cells.length,
+      duration: runtime.plan.frames / runtime.plan.fps,
+      sweep: 0.35,
+      elevation: 0.12,
+    });
+    runtime.sharedEngineBuild = adapter.BUILD_ID;
+    runtime.sharedEnginePanels = panelDriver.score.blocks.length;
+    runtime.sharedEngineError = null;
+    return true;
+  } catch (error) {
+    runtime.sharedEngineError = String(error.message);
+    setStatus('error', 'Shared engine unavailable: ' + error.message);
+    return false;
+  }
+}
+function applyPanelOrientation(seconds) {
+  if (!panelDriver) return;
+  const layout = runtime.plan.layout_keyframes[runtime.layoutIndex].layouts[runtime.orientation];
+  if (!layout) return;
+  layout.cells.forEach((cell, index) => {
+    const node = runtime.nodes.get(cell.loop);
+    if (!node || node.span?.slice_rect) return;
+    const pose = panelDriver.panelAt(index, seconds);
+    /* Azimuth is the score's horizontal sweep; the panel's own focal point is
+     * the centre it returns to, so the sweep moves the frame around it rather
+     * than replacing the composition's declared framing. */
+    const focal = cell.focal.map((value, axis) => {
+      const centre = number(value);
+      const offset = axis === 0 ? pose.azimuth : pose.elevation;
+      return Math.max(0, Math.min(1, centre + offset / (2 * Math.PI)));
+    });
+    node.media.style.objectPosition = focal.map(v => `${v * 100}%`).join(' ');
+  });
+}
+
 function applyLayout() {
   if (!runtime.plan || runtime.nodes.size !== runtime.plan.tracks.length) return;
   const {width, height} = stage.getBoundingClientRect();
@@ -222,6 +278,12 @@ function applyLayout() {
   const orientationChanged=runtime.orientation!==null && runtime.orientation!==orientation;
   const layout = runtime.plan.layout_keyframes[runtime.layoutIndex].layouts[orientation];
   runtime.orientation = orientation;
+  /* The panel score is derived from the panel count, so a layout keyframe that
+   * changes the panel count needs a new driver. Rebuilt only on a change: a
+   * resize that keeps the count must not reset the sweep. */
+  if (layout && (!panelDriver || panelDriver.score.blocks.length !== layout.cells.length)) {
+    installPanelDriver(layout);
+  }
   layout.cells.forEach((cell, z) => {
     const node = runtime.nodes.get(cell.loop);
     const [x,y,w,h] = cell.rect.map(number);
@@ -236,6 +298,7 @@ function applyLayout() {
   });
   // Apply per-loop slice if active
   for (const node of runtime.nodes.values()) applySlice(node);
+  applyPanelOrientation(compositionTime());
   renderSeams();
   record('layout', null, {orientation, width, height});
 }
@@ -314,6 +377,10 @@ function tick(generation) {
         activate(node, node.spans[next], frame).catch(fail).finally(() => { node.busy = false; });
       }
     }
+    /* The shared evaluator's sweep is applied per frame, not per layout change:
+     * it is a continuous move, and only a layout reapplication would freeze it
+     * between keyframes. */
+    applyPanelOrientation(frame / runtime.plan.fps);
   } catch (error) { fail(error); }
   requestAnimationFrame(()=>tick(generation));
 }
@@ -386,25 +453,38 @@ runtime.seek = async seconds => {
   record('transport-seek',null,{time:seconds}); setStatus('paused','Paused · click or Space to resume');
   if (wasRunning) await runtime.start();
 };
-runtime.snapshot = () => ({
-  frame: runtime.frame, wall: performance.now(), orientation: runtime.orientation,
-  running: runtime.running, finished: runtime.finished, error: runtime.error,
-  compositionTime:compositionTime(),
-  audio:{mode:runtime.audio.mode,enabled:runtime.audio.enabled,contextState:runtime.audio.context?.state??null,
-    blocked:runtime.audio.blocked??null,
-    soundtrackPlaying:!!runtime.audio.source,gain:runtime.audio.gain?.gain.value??null},
-  loops: [...runtime.nodes.values()].map(n => ({
-    id:n.id, source:n.source, kind:n.kind, currentTime:n.media.currentTime ?? null,
-    rate:n.media.playbackRate ?? 0, paused:n.media.paused ?? true, readyState:n.media.readyState ?? null,
-    busy:n.busy, callbacks:n.callbacks, decoded:n.decoded,
-    audio:n.audio ? {gain:n.audio.gain.gain.value,pan:n.audio.pan.pan.value}:null,
-    rect:n.box.getBoundingClientRect().toJSON(),
-    quality:n.media.getVideoPlaybackQuality?.().toJSON?.() ?? (n.kind === 'video' ? {
-      totalVideoFrames:n.media.getVideoPlaybackQuality().totalVideoFrames,
-      droppedVideoFrames:n.media.getVideoPlaybackQuality().droppedVideoFrames} : null),
-  })),
-  eventCount: runtime.events.length,
-});
+runtime.snapshot = () => {
+  // Bind every derived value to the same instant, including while playing.
+  const sampledTime = compositionTime();
+  return {
+    frame: runtime.frame, wall: performance.now(), orientation: runtime.orientation,
+    running: runtime.running, finished: runtime.finished, error: runtime.error,
+    compositionTime:sampledTime,
+    /* The shared engine's contribution, reported so a test can assert the module
+     * actually ran rather than inferring it from unchanged panel framing. */
+    sharedEngine:{
+      build:runtime.sharedEngineBuild??null,
+      panels:runtime.sharedEnginePanels??0,
+      error:runtime.sharedEngineError??null,
+      poses:panelDriver ? panelDriver.evaluate(sampledTime).map(
+        pose=>({azimuth:pose.azimuth,elevation:pose.elevation,fov:pose.fov})) : [],
+    },
+    audio:{mode:runtime.audio.mode,enabled:runtime.audio.enabled,contextState:runtime.audio.context?.state??null,
+      blocked:runtime.audio.blocked??null,
+      soundtrackPlaying:!!runtime.audio.source,gain:runtime.audio.gain?.gain.value??null},
+    loops: [...runtime.nodes.values()].map(n => ({
+      id:n.id, source:n.source, kind:n.kind, currentTime:n.media.currentTime ?? null,
+      rate:n.media.playbackRate ?? 0, paused:n.media.paused ?? true, readyState:n.media.readyState ?? null,
+      busy:n.busy, callbacks:n.callbacks, decoded:n.decoded,
+      audio:n.audio ? {gain:n.audio.gain.gain.value,pan:n.audio.pan.pan.value}:null,
+      rect:n.box.getBoundingClientRect().toJSON(),
+      quality:n.media.getVideoPlaybackQuality?.().toJSON?.() ?? (n.kind === 'video' ? {
+        totalVideoFrames:n.media.getVideoPlaybackQuality().totalVideoFrames,
+        droppedVideoFrames:n.media.getVideoPlaybackQuality().droppedVideoFrames} : null),
+    })),
+    eventCount: runtime.events.length,
+  };
+};
 // Tests may supply file-backed IO without enabling network access. Playback,
 // layout, integrity comparisons and event handling use the identical code path.
 const io = window.compositionIO || {
@@ -580,6 +660,7 @@ async function initialize() {
   setStatus('ready',runtime.audio.mode==='none' ? 'Click or press Space to play the silent field.' :
     'Click or press Space to play with sound.');
   applyLayout();
+  if (runtime.sharedEngineError) setStatus('error', 'Shared engine unavailable: ' + runtime.sharedEngineError);
 }
 initialize().catch(fail);
 

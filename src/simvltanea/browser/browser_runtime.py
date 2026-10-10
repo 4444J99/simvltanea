@@ -9,15 +9,25 @@ of frame-exact, unlimited-duration, background-tab or mobile-device playback.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
+import os
+import tempfile
 import copy
 import hashlib
 import json
 import shutil
 import subprocess
+import sys
 from fractions import Fraction
 from pathlib import Path
 
 from simvltanea.authoring import composition as c
+from simvltanea.browser.shared_engine import (
+    SharedEngineUnavailable,
+    resolve_shared_engine,
+    _verify_graph,
+)
 from simvltanea.paths import REPO_ROOT
 
 HERE = Path(__file__).resolve().parent
@@ -41,6 +51,60 @@ font:13px/1.4 system-ui,sans-serif;color:#fff;background:#000b;pointer-events:no
 <p id="runtime-status" role="status" aria-live="polite">Loading verified composition…</p>
 <script src="runtime.js" defer></script>
 '''
+
+
+def stage_shared_engine(output: Path) -> dict | None:
+    """Copy the digest-verified shared engine into the preview, or say why not.
+
+    The engine is owned and versioned by time-moment-brief. This resolves it
+    through the consumer resolver, which verifies every pinned digest and the
+    accepted release, and copies the exact verified bytes. Nothing is regenerated
+    or patched on the way in.
+
+    A failure is not fatal to the preview and is not hidden either: the caller
+    writes the reason into the generated HTML, so an operator opening the preview
+    sees that the shared engine is absent instead of wondering why every panel
+    stayed centred.
+    """
+    for name in ('shared-engine', 'shared-engine-adapter.js', 'shared-engine.js',
+                 'shared-engine-unavailable.txt', 'index.html'):
+        if (output / name).exists() or (output / name).is_symlink():
+            raise ValueError('shared engine staging requires a fresh destination')
+    try:
+        engine = resolve_shared_engine()
+    except SharedEngineUnavailable as error:
+        print(f'shared engine unavailable: {error}', file=sys.stderr)
+        (output / 'shared-engine-unavailable.txt').write_text(
+            str(error) + '\n', encoding='utf-8')
+        return None
+
+    module_dir = output / 'shared-engine'
+    # This helper only writes into a fresh, unpublished generation.
+    for relative in sorted(engine.pin['runtime_graph']):
+        inner = Path(relative).relative_to('shared-engine')
+        source = engine.module_root / inner
+        target = module_dir / inner
+        if not target.resolve().is_relative_to(module_dir.resolve()):
+            raise SharedEngineUnavailable(f'pinned path {relative} escapes the staged module')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    # Authenticate the destination, including mutations between resolve and copy.
+    staged_digests = _verify_graph(module_dir, engine.pin)
+    shutil.copyfile(HERE / 'shared_engine_adapter.js', output / 'shared-engine-adapter.js')
+    # The browser entry publishes the module as a global the runtime can reach.
+    # It imports rather than inlines, so the bytes the page runs are the bytes
+    # that were verified.
+    (output / 'shared-engine.js').write_text(
+        "import * as SharedEngine from './shared-engine/index.js';\n"
+        "globalThis.SharedEngine = SharedEngine;\n"
+        "globalThis.__sharedEngineReady = Promise.resolve(SharedEngine);\n",
+        encoding='utf-8')
+    receipt = dict(module='time-moment-brief/shared-engine',
+                   release_status=engine.release_status,
+                   files_verified=len(staged_digests),
+                   entrypoint=engine.pin['entrypoint'])
+    receipt['release'] = engine.release or ''
+    return receipt
 
 
 def _continues(a: dict, b: dict, fps: int) -> bool:
@@ -109,7 +173,7 @@ def compile_plan(state: dict) -> dict:
                 layout_keyframes=layouts, sources=sources, seam=seam, slice=slice_cfg)
 
 
-def build_preview(state_path: Path, output: Path) -> dict:
+def _build_preview_generation(state_path: Path, output: Path) -> dict:
     """Copy verified media to an incubator-local preview; no public upload occurs."""
     state_path, output = state_path.resolve(), output.resolve()
     c.require(output.is_relative_to(REPO_ROOT), 'preview must remain inside the incubator')
@@ -187,8 +251,73 @@ def build_preview(state_path: Path, output: Path) -> dict:
     (output / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
     c.save_state(portable, output / 'state.json')
     shutil.copyfile(HERE / 'browser.runtime.js', output / 'runtime.js')
-    (output / 'index.html').write_text(HTML)
+    shared = stage_shared_engine(output)
+    (output / 'index.html').write_text(HTML.replace(
+        '<script src="runtime.js" defer></script>',
+        f'<script src="runtime.js" defer></script>\n'
+        # The adapter is a classic script; the module is a real ES module, copied
+        # from the verified owner checkout. No copy of the maths lives here.
+        f'<script src="shared-engine-adapter.js" defer></script>\n'
+        f'<script type="module" src="shared-engine.js"></script>\n'
+        f'<!-- shared-engine release {shared["release"][:12]}, '
+        f'{shared["files_verified"]} files digest-verified -->\n'
+        if shared else (
+            '<script src="runtime.js" defer></script>\n'
+            '<script>window.__sharedEngineUnavailable = '
+            + json.dumps((output / 'shared-engine-unavailable.txt').read_text()).replace('<', '\\u003c')
+            + ';</script>\n')))
     return plan
+
+
+def _publish_preview(staging: Path, output: Path) -> None:
+    """Atomically publish a complete directory, retaining old bytes on failure.
+
+    Nonempty directories cannot be replaced with ordinary rename. Linux and
+    macOS supply atomic exchange; unsupported hosts refuse replacement rather
+    than exposing a gap or mixing generations. After exchange, staging holds the
+    old generation and the caller removes it.
+    """
+    if not output.exists():
+        os.replace(staging, output)
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith('linux'):
+        exchange = libc.renameat2
+        exchange.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+                             ctypes.c_char_p, ctypes.c_uint]
+        result = exchange(-100, os.fsencode(staging), -100, os.fsencode(output), 2)
+    elif sys.platform == 'darwin':
+        exchange = libc.renamex_np
+        exchange.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        result = exchange(os.fsencode(staging), os.fsencode(output), 2)
+    else:
+        raise OSError(errno.ENOTSUP, 'atomic preview directory exchange unavailable')
+    if result != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), str(output))
+
+
+def build_preview(state_path: Path, output: Path) -> dict:
+    """Build privately and publish the HTML, receipt and executable bytes together."""
+    c.require(not output.is_symlink(), 'preview destination must not be a symlink')
+    state_path, output = state_path.resolve(), output.resolve()
+    c.require(output.is_relative_to(REPO_ROOT), 'preview must remain inside the incubator')
+    c.require(output != state_path.parent and not state_path.is_relative_to(output),
+              'preview output must not contain or replace the source state')
+    if output.exists():
+        c.require(output.is_dir(), 'preview destination must be a directory')
+        c.require(not any(path.is_symlink() for path in output.rglob('*')),
+                  'preview destination must not be a symlink')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f'.{output.name}-stage-', dir=output.parent))
+    try:
+        plan = _build_preview_generation(state_path, staging)
+        _publish_preview(staging, output)
+        return plan
+    finally:
+        # On success this is the previous generation; on failure the private build.
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def main() -> None:
