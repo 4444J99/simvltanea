@@ -29,6 +29,7 @@ from simvltanea.browser.shared_engine import (
     SharedEngineUnavailable,
     resolve_shared_engine,
     _verify_graph,
+    _git_environment,
 )
 from simvltanea.paths import REPO_ROOT, LAYOUT
 
@@ -281,32 +282,62 @@ def _build_preview_generation(state_path: Path, output: Path) -> dict:
     return plan
 
 
-def _publish_preview(staging: Path, output: Path) -> None:
-    """Atomically publish a complete directory, retaining old bytes on failure.
+def _directory_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        facts = path.lstat()
+    except FileNotFoundError:
+        return None
+    return facts.st_dev, facts.st_ino
 
-    Nonempty directories cannot be replaced with ordinary rename. Linux and
-    macOS supply atomic exchange; unsupported hosts refuse replacement rather
-    than exposing a gap or mixing generations. After exchange, staging holds the
-    old generation and the caller removes it.
-    """
-    if not output.exists():
-        os.replace(staging, output)
+
+def _rename_preview(staging: Path, output: Path, *, exchange: bool) -> None:
+    """Use a native atomic exchange or no-clobber rename, never an existence race."""
+    if sys.platform == 'win32' and not exchange:
+        # Windows rename refuses an existing destination atomically.
+        os.rename(staging, output)
         return
     libc = ctypes.CDLL(None, use_errno=True)
     if sys.platform.startswith('linux'):
-        exchange = libc.renameat2
-        exchange.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+        rename = libc.renameat2
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
                              ctypes.c_char_p, ctypes.c_uint]
-        result = exchange(-100, os.fsencode(staging), -100, os.fsencode(output), 2)
+        result = rename(-100, os.fsencode(staging), -100, os.fsencode(output), 2 if exchange else 1)
     elif sys.platform == 'darwin':
-        exchange = libc.renamex_np
-        exchange.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
-        result = exchange(os.fsencode(staging), os.fsencode(output), 2)
+        rename = libc.renamex_np
+        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        result = rename(os.fsencode(staging), os.fsencode(output), 2 if exchange else 4)
     else:
         raise OSError(errno.ENOTSUP, 'atomic preview directory exchange unavailable')
     if result != 0:
         code = ctypes.get_errno()
         raise OSError(code, os.strerror(code), str(output))
+
+
+def _publish_preview(staging: Path, output: Path, expected_identity, validate_old) -> None:
+    """Bind publication and cleanup to the validated destination, preserving races."""
+    if _directory_identity(output) != expected_identity:
+        raise OSError(errno.ESTALE, 'preview destination changed during staging', str(output))
+    if expected_identity is None:
+        _rename_preview(staging, output, exchange=False)
+        return
+    new_identity = _directory_identity(staging)
+    _rename_preview(staging, output, exchange=True)
+    try:
+        if _directory_identity(staging) != expected_identity:
+            raise OSError(errno.ESTALE, 'preview destination changed during exchange')
+        # Check the displaced directory before authorizing its removal. This
+        # catches late legacy edits and tracked-index changes as well as swaps.
+        validate_old(staging)
+    except Exception as error:
+        if _directory_identity(output) == new_identity:
+            try:
+                _rename_preview(staging, output, exchange=True)
+            except Exception as rollback_error:
+                raise OSError(errno.ESTALE,
+                              f'preview rollback failed; displaced directory preserved at {staging}') from rollback_error
+            raise
+        raise OSError(errno.ESTALE,
+                      f'preview changed after publication; displaced directory preserved at {staging}') from error
 
 
 def _legacy_preview(output: Path) -> bool:
@@ -339,20 +370,18 @@ def _legacy_preview(output: Path) -> bool:
         with tempfile.TemporaryDirectory(prefix='.legacy-check-', dir=output.parent) as temp:
             reference = Path(temp)
             expected_plan = _build_preview_generation(output / 'state.json', reference)
-            # A rebuilt portable state has a new origin receipt, but all runtime
-            # decisions and media facts must still match.
+            # Retain the original input receipt in the reproduced serialization.
+            # Parsed-value equality alone admits modified bytes or duplicate keys.
             if not re.fullmatch(r'[0-9a-f]{64}', str(plan.get('origin_state_sha256', ''))):
                 return False
-            plan.pop('origin_state_sha256')
-            expected_plan.pop('origin_state_sha256')
-            if plan != expected_plan:
-                return False
+            expected_plan['origin_state_sha256'] = plan['origin_state_sha256']
+            (reference / 'plan.json').write_text(json.dumps(expected_plan, indent=2) + '\n')
             inventory = lambda root: {p.relative_to(root): p.is_dir() for p in root.rglob('*')}
             expected_inventory = inventory(reference)
             if inventory(output) != expected_inventory:
                 return False
             for relative, directory in expected_inventory.items():
-                if directory or relative == Path('plan.json'):
+                if directory:
                     continue
                 actual = (output / relative).read_bytes()
                 expected = (reference / relative).read_bytes()
@@ -376,10 +405,8 @@ def _legacy_preview(output: Path) -> bool:
         return False
 
 
-def build_preview(state_path: Path, output: Path) -> dict:
-    """Build privately and publish the HTML, receipt and executable bytes together."""
+def _validate_preview_destination(state_path: Path, output: Path, *, tracked_output: Path | None = None):
     c.require(not output.is_symlink(), 'preview destination must not be a symlink')
-    state_path, output = state_path.resolve(), output.resolve()
     c.require(output.is_relative_to(REPO_ROOT), 'preview must remain inside the incubator')
     generated = LAYOUT.path('generated')
     c.require(output.is_relative_to(generated) and output != generated,
@@ -391,9 +418,10 @@ def build_preview(state_path: Path, output: Path) -> dict:
     if any((base / '.git').exists() or (base / '.git').is_symlink()
            for base in (REPO_ROOT, *REPO_ROOT.parents)):
         try:
-            tracked = subprocess.run(['git', '-C', str(REPO_ROOT), 'ls-files', '-z', '--',
-                                      output.relative_to(REPO_ROOT).as_posix()],
-                                     capture_output=True, check=True, timeout=15)
+            tracked_path = output if tracked_output is None else tracked_output
+            tracked = subprocess.run(['git', '--literal-pathspecs', '-C', str(REPO_ROOT), 'ls-files', '-z', '--',
+                                      tracked_path.relative_to(REPO_ROOT).as_posix()],
+                                     capture_output=True, check=True, timeout=15, env=_git_environment())
         except (OSError, subprocess.SubprocessError) as error:
             raise c.StateError('preview tracked-file protection could not be verified') from error
         c.require(not tracked.stdout, 'preview output must not replace tracked files')
@@ -405,6 +433,14 @@ def build_preview(state_path: Path, output: Path) -> dict:
         owned = marker.is_file() and marker.read_text() == 'simvltanea-preview-v1\n'
         c.require(not any(output.iterdir()) or owned or _legacy_preview(output),
                   'existing preview destination lacks a generation ownership marker')
+    return _directory_identity(output)
+
+
+def build_preview(state_path: Path, output: Path) -> dict:
+    """Build privately and publish the HTML, receipt and executable bytes together."""
+    c.require(not output.is_symlink(), 'preview destination must not be a symlink')
+    state_path, output = state_path.resolve(), output.resolve()
+    expected_identity = _validate_preview_destination(state_path, output)
     output.parent.mkdir(parents=True, exist_ok=True)
     # Match ordinary mkdir/umask for first publication; preserve existing mode.
     mode_probe = Path(tempfile.mkdtemp(prefix='.preview-mode-', dir=output.parent))
@@ -415,15 +451,24 @@ def build_preview(state_path: Path, output: Path) -> dict:
     finally:
         shutil.rmtree(mode_probe)
     staging = Path(tempfile.mkdtemp(prefix=f'.{output.name}-stage-', dir=output.parent))
+    new_identity = _directory_identity(staging)
+    published = False
     try:
         plan = _build_preview_generation(state_path, staging)
         (staging / PREVIEW_MARKER).write_text('simvltanea-preview-v1\n')
+        if _validate_preview_destination(state_path, output) != expected_identity:
+            raise OSError(errno.ESTALE, 'preview destination changed during staging', str(output))
+        if expected_identity is not None:
+            publish_mode = stat.S_IMODE(output.stat().st_mode)
         staging.chmod(publish_mode)
-        _publish_preview(staging, output)
+        _publish_preview(staging, output, expected_identity,
+                         lambda old: _validate_preview_destination(state_path, old, tracked_output=output))
+        published = True
         return plan
     finally:
-        # On success this is the previous generation; on failure the private build.
-        if staging.exists():
+        # Never delete an unexpected displaced directory or a failed rollback.
+        identity = _directory_identity(staging)
+        if identity == new_identity or (published and identity == expected_identity and identity is not None):
             shutil.rmtree(staging, ignore_errors=True)
 
 

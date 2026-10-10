@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -190,11 +191,16 @@ def candidate_roots(start: Path | None = None):
         yield base / OWNER_DIRECTORY
 
 
+def _git_environment() -> dict[str, str]:
+    """Repository selection belongs to the explicit path, never ambient Git state."""
+    return {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+
+
 def _git_commit(root: Path) -> str | None:
     try:
         result = subprocess.run(
             ['git', '-C', str(root), 'rev-parse', 'HEAD'],
-            capture_output=True, text=True, timeout=15, check=False)
+            capture_output=True, text=True, timeout=15, check=False, env=_git_environment())
     except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode != 0:
@@ -207,7 +213,7 @@ def _git_is_shallow(root: Path) -> bool:
     try:
         result = subprocess.run(
             ['git', '-C', str(root), 'rev-parse', '--is-shallow-repository'],
-            capture_output=True, text=True, timeout=15, check=False)
+            capture_output=True, text=True, timeout=15, check=False, env=_git_environment())
     except (OSError, subprocess.SubprocessError):
         return False
     return result.returncode == 0 and result.stdout.strip() == 'true'
@@ -224,7 +230,7 @@ def _git_contains(root: Path, commit: str) -> bool | None:
     try:
         result = subprocess.run(
             ['git', '-C', str(root), 'merge-base', '--is-ancestor', commit, 'HEAD'],
-            capture_output=True, text=True, timeout=15, check=False)
+            capture_output=True, text=True, timeout=15, check=False, env=_git_environment())
     except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode == 0:

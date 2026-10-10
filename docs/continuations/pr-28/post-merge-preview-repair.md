@@ -18,6 +18,15 @@ pin and its digests remain unchanged.
   is recognized by its digest, with narrow allowances for its old receipt format.
   The tracked-file guard runs for checkouts and worktrees and fails closed on
   Git errors; installed workspaces without checkout metadata need no Git binary.
+  Repository-selection `GIT_*` variables are removed from both consumer and
+  owner Git verification, and output names are treated as literal Git paths.
+  Publication is bound to the directory identity validated before staging.
+  New targets use atomic no-clobber rename. Existing targets are checked again
+  before exchange and the displaced generation is validated before deletion.
+  A concurrent swap is rolled back; if rollback fails, displaced content is
+  retained at the staging path reported in the error.
+  Legacy plans must match the reproduced serialization byte for byte, including
+  formatting and duplicate-key checks, with the original input digest retained.
 - First publication follows ordinary directory creation permissions and the
   caller's umask. Replacement retains the old preview root's permission bits.
 - Installed use resolves the engine relative to the workspace already selected
@@ -64,6 +73,10 @@ corrected-head results are recorded on the successor PR.
 The review corrections passed 56 focused tests and 14 subtests, followed by all
 15 owner-fixture integration tests, including nested-engine preservation and
 actual portrait/wide-panel vertical slice bounds.
+The publication race and Git-environment corrections passed 68 focused tests
+and 17 subtests, followed by all 15 owner-fixture integration tests. Coverage
+includes concurrent target creation/swaps, failed rollback preservation, late
+tracked-index and legacy-plan edits, and ambient Git repository selection.
 Linux directory exchange was exercised; macOS and Windows were not exercised here.
 
 ## Acceptance boundary

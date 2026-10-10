@@ -441,6 +441,15 @@ class RefusalTest(HermeticEngineFixture, unittest.TestCase):
 
 
 class RefreshedVerificationTest(HermeticEngineFixture, unittest.TestCase):
+    def test_ambient_git_repository_cannot_change_verified_release(self):
+        from unittest.mock import patch
+        unrelated = self.fixture_root / 'unrelated'
+        subprocess.run(['git', 'init', '-q', str(unrelated)], check=True)
+        with patch.dict(os.environ, {'GIT_DIR':str(unrelated / '.git'), 'GIT_WORK_TREE':str(unrelated)}):
+            receipt = self.engine.verify()
+        self.assertEqual(receipt['release'], self.pin['release']['commit'])
+        self.assertEqual(receipt['release_status'], 'accepted')
+
     def test_ancestry_command_failure_is_not_a_shallow_checkout(self):
         from unittest.mock import patch
         from simvltanea.browser import shared_engine

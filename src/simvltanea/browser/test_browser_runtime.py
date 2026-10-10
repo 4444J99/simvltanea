@@ -157,6 +157,43 @@ class PlanTests(unittest.TestCase):
                 self.assertEqual(before,{p.relative_to(target):p.read_bytes() for p in target.rglob('*') if p.is_file()})
                 self.assertTrue(extra.exists())
 
+    def test_legacy_plan_byte_edits_are_preserved(self):
+        from simvltanea.browser.browser_runtime import PREVIEW_MARKER
+        import tempfile
+        for variant in ('compact','reordered','duplicate-key'):
+            with self.subTest(variant=variant):
+                target=Path(self.enterContext(tempfile.TemporaryDirectory(dir=ROOT)))/'legacy'
+                build_preview(ROOT/'state-3.json',target)
+                (target/PREVIEW_MARKER).unlink()
+                path=target/'plan.json';raw=path.read_text();plan=json.loads(raw)
+                if variant=='compact':edited=json.dumps(plan)+'\n'
+                elif variant=='reordered':edited=json.dumps(dict(reversed(list(plan.items()))),indent=2)+'\n'
+                else:edited=raw.replace('"plan_version": 1,','"plan_version": 99,\n  "plan_version": 1,')
+                self.assertNotEqual(raw,edited)
+                self.assertEqual(plan,json.loads(edited))
+                path.write_text(edited)
+                with self.assertRaises(c.StateError):build_preview(ROOT/'state-3.json',target)
+                self.assertEqual(path.read_text(),edited)
+
+    def test_late_legacy_plan_edit_is_restored_after_exchange(self):
+        from simvltanea.browser import browser_runtime as runtime
+        from unittest.mock import patch
+        import tempfile
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp:
+            target=Path(temp)/'legacy'
+            build_preview(ROOT/'state-3.json',target)
+            (target/runtime.PREVIEW_MARKER).unlink()
+            raw=(target/'plan.json').read_text()
+            rename=runtime._rename_preview;calls=0
+            def edit_after_exchange(staging, output, *, exchange):
+                nonlocal calls
+                calls+=1
+                rename(staging,output,exchange=exchange)
+                if calls==1:(staging/'plan.json').write_text(raw+' ')
+            with patch.object(runtime,'_rename_preview',side_effect=edit_after_exchange):
+                with self.assertRaises(c.StateError):build_preview(ROOT/'state-3.json',target)
+            self.assertEqual((target/'plan.json').read_text(),raw+' ')
+
     def test_preview_rejects_unverified_browser_container(self):
         import tempfile
         with tempfile.TemporaryDirectory(dir=ROOT) as temp:

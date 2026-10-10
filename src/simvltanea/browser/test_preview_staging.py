@@ -6,6 +6,8 @@ import shutil
 import unittest
 from pathlib import Path
 import stat
+import os
+import subprocess
 from unittest.mock import patch
 
 from simvltanea.browser import browser_runtime as runtime
@@ -181,3 +183,106 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
                 (self.engine.module_root / 'PROVENANCE.json').write_text(value)
                 with self.assertRaisesRegex(SharedEngineUnavailable, 'JSON object'):
                     resolve_shared_engine(self.start, pin=self.pin)
+
+    def test_destination_created_during_staging_is_preserved(self):
+        generation = self.build_generation
+        def raced(state, staging):
+            result = generation(state, staging)
+            self.output.mkdir()
+            (self.output / 'personal').write_text('preserve')
+            return result
+        with patch.object(self, 'build_generation', side_effect=raced):
+            with self.assertRaises((OSError, runtime.c.StateError)):
+                self.build()
+        self.assertEqual((self.output / 'personal').read_text(), 'preserve')
+        self.assertFalse((self.output / 'index.html').exists())
+
+    def test_no_clobber_publication_rejects_last_moment_creation(self):
+        rename = runtime._rename_preview
+        def raced(staging, output, *, exchange):
+            self.assertFalse(exchange)
+            output.mkdir()
+            (output / 'personal').write_text('preserve')
+            rename(staging, output, exchange=exchange)
+        with patch.object(runtime, '_rename_preview', side_effect=raced):
+            with self.assertRaises(FileExistsError):
+                self.build()
+        self.assertEqual((self.output / 'personal').read_text(), 'preserve')
+
+    def _race_existing_exchange(self, rollback_fails=False):
+        self.build()
+        before = self.snapshot()
+        old = self.generated / 'retained-original'
+        rename = runtime._rename_preview
+        calls = 0
+        def raced(staging, output, *, exchange):
+            nonlocal calls
+            calls += 1
+            self.assertTrue(exchange)
+            if calls == 1:
+                output.rename(old)
+                output.mkdir()
+                (output / 'personal').write_text('preserve')
+            elif rollback_fails:
+                raise OSError('rollback refused')
+            rename(staging, output, exchange=True)
+        with patch.object(runtime, '_rename_preview', side_effect=raced):
+            with self.assertRaises(OSError):
+                self.build()
+        self.assertEqual(before, {p.relative_to(old).as_posix():p.read_bytes()
+                                  for p in old.rglob('*') if p.is_file()})
+        return old
+
+    def test_destination_swap_during_exchange_is_restored(self):
+        self._race_existing_exchange()
+        self.assertEqual((self.output / 'personal').read_text(), 'preserve')
+        self.assertEqual(list(self.generated.glob('.preview-stage-*')), [])
+
+    def test_failed_rollback_preserves_the_displaced_directory(self):
+        self._race_existing_exchange(rollback_fails=True)
+        kept = list(self.generated.glob('.preview-stage-*'))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual((kept[0] / 'personal').read_text(), 'preserve')
+        self.assertEqual((self.output / 'index.html').read_text(), 'verified 6')
+
+    def test_git_environment_cannot_hide_real_tracked_files(self):
+        self.build()
+        subprocess.run(['git', 'init', '-q', str(self.fixture_root)], check=True)
+        subprocess.run(['git', '-C', str(self.fixture_root), 'add', 'var/preview/index.html'], check=True)
+        unrelated = self.fixture_root / 'unrelated'
+        subprocess.run(['git', 'init', '-q', str(unrelated)], check=True)
+        before = self.snapshot()
+        with patch.dict(os.environ, {'GIT_DIR':str(unrelated / '.git'),
+                                     'GIT_WORK_TREE':str(unrelated),
+                                     'GIT_INDEX_FILE':str(unrelated / '.git' / 'alternate-index')}):
+            with self.assertRaisesRegex(runtime.c.StateError, 'tracked files'):
+                self.build()
+        self.assertEqual(before, self.snapshot())
+
+    def test_tracked_output_names_are_literal_paths(self):
+        self.output = self.generated / 'preview[own]'
+        self.build()
+        subprocess.run(['git', 'init', '-q', str(self.fixture_root)], check=True)
+        subprocess.run(['git', '-C', str(self.fixture_root), 'add', 'var/preview[own]/index.html'], check=True)
+        before = self.snapshot()
+        with self.assertRaisesRegex(runtime.c.StateError, 'tracked files'):
+            self.build()
+        self.assertEqual(before, self.snapshot())
+
+    def test_late_index_change_rolls_back_without_deleting_tracked_preview(self):
+        self.build()
+        before = self.snapshot()
+        subprocess.run(['git', 'init', '-q', str(self.fixture_root)], check=True)
+        rename = runtime._rename_preview
+        calls = 0
+        def track_after_exchange(staging, output, *, exchange):
+            nonlocal calls
+            calls += 1
+            rename(staging, output, exchange=exchange)
+            if calls == 1:
+                subprocess.run(['git', '-C', str(self.fixture_root), 'add', 'var/preview/index.html'], check=True)
+        with patch.object(runtime, '_rename_preview', side_effect=track_after_exchange):
+            with self.assertRaisesRegex(runtime.c.StateError, 'tracked files'):
+                self.build()
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(list(self.generated.glob('.preview-stage-*')), [])
