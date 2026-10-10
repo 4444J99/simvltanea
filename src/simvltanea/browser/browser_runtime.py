@@ -386,10 +386,17 @@ def build_preview(state_path: Path, output: Path) -> dict:
               'preview output must be a child of generated storage')
     c.require(output != state_path.parent and not state_path.is_relative_to(output),
               'preview output must not contain or replace the source state')
-    tracked = subprocess.run(['git', '-C', str(REPO_ROOT), 'ls-files', '-z', '--',
-                              output.relative_to(REPO_ROOT).as_posix()],
-                             capture_output=True, check=False)
-    c.require(not tracked.stdout, 'preview output must not replace tracked files')
+    # Installed workspaces need no Git executable. A checkout (including a
+    # worktree or a project nested inside a repository) must pass the guard.
+    if any((base / '.git').exists() or (base / '.git').is_symlink()
+           for base in (REPO_ROOT, *REPO_ROOT.parents)):
+        try:
+            tracked = subprocess.run(['git', '-C', str(REPO_ROOT), 'ls-files', '-z', '--',
+                                      output.relative_to(REPO_ROOT).as_posix()],
+                                     capture_output=True, check=True, timeout=15)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise c.StateError('preview tracked-file protection could not be verified') from error
+        c.require(not tracked.stdout, 'preview output must not replace tracked files')
     if output.exists():
         c.require(output.is_dir(), 'preview destination must be a directory')
         c.require(not any(path.is_symlink() for path in output.rglob('*')),

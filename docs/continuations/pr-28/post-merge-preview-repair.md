@@ -16,6 +16,8 @@ pin and its digests remain unchanged.
   their portable state. This includes executable files and nested directories;
   loose or modified content remains untouched. The exact runtime shipped by #28
   is recognized by its digest, with narrow allowances for its old receipt format.
+  The tracked-file guard runs for checkouts and worktrees and fails closed on
+  Git errors; installed workspaces without checkout metadata need no Git binary.
 - First publication follows ordinary directory creation permissions and the
   caller's umask. Replacement retains the old preview root's permission bits.
 - Installed use resolves the engine relative to the workspace already selected

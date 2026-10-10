@@ -152,9 +152,25 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
     def test_tracked_generated_files_are_preserved(self):
         self.build()
         before = self.snapshot()
+        (self.fixture_root / '.git').mkdir()
         from subprocess import CompletedProcess
         with patch.object(runtime.subprocess, 'run', return_value=CompletedProcess([], 0, stdout=b'tracked')):
             with self.assertRaisesRegex(runtime.c.StateError, 'tracked'):
+                self.build()
+        self.assertEqual(self.snapshot(), before)
+
+    def test_non_checkout_preview_does_not_require_git(self):
+        with patch.object(runtime.subprocess, 'run', side_effect=FileNotFoundError('no Git')) as run:
+            self.build()
+        run.assert_not_called()
+        self.assertTrue((self.output / 'index.html').is_file())
+
+    def test_checkout_guard_fails_closed_without_git(self):
+        self.build()
+        before = self.snapshot()
+        (self.fixture_root / '.git').mkdir()
+        with patch.object(runtime.subprocess, 'run', side_effect=FileNotFoundError('no Git')):
+            with self.assertRaisesRegex(runtime.c.StateError, 'tracked-file protection'):
                 self.build()
         self.assertEqual(self.snapshot(), before)
 
