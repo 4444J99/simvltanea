@@ -5,7 +5,7 @@
   "release": {
     "repository": "time-moment-brief",
     "branch": "agent7-stable-playback-base",
-    "commit": "4320079503891e49e213e89bf934cd1110356e81"
+    "commit": "55e624cd2fdb4450acbd959ca40ca0668e7167a1"
   },
   "runtime_graph": {
     "shared-engine/index.js": "bd433fd92c93b3232e23711cb659ca2e94a1f93d60ad5af43c5fd9a9a65cf10a",
