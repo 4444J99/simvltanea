@@ -1,0 +1,16 @@
+{
+  "note": "This composition's own record of which shared-engine build it accepts. Resolution verifies every pinned digest and the accepted release before any frame is presented. Change this only by review.",
+  "module": "time-moment-brief/shared-engine",
+  "entrypoint": "shared-engine/index.js",
+  "release": {
+    "repository": "time-moment-brief",
+    "branch": "agent7-stable-playback-base",
+    "commit": "4320079503891e49e213e89bf934cd1110356e81"
+  },
+  "runtime_graph": {
+    "shared-engine/index.js": "bd433fd92c93b3232e23711cb659ca2e94a1f93d60ad5af43c5fd9a9a65cf10a",
+    "shared-engine/src/panoramic-projection.js": "ff4a2d52a82b108c35800bfc81850ddde9913f38c1d351cc9964a7c68c6b3f14",
+    "shared-engine/src/spatial-score.js": "15437959714f12999220e47582e677bc78ae492e3b7f0f0ef59a75bc5beed4ee",
+    "shared-engine/src/video-texture.js": "2090163e7813bb0d3b43667fc9ff315e1847580749daffa93a19a1cd86a26ede"
+  }
+}

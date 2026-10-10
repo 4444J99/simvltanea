@@ -14,10 +14,15 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 from fractions import Fraction
 from pathlib import Path
 
 from simvltanea.authoring import composition as c
+from simvltanea.browser.shared_engine import (
+    SharedEngineUnavailable,
+    resolve_shared_engine,
+)
 from simvltanea.paths import REPO_ROOT
 
 HERE = Path(__file__).resolve().parent
@@ -41,6 +46,52 @@ font:13px/1.4 system-ui,sans-serif;color:#fff;background:#000b;pointer-events:no
 <p id="runtime-status" role="status" aria-live="polite">Loading verified composition…</p>
 <script src="runtime.js" defer></script>
 '''
+
+
+def stage_shared_engine(output: Path) -> dict | None:
+    """Copy the digest-verified shared engine into the preview, or say why not.
+
+    The engine is owned and versioned by time-moment-brief. This resolves it
+    through the consumer resolver, which verifies every pinned digest and the
+    accepted release, and copies the exact verified bytes. Nothing is regenerated
+    or patched on the way in.
+
+    A failure is not fatal to the preview and is not hidden either: the caller
+    writes the reason into the generated HTML, so an operator opening the preview
+    sees that the shared engine is absent instead of wondering why every panel
+    stayed centred.
+    """
+    try:
+        engine = resolve_shared_engine()
+    except SharedEngineUnavailable as error:
+        print(f'shared engine unavailable: {error}', file=sys.stderr)
+        (output / 'shared-engine-unavailable.txt').write_text(
+            str(error) + '\n', encoding='utf-8')
+        return None
+
+    module_dir = output / 'shared-engine'
+    for name in ('index.js', 'src'):
+        source = engine.module_root / name
+        target = module_dir / name
+        if target.exists():
+            shutil.rmtree(target) if target.is_dir() else target.unlink()
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+    shutil.copyfile(HERE / 'shared-engine-adapter.js', output / 'shared-engine-adapter.js')
+    # The browser entry publishes the module as a global the runtime can reach.
+    # It imports rather than inlines, so the bytes the page runs are the bytes
+    # that were verified.
+    (output / 'shared-engine.js').write_text(
+        "import * as SharedEngine from './shared-engine/index.js';\n"
+        "globalThis.SharedEngine = SharedEngine;\n"
+        "globalThis.__sharedEngineReady = Promise.resolve(SharedEngine);\n",
+        encoding='utf-8')
+    receipt = engine.verify()
+    receipt['release'] = engine.release or ''
+    return receipt
 
 
 def _continues(a: dict, b: dict, fps: int) -> bool:
@@ -187,7 +238,17 @@ def build_preview(state_path: Path, output: Path) -> dict:
     (output / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
     c.save_state(portable, output / 'state.json')
     shutil.copyfile(HERE / 'browser.runtime.js', output / 'runtime.js')
-    (output / 'index.html').write_text(HTML)
+    shared = stage_shared_engine(output)
+    (output / 'index.html').write_text(HTML.replace(
+        '<script src="runtime.js" defer></script>',
+        f'<script src="runtime.js" defer></script>\n'
+        # The adapter is a classic script; the module is a real ES module, copied
+        # from the verified owner checkout. No copy of the maths lives here.
+        f'<script src="shared-engine-adapter.js" defer></script>\n'
+        f'<script type="module" src="shared-engine.js"></script>\n'
+        f'<!-- shared-engine release {shared["release"][:12]}, '
+        f'{shared["files_verified"]} files digest-verified -->\n'
+        if shared else '<script src="runtime.js" defer></script>\n'))
     return plan
 
 
