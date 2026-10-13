@@ -5,8 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "simvltanea"
 version = "0.1.0"
-description = "Configurable simultaneous video-loop compositions"
+description = "Independent Loop Compositor: simultaneous audiovisual composition and rendering"
 requires-python = ">=3.12"
+
+[project.scripts]
+independent-loop-compositor = "independent_loop_compositor.cli:main"
 
 [project.optional-dependencies]
 verification = ["Pillow==12.3.0", "playwright==1.57.0", "pytest>=8,<10"]
@@ -25,6 +28,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 simvltanea = ["py.typed", "layout.toml"]
+independent_loop_compositor = ["py.typed"]
 "simvltanea.browser" = ["*.js", "shared_engine_pin.json"]
 
 [tool.simvltanea]

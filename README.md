@@ -1,15 +1,30 @@
-# SIMVLTANEA
+# Independent Loop Compositor
 
-Configurable simultaneous video-loop compositions.
+Reusable software for independently clocked simultaneous audiovisual compositions.
+It compiles authored loop states and orientation layouts, stages browser previews,
+and renders audiovisual exports through the existing implementation.
 
-Historical origin: **TripTicks** (ETCETER4, 17 August 2017).
-Incubation home: `organvm/portvs` / `incubator/triptych-video-canon/`.
-Canonical repository: `4444J99/simvltanea`.
+| Identity | Authority |
+| --- | --- |
+| Software | `independent-loop-compositor` |
+| New Python API | `independent_loop_compositor` |
+| Compatibility distribution and implementation namespace | `simvltanea` |
+| Repository | `4444J99/simvltanea`, stable GitHub id `1364497735` |
+| Artwork | **SIMVLTANEA**, recorded in `ace-manifest.json` |
+| Historical instantiation | **TripTicks** (ETCETER4, 17 August 2017) |
 
-This is an artwork/system in the Persona / Visual Form Canon. It is not NARCISSUS,
-not Portvs, and not a generic video wall.
+[ACE identity contract](ace-manifest.json) separates software, capabilities,
+modules, compositions, artwork, editions, source records, and archives.
+[Migration and compatibility](docs/governance/IDENTITY_MIGRATION.md) explain the
+retained implementation paths and how another artwork uses the same software.
 
-## What the work is
+```bash
+python -m independent_loop_compositor preview --help
+python -m independent_loop_compositor render --help
+# After installation, the equivalent command is independent-loop-compositor.
+```
+
+## Processing responsibility
 
 N independently authored video-loop instances occupy one authored spatial
 composition at the same time. Adding a panel adds a loop. Orientation changes
@@ -48,9 +63,8 @@ N independent loops
 Variable: panel count, source per loop, geometry, orientation, ordering,
 dimensions, offsets, hold/reroll/swap/move events.
 
-What keeps this from being a generic video wall is independent loop identity
-tied to an authored relational composition, originally from a personal archive,
-not a tiled repeat of one feed.
+The software preserves independent loop identity and authored relational geometry.
+Source identifiers, composition identities, and artwork titles are caller data.
 
 ## Supported configurations
 
@@ -75,10 +89,12 @@ geometries, not artist-approved designs.
 ## Repository Layout
 
 ```text
-SIMVLTANEA/
+independent-loop-compositor/
+├── ace-manifest.json # Typed software, artwork, edition, and archive identities
 ├── .github/      # CI, templates, security, contributions, and ownership
 ├── config/lint/  # Naming and Markdown lint policy
-├── src/simvltanea/ # Authoring, browser, rendering, and generator subpackages
+├── src/independent_loop_compositor/ # Functional public API and commands
+├── src/simvltanea/ # Existing implementation and compatibility imports
 ├── tools/        # Edition, media, publishing, preservation, and verification commands
 ├── tests/        # Browser, render, model, edition, and governance suites
 ├── editions/     # Production edition registry
@@ -132,13 +148,13 @@ Generate the synthetic Artifact 001 family:
 PYTHONPATH=src python3 -m simvltanea.make_artifact_001
 ```
 
-## Relationship
+## Artwork lineage
 
 ```text
 PERSONA / VISUAL FORM CANON
         │
         ├── NARCISSUS          (separate work; do not merge)
-        ├── SIMVLTANEA         (this repository)
+        ├── SIMVLTANEA         (an artwork using this software)
         ├── Floating Points    (historical; original bytes unresolved)
         ├── Up the Hill Backwards (historical; original bytes unresolved)
         └── other visual works
@@ -146,8 +162,8 @@ PERSONA / VISUAL FORM CANON
 
 Portvs is the portal / previous incubator, not the artwork.
 ORGANVM supplies the ideal-form → instantiation → observation loop.
-TripTicks is one historical instantiation. The N-loop renderer is a later
-abstraction of the same grammar.
+TripTicks is one historical instantiation. The N-loop renderer is reusable
+software; independent works supply their own compositions and source records.
 
 ## Naming
 

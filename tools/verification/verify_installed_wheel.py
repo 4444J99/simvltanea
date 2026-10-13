@@ -31,10 +31,14 @@ import sys
 import tomllib
 
 import simvltanea
+import independent_loop_compositor
+assert independent_loop_compositor.Composition is simvltanea.CompositionModel
 from simvltanea.authoring import build_artifact001, composition as c
-from simvltanea.browser import build_preview
+from independent_loop_compositor.browser import build_preview
 from simvltanea.paths import REPO_ROOT, PROOFS_DIR
 
+console = Path(sys.executable).with_name("independent-loop-compositor")
+subprocess.run([str(console), "--help"], check=True, capture_output=True, text=True)
 workspace = Path.cwd().resolve()
 package = Path(simvltanea.__file__).resolve()
 assert package.is_relative_to(Path(sys.prefix).resolve()), "package is not installed in the isolated venv"
@@ -71,7 +75,8 @@ assert c.presentation_at(state, 12, 320, 180)["loops"] == c.presentation_at(stat
 outputs = []
 for orientation, width, height in (("portrait", 180, 320), ("landscape", 320, 180)):
     output = root / (orientation + ".mp4")
-    subprocess.run([sys.executable, "-I", "-m", "simvltanea.render_triptych", "--state", str(state_path),
+    command = ["simvltanea.render_triptych"] if orientation == "portrait" else ["independent_loop_compositor", "render"]
+    subprocess.run([sys.executable, "-I", "-m", *command, "--state", str(state_path),
                     "--orientation", orientation, "--output", str(output), "--width", str(width),
                     "--height", str(height), "--preset", "ultrafast", "--crf", "30"],
                    check=True, timeout=120)
@@ -83,6 +88,8 @@ for orientation, width, height in (("portrait", 180, 320), ("landscape", 320, 18
     outputs.append(dict(orientation=orientation, sha256=c.sha256_file(output), stream=stream))
 result = dict(package_version=metadata.version("simvltanea"), python=sys.version,
               installed_in_venv=True, caller_workspace=True, verification_extras_absent=True,
+              functional_api_identity=True, functional_console_entrypoint=True,
+              legacy_and_functional_render_commands=True,
               layout_contract=layout["contract"]["version"], packaged_assets=assets,
               loop_count=2, frames=24, preview_compilation=True, orientation_model_identity=True,
               ffmpeg=subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, check=True).stdout.splitlines()[0],

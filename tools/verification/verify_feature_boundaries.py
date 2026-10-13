@@ -33,7 +33,7 @@ def violations(source: str, owner: str | None = None) -> list[tuple[int, str]]:
 
 def verify(root: Path = REPO_ROOT) -> list[str]:
     errors = []
-    for base in (root / "src" / "simvltanea", root / "tools"):
+    for base in (root / "src" / "simvltanea", root / "src" / "independent_loop_compositor", root / "tools"):
         for path in sorted(base.rglob("*.py")):
             if path.name.startswith("test_") or "__pycache__" in path.parts:
                 continue
