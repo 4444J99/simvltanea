@@ -12,7 +12,10 @@ python3 -m tools.verification.verify_repository_structure
 
 ## Source and command boundaries
 
-- `src/simvltanea/` is the installable engine and browser-runtime package.
+- `src/independent_loop_compositor/` is the functional public API and CLI.
+- `src/simvltanea/` retains the shared implementation and legacy import paths.
+- `ace-manifest.json` declares typed identities and implementation bindings;
+  source registrations and production edition details retain their existing authority.
 - `tools/` contains operational commands grouped by workflow: `editions`,
   `media`, `publishing`, `preservation`, and `verification`.
 - Tests and feature guides live beside their owning source; `tests/` preserves
@@ -48,7 +51,8 @@ frames may be tracked.
 
 ## Approved root
 
-The root files are `README.md`, `LICENSE`, `pyproject.toml`, and `.gitignore`.
+The root files are `README.md`, `LICENSE`, `pyproject.toml`, `.gitignore`, and
+`ace-manifest.json`.
 Python packaging, the `verification` optional dependencies, and pytest settings
 share `pyproject.toml`. Install with `python3 -m pip install -e ".[verification]"`.
 

@@ -1,6 +1,6 @@
-# SIMVLTANEA engine and runtime
+# Independent Loop Compositor implementation
 
-This installable package contains the composition compiler, authoring model,
+This retained implementation namespace contains the composition compiler, authoring model,
 authored layouts, browser preview runtime, synthetic fixture generators, and
 FFmpeg renderer.
 
@@ -18,5 +18,7 @@ FFmpeg renderer.
 Invoke package commands from the repository root with `PYTHONPATH=src`, or
 install the project in editable mode.
 
-Root package modules are compatibility entry points. New imports should use
-the `authoring`, `browser`, `rendering`, and `generators` subpackages.
+New consumers should import `independent_loop_compositor`. Existing imports,
+root-module commands, and the `simvltanea` distribution remain compatible.
+Implementation imports use the public `authoring`, `browser`, `rendering`, and
+`generators` feature APIs. See [identity migration](../../docs/governance/IDENTITY_MIGRATION.md).

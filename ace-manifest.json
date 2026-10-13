@@ -1,0 +1,136 @@
+{
+  "schema_version": "1.0.0",
+  "system_id": "audiovisual-composition-system",
+  "repository": {
+    "github_id": 1364497735
+  },
+  "software": {
+    "id": "independent-loop-compositor",
+    "name": "Independent Loop Compositor",
+    "responsibility": "Compile independently clocked video-loop compositions with authored orientation layouts, stage browser previews, render audiovisual exports, and adapt authenticated shared playback generations.",
+    "compatibility": {
+      "distribution": "simvltanea",
+      "python_namespace": "simvltanea",
+      "implementation_path": "src/simvltanea",
+      "migration": "docs/governance/IDENTITY_MIGRATION.md"
+    }
+  },
+  "capabilities": [
+    {
+      "id": "independent-loop-authoring",
+      "description": "Validate independent loop identities, clocks, events, and paired authored layouts."
+    },
+    {
+      "id": "independent-loop-preview",
+      "description": "Compile and stage bounded browser previews without resetting loops on orientation changes."
+    },
+    {
+      "id": "independent-loop-rendering",
+      "description": "Render loop compositions and explicitly authored audio through FFmpeg."
+    },
+    {
+      "id": "synthetic-loop-fixtures",
+      "description": "Generate synthetic engineering media and composition fixtures."
+    },
+    {
+      "id": "shared-playback-adaptation",
+      "description": "Verify and adapt pinned external playback generations without copying or replacing the shared engine."
+    }
+  ],
+  "modules": [
+    {
+      "id": "functional-public-api",
+      "path": "src/independent_loop_compositor",
+      "capability_ids": [
+        "independent-loop-authoring",
+        "independent-loop-preview",
+        "independent-loop-rendering"
+      ],
+      "interfaces": [
+        "python:independent_loop_compositor",
+        "cli:independent-loop-compositor"
+      ]
+    },
+    {
+      "id": "loop-authoring",
+      "path": "src/simvltanea/authoring",
+      "capability_ids": [
+        "independent-loop-authoring"
+      ],
+      "interfaces": [
+        "python:simvltanea.authoring"
+      ]
+    },
+    {
+      "id": "loop-browser-preview",
+      "path": "src/simvltanea/browser",
+      "capability_ids": [
+        "independent-loop-preview",
+        "shared-playback-adaptation"
+      ],
+      "interfaces": [
+        "python:simvltanea.browser",
+        "python:independent_loop_compositor.browser"
+      ]
+    },
+    {
+      "id": "loop-rendering",
+      "path": "src/simvltanea/rendering",
+      "capability_ids": [
+        "independent-loop-rendering"
+      ],
+      "interfaces": [
+        "python:simvltanea.rendering",
+        "python:independent_loop_compositor.rendering"
+      ]
+    },
+    {
+      "id": "loop-fixture-generation",
+      "path": "src/simvltanea/generators",
+      "capability_ids": [
+        "synthetic-loop-fixtures"
+      ],
+      "interfaces": [
+        "python:simvltanea.generators"
+      ]
+    }
+  ],
+  "source_media": [],
+  "compositions": [
+    {
+      "id": "simultaneous-field-inaugural",
+      "path": "editions/registry.json",
+      "json_pointer": "/editions/1/composition",
+      "artwork_id": "g-p-6ab710d9b0c08191af651f0b2b4b8c80",
+      "software_id": "independent-loop-compositor",
+      "description": "Existing inaugural simultaneous-field composition declaration embedded in the edition registry."
+    }
+  ],
+  "artworks": [
+    {
+      "id": "g-p-6ab710d9b0c08191af651f0b2b4b8c80",
+      "title": "SIMVLTANEA",
+      "aliases": [
+        "simvltanea"
+      ],
+      "publication_status": "unverified"
+    }
+  ],
+  "editions": [
+    {
+      "id": "simvltanea-inaugural",
+      "path": "editions/registry.json",
+      "json_pointer": "/editions/1",
+      "composition_id": "simultaneous-field-inaugural",
+      "artwork_id": "g-p-6ab710d9b0c08191af651f0b2b4b8c80",
+      "publication_status": "unverified"
+    }
+  ],
+  "archives": [
+    {
+      "id": "retained-project-history",
+      "path": "archive/PROJECT_MANIFEST.md",
+      "description": "Existing annotated catalog of retained history and provenance; original archive paths remain unchanged."
+    }
+  ]
+}
