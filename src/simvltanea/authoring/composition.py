@@ -17,6 +17,14 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+from simvltanea.authoring.composition_model import (
+    SliceRect,
+    AmalgamatedPanel,
+    amalgamate_viewports,
+    color_subject_affinity,
+    select_neighbor_sequence,
+)
+
 SCHEMA_VERSION = 1
 ENGINE_VERSION = "1.0.0"
 AUDIO_SCHEMA_VERSION = "1.1"

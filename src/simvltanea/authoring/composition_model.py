@@ -7,10 +7,12 @@ state from presentation geometry so orientation changes cannot mutate loop state
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
+import colorsys
+import hashlib
 import json
 import math
 import random
-from typing import Any
+from typing import Any, Sequence
 
 SCHEMA_VERSION = "visual-form-composition/v1"
 AUDIO_SCHEMA_VERSION = "visual-form-composition/v1.1"
@@ -96,6 +98,12 @@ class LoopState:
     selection_seed: int = 0
     reroll_index: int = 0
     audible: bool = False
+    color_profile: Any = None
+    subject_tags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.subject_tags, list):
+            object.__setattr__(self, "subject_tags", tuple(self.subject_tags))
 
     def validate(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
@@ -300,3 +308,345 @@ class Composition:
         )
         comp.validate()
         return comp
+
+
+@dataclass(frozen=True)
+class SliceRect:
+    """Normalized viewport crop rectangle within a media frame surface.
+
+    Coordinates lie strictly within [0.0, 1.0]. Full frame (0, 0, 1, 1) is
+    expressly forbidden in amalgamated mode per the ACE source ledger directive.
+    """
+    x: float
+    y: float
+    width: float
+    height: float
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        for name in ("x", "y", "width", "height"):
+            val = getattr(self, name)
+            if type(val) not in (int, float) or not math.isfinite(val):
+                raise ValueError(f"SliceRect {name} must be finite, got {val}")
+        if self.width <= 0.0 or self.height <= 0.0:
+            raise ValueError(f"SliceRect dimensions must be positive, got width={self.width}, height={self.height}")
+        if self.x < -1e-9 or self.y < -1e-9 or self.width > 1.000001 or self.height > 1.000001:
+            raise ValueError(f"SliceRect coordinates must lie within [0.0, 1.0], got ({self.x}, {self.y}, {self.width}, {self.height})")
+        if self.x + self.width > 1.000001 or self.y + self.height > 1.000001:
+            raise ValueError(f"SliceRect exceeds normalized canvas bounds: x+width={self.x + self.width}, y+height={self.y + self.height}")
+
+    @property
+    def is_full_frame(self) -> bool:
+        return (math.isclose(self.x, 0.0, abs_tol=1e-5) and
+                math.isclose(self.y, 0.0, abs_tol=1e-5) and
+                math.isclose(self.width, 1.0, abs_tol=1e-5) and
+                math.isclose(self.height, 1.0, abs_tol=1e-5))
+
+    def to_dict(self) -> dict[str, float]:
+        return {"x": self.x, "y": self.y, "width": self.width, "height": self.height}
+
+    def to_list(self) -> list[float]:
+        return [self.x, self.y, self.width, self.height]
+
+    def to_rational_strings(self) -> list[str]:
+        from fractions import Fraction
+        return [
+            str(Fraction(self.x).limit_denominator(10000)),
+            str(Fraction(self.y).limit_denominator(10000)),
+            str(Fraction(self.width).limit_denominator(10000)),
+            str(Fraction(self.height).limit_denominator(10000)),
+        ]
+
+    def __iter__(self):
+        yield self.x
+        yield self.y
+        yield self.width
+        yield self.height
+
+    def __getitem__(self, item: Any) -> Any:
+        if isinstance(item, int):
+            return (self.x, self.y, self.width, self.height)[item]
+        if item in ("x", "y", "width", "height"):
+            return getattr(self, item)
+        raise KeyError(f"invalid SliceRect index/key: {item}")
+
+
+@dataclass(frozen=True)
+class AmalgamatedPanel:
+    """Pairing of a selected clip with its amalgamated SliceRect viewport."""
+    clip: Any
+    viewport: SliceRect
+
+    def __iter__(self):
+        yield self.clip
+        yield self.viewport
+
+    def __getitem__(self, item: Any) -> Any:
+        if item in (0, "clip"):
+            return self.clip
+        if item in (1, "viewport", "slice_rect"):
+            return self.viewport
+        raise KeyError(f"invalid AmalgamatedPanel key/index: {item}")
+
+    @property
+    def slice_rect(self) -> SliceRect:
+        return self.viewport
+
+    def to_dict(self) -> dict[str, Any]:
+        clip_repr = self.clip if isinstance(self.clip, (dict, str, int, float)) else getattr(self.clip, "__dict__", str(self.clip))
+        return {
+            "clip": clip_repr,
+            "viewport": self.viewport.to_dict(),
+            "slice_rect": self.viewport.to_dict(),
+        }
+
+
+def _normalize_color_profile(profile: Any, fallback_seed: str = "") -> tuple[float, float, float]:
+    """Normalize color profile representation into RGB floats in [0.0, 1.0]."""
+    if profile is None:
+        h = hashlib.sha256(str(fallback_seed).encode("utf-8")).digest()
+        return (h[0] / 255.0, h[1] / 255.0, h[2] / 255.0)
+
+    if isinstance(profile, str):
+        s = profile.strip().lstrip("#")
+        if len(s) == 6:
+            try:
+                r = int(s[0:2], 16) / 255.0
+                g = int(s[2:4], 16) / 255.0
+                b = int(s[4:6], 16) / 255.0
+                return (r, g, b)
+            except ValueError:
+                pass
+        elif len(s) == 3:
+            try:
+                r = int(s[0] * 2, 16) / 255.0
+                g = int(s[1] * 2, 16) / 255.0
+                b = int(s[2] * 2, 16) / 255.0
+                return (r, g, b)
+            except ValueError:
+                pass
+
+    if isinstance(profile, (list, tuple)) and len(profile) >= 3:
+        try:
+            vals = [float(v) for v in profile[:3]]
+            if any(v > 1.0 for v in vals):
+                vals = [v / 255.0 for v in vals]
+            return (max(0.0, min(1.0, vals[0])), max(0.0, min(1.0, vals[1])), max(0.0, min(1.0, vals[2])))
+        except (ValueError, TypeError):
+            pass
+
+    if isinstance(profile, dict):
+        if "r" in profile and "g" in profile and "b" in profile:
+            try:
+                vals = [float(profile["r"]), float(profile["g"]), float(profile["b"])]
+                if any(v > 1.0 for v in vals):
+                    vals = [v / 255.0 for v in vals]
+                return (max(0.0, min(1.0, vals[0])), max(0.0, min(1.0, vals[1])), max(0.0, min(1.0, vals[2])))
+            except (ValueError, TypeError):
+                pass
+        if "hue" in profile:
+            try:
+                h = float(profile["hue"])
+                if h > 1.0:
+                    h = (h % 360.0) / 360.0
+                s = float(profile.get("saturation", profile.get("s", 1.0)))
+                if s > 1.0:
+                    s /= 100.0
+                l = float(profile.get("luminance", profile.get("lightness", profile.get("l", 0.5))))
+                if l > 1.0:
+                    l /= 100.0
+                rgb = colorsys.hls_to_rgb(h, l, s)
+                return (max(0.0, min(1.0, rgb[0])), max(0.0, min(1.0, rgb[1])), max(0.0, min(1.0, rgb[2])))
+            except (ValueError, TypeError):
+                pass
+
+    h = hashlib.sha256(str(fallback_seed).encode("utf-8")).digest()
+    return (h[0] / 255.0, h[1] / 255.0, h[2] / 255.0)
+
+
+def _normalize_subject_tags(tags: Any, fallback_seed: str = "") -> set[str]:
+    """Normalize subject tags into a set of lowercase strings with fallback."""
+    if tags is None or (isinstance(tags, (list, tuple, set)) and len(tags) == 0):
+        h = hashlib.sha256(str(fallback_seed).encode("utf-8")).digest()
+        return {f"tag_{h[3] % 8}", f"subject_{h[4] % 8}"}
+    if isinstance(tags, str):
+        return {t.strip().lower() for t in tags.split(",") if t.strip()}
+    if isinstance(tags, (list, tuple, set)):
+        cleaned = {str(t).strip().lower() for t in tags if str(t).strip()}
+        if cleaned:
+            return cleaned
+        h = hashlib.sha256(str(fallback_seed).encode("utf-8")).digest()
+        return {f"tag_{h[3] % 8}", f"subject_{h[4] % 8}"}
+    return set()
+
+
+def _extract_clip_features(clip: Any) -> tuple[str, Any, Any]:
+    """Extract (clip_id, color_profile, subject_tags) from a candidate record."""
+    if isinstance(clip, dict):
+        cid = str(clip.get("id") or clip.get("source") or clip.get("path") or id(clip))
+        cp = clip.get("color_profile") or clip.get("color")
+        tags = clip.get("subject_tags") or clip.get("tags") or clip.get("subjects")
+        return cid, cp, tags
+    if isinstance(clip, str):
+        return clip, None, None
+    cid = str(getattr(clip, "id", getattr(clip, "source", str(id(clip)))))
+    cp = getattr(clip, "color_profile", None)
+    tags = getattr(clip, "subject_tags", None)
+    return cid, cp, tags
+
+
+def amalgamate_viewports(panel_count: int, seed: int | str = 0, mode: str = "ribbon") -> list[SliceRect]:
+    """Generate panel_count SliceRect viewports that amalgamate into one evolving image.
+
+    Supports 3 <= panel_count <= 10. Guarantees no panel displays the full clip surface,
+    every coordinate lies strictly within [0.0, 1.0], and panels partition/overlap-stitch
+    across the normalized canvas.
+    """
+    if not isinstance(panel_count, int) or not (3 <= panel_count <= 10):
+        raise ValueError(f"panel_count must be an integer between 3 and 10, got {panel_count}")
+
+    rng = random.Random(str(seed))
+
+    if mode in ("ribbon", "horizontal", "horizontal_ribbon"):
+        overlap = 0.15 + (rng.random() * 0.05)
+        w = min(0.85, (1.0 + overlap * (panel_count - 1)) / panel_count)
+        w = round(w, 6)
+        dx = (1.0 - w) / (panel_count - 1)
+        h = round(0.92 + (rng.random() * 0.06), 6)
+
+        rects = []
+        for i in range(panel_count):
+            if i == 0:
+                x = 0.0
+            elif i == panel_count - 1:
+                x = round(1.0 - w, 6)
+            else:
+                x = round(i * dx, 6)
+
+            max_y = max(0.0, 1.0 - h)
+            y = round(rng.random() * max_y, 6)
+            x = max(0.0, min(1.0 - w, x))
+            y = max(0.0, min(1.0 - h, y))
+
+            rect = SliceRect(x=x, y=y, width=w, height=h)
+            if rect.is_full_frame:
+                raise ValueError("amalgamated viewport must not display full clip frame")
+            rects.append(rect)
+        return rects
+
+    elif mode in ("vertical", "vertical_ribbon"):
+        overlap = 0.15 + (rng.random() * 0.05)
+        h = min(0.85, (1.0 + overlap * (panel_count - 1)) / panel_count)
+        h = round(h, 6)
+        dy = (1.0 - h) / (panel_count - 1)
+        w = round(0.92 + (rng.random() * 0.06), 6)
+
+        rects = []
+        for i in range(panel_count):
+            if i == 0:
+                y = 0.0
+            elif i == panel_count - 1:
+                y = round(1.0 - h, 6)
+            else:
+                y = round(i * dy, 6)
+
+            max_x = max(0.0, 1.0 - w)
+            x = round(rng.random() * max_x, 6)
+            x = max(0.0, min(1.0 - w, x))
+            y = max(0.0, min(1.0 - h, y))
+
+            rect = SliceRect(x=x, y=y, width=w, height=h)
+            if rect.is_full_frame:
+                raise ValueError("amalgamated viewport must not display full clip frame")
+            rects.append(rect)
+        return rects
+
+    elif mode in ("grid", "mosaic"):
+        cols = 3 if panel_count <= 6 else 4
+        rows = math.ceil(panel_count / cols)
+        cell_w = round(min(0.85, 1.0 / cols + 0.05), 6)
+        cell_h = round(min(0.85, 1.0 / rows + 0.05), 6)
+        rects = []
+        for i in range(panel_count):
+            r = i // cols
+            c = i % cols
+            x = round(min(1.0 - cell_w, c * ((1.0 - cell_w) / max(1, cols - 1))), 6)
+            y = round(min(1.0 - cell_h, r * ((1.0 - cell_h) / max(1, rows - 1))), 6)
+            rect = SliceRect(x=x, y=y, width=cell_w, height=cell_h)
+            if rect.is_full_frame:
+                raise ValueError("amalgamated viewport must not display full clip frame")
+            rects.append(rect)
+        return rects
+
+    else:
+        raise ValueError(f"unsupported amalgamation mode: {mode}")
+
+
+def color_subject_affinity(clip_a: Any, clip_b: Any) -> float:
+    """Calculate normalized color proximity + subject tag affinity in [0.0, 1.0]."""
+    id_a, cp_a, tags_a = _extract_clip_features(clip_a)
+    id_b, cp_b, tags_b = _extract_clip_features(clip_b)
+
+    has_explicit_color = (cp_a is not None) or (cp_b is not None)
+    has_explicit_tags = (tags_a is not None and bool(tags_a)) or (tags_b is not None and bool(tags_b))
+
+    rgb_a = _normalize_color_profile(cp_a, fallback_seed=id_a)
+    rgb_b = _normalize_color_profile(cp_b, fallback_seed=id_b)
+
+    dr = rgb_a[0] - rgb_b[0]
+    dg = rgb_a[1] - rgb_b[1]
+    db = rgb_a[2] - rgb_b[2]
+    dist = math.sqrt(dr * dr + dg * dg + db * db)
+    max_dist = math.sqrt(3.0)
+    color_sim = max(0.0, min(1.0, 1.0 - (dist / max_dist)))
+
+    set_a = _normalize_subject_tags(tags_a, fallback_seed=id_a)
+    set_b = _normalize_subject_tags(tags_b, fallback_seed=id_b)
+    union = set_a | set_b
+    if not union:
+        subject_sim = 1.0 if not has_explicit_tags else 0.5
+    else:
+        subject_sim = len(set_a & set_b) / len(union)
+
+    if has_explicit_color and not has_explicit_tags:
+        score = color_sim
+    elif has_explicit_tags and not has_explicit_color:
+        score = subject_sim
+    else:
+        score = 0.5 * color_sim + 0.5 * subject_sim
+
+    return round(max(0.0, min(1.0, score)), 6)
+
+
+def select_neighbor_sequence(candidates: Sequence[Any], panel_count: int, seed: int | str = 0) -> list[AmalgamatedPanel]:
+    """Select a sequence of neighbor clips maximizing color/subject affinity paired with amalgamated SliceRects."""
+    if not isinstance(panel_count, int) or not (3 <= panel_count <= 10):
+        raise ValueError(f"panel_count must be an integer between 3 and 10, got {panel_count}")
+    cand_list = list(candidates)
+    if len(cand_list) < panel_count:
+        raise ValueError(f"insufficient candidates: requested {panel_count} panels but only have {len(cand_list)} candidates")
+
+    rng = random.Random(str(seed))
+    first_idx = rng.randrange(len(cand_list))
+    selected = [cand_list[first_idx]]
+    remaining = [c for i, c in enumerate(cand_list) if i != first_idx]
+
+    while len(selected) < panel_count:
+        prev = selected[-1]
+        best_cand = None
+        best_affinity = -1.0
+        best_key = ""
+        for cand in remaining:
+            aff = color_subject_affinity(prev, cand)
+            cid = _extract_clip_features(cand)[0]
+            if aff > best_affinity or (math.isclose(aff, best_affinity, abs_tol=1e-7) and (best_cand is None or cid < best_key)):
+                best_affinity = aff
+                best_cand = cand
+                best_key = cid
+        selected.append(best_cand)
+        remaining.remove(best_cand)
+
+    viewports = amalgamate_viewports(panel_count=panel_count, seed=seed)
+    return [AmalgamatedPanel(clip=clip, viewport=vp) for clip, vp in zip(selected, viewports)]

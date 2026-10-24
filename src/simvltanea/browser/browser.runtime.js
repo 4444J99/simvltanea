@@ -153,20 +153,105 @@ function frameProbe(node) {
     if (node.media.isConnected) frameProbe(node);
   });
 }
+function setCssProp(style, prop, val) {
+  if (!style) return;
+  if (typeof style.setProperty === 'function') {
+    style.setProperty(prop, val);
+  } else {
+    style[prop] = val;
+  }
+}
+function removeCssProp(style, prop) {
+  if (!style) return;
+  if (typeof style.removeProperty === 'function') {
+    style.removeProperty(prop);
+  } else {
+    delete style[prop];
+  }
+}
+
 function applySlice(node) {
-  if (!node.span || !node.span.slice_rect) {
-    Object.assign(node.media.style, {width:'100%', height:'100%', left:'0', top:'0', marginLeft:'0', marginTop:'0', position:'', transform:''});
+  const rawRect = (node.span && (node.span.slice_rect || node.span.sliceRect)) ||
+                  node.slice_rect || node.sliceRect ||
+                  (node.cell && (node.cell.slice_rect || node.cell.sliceRect)) ||
+                  (node.item && (node.item.slice_rect || node.item.sliceRect || node.item.viewport));
+
+  if (!rawRect) {
+    if (node.box) {
+      if (node.box.dataset) delete node.box.dataset.sliceRect;
+      removeCssProp(node.box.style, '--slice-x');
+      removeCssProp(node.box.style, '--slice-y');
+      removeCssProp(node.box.style, '--slice-w');
+      removeCssProp(node.box.style, '--slice-h');
+    }
+    if (node.media) {
+      if (node.media.dataset) delete node.media.dataset.sliceRect;
+      removeCssProp(node.media.style, '--slice-x');
+      removeCssProp(node.media.style, '--slice-y');
+      removeCssProp(node.media.style, '--slice-w');
+      removeCssProp(node.media.style, '--slice-h');
+      Object.assign(node.media.style, {width:'100%', height:'100%', left:'0', top:'0', marginLeft:'0', marginTop:'0', position:'', transform:''});
+    }
     return;
   }
-  const [sx, sy, sw, sh] = node.span.slice_rect.map(number);
-  // Deterministic source crop: show only slice region stretched to fill placement via overflow:hidden
-  // Loop box is overflow:hidden; media is scaled 1/w,1/h and offset -x/w, -y/h
-  Object.assign(node.media.style, {
-    position:'absolute', left:`${-100*sx/sw}%`, top:`${-100*sy/sh}%`,
-    width:`${100/sw}%`, height:`${100/sh}%`,
-    marginLeft:'0', marginTop:'0',
-    objectFit:'fill'
-  });
+
+  let sx, sy, sw, sh;
+  if (Array.isArray(rawRect)) {
+    [sx, sy, sw, sh] = rawRect.map(number);
+  } else if (typeof rawRect === 'object') {
+    sx = number(rawRect.x ?? 0);
+    sy = number(rawRect.y ?? 0);
+    sw = number(rawRect.width ?? (rawRect.w ?? 1));
+    sh = number(rawRect.height ?? (rawRect.h ?? 1));
+  } else {
+    return;
+  }
+
+  const isFullFrame = (Math.abs(sx) < 1e-5 && Math.abs(sy) < 1e-5 && Math.abs(sw - 1) < 1e-5 && Math.abs(sh - 1) < 1e-5);
+  if (isFullFrame) {
+    if (node.box) {
+      if (node.box.dataset) delete node.box.dataset.sliceRect;
+      removeCssProp(node.box.style, '--slice-x');
+      removeCssProp(node.box.style, '--slice-y');
+      removeCssProp(node.box.style, '--slice-w');
+      removeCssProp(node.box.style, '--slice-h');
+    }
+    if (node.media) {
+      if (node.media.dataset) delete node.media.dataset.sliceRect;
+      removeCssProp(node.media.style, '--slice-x');
+      removeCssProp(node.media.style, '--slice-y');
+      removeCssProp(node.media.style, '--slice-w');
+      removeCssProp(node.media.style, '--slice-h');
+      Object.assign(node.media.style, {width:'100%', height:'100%', left:'0', top:'0', marginLeft:'0', marginTop:'0', position:'', transform:''});
+    }
+    return;
+  }
+
+  const rectStr = `${sx},${sy},${sw},${sh}`;
+  if (node.box) {
+    if (!node.box.dataset) node.box.dataset = {};
+    node.box.dataset.sliceRect = rectStr;
+    setCssProp(node.box.style, '--slice-x', String(sx));
+    setCssProp(node.box.style, '--slice-y', String(sy));
+    setCssProp(node.box.style, '--slice-w', String(sw));
+    setCssProp(node.box.style, '--slice-h', String(sh));
+  }
+  if (node.media) {
+    if (!node.media.dataset) node.media.dataset = {};
+    node.media.dataset.sliceRect = rectStr;
+    setCssProp(node.media.style, '--slice-x', String(sx));
+    setCssProp(node.media.style, '--slice-y', String(sy));
+    setCssProp(node.media.style, '--slice-w', String(sw));
+    setCssProp(node.media.style, '--slice-h', String(sh));
+    // Deterministic source crop: show only slice region stretched to fill placement via overflow:hidden
+    // Loop box is overflow:hidden; media is scaled 1/w, 1/h and offset -x/w, -y/h
+    Object.assign(node.media.style, {
+      position:'absolute', left:`${-100*sx/sw}%`, top:`${-100*sy/sh}%`,
+      width:`${100/sw}%`, height:`${100/sh}%`,
+      marginLeft:'0', marginTop:'0',
+      objectFit:'fill'
+    });
+  }
 }
 function renderSeams() {
   // Clear old seam overlays
@@ -275,13 +360,32 @@ function applyPanelOrientation(seconds) {
     const node = runtime.nodes.get(cell.loop);
     if (!node || !node.media) return;
     const pose = poses[indices.get(cell.loop)];
-    if (node.span?.slice_rect) {
-      const [sx, sy, sw, sh] = node.span.slice_rect.map(number);
-      const x = Math.max(0, Math.min(1-sw, sx - pose.azimuth/(2*Math.PI)));
-      const y = Math.max(0, Math.min(1-sh, sy - pose.elevation/(2*Math.PI)));
-      node.media.style.left = `${-100*x/sw}%`;
-      node.media.style.top = `${-100*y/sh}%`;
-      return;
+    const rawRect = (node.span && (node.span.slice_rect || node.span.sliceRect)) ||
+                    node.slice_rect || node.sliceRect ||
+                    (cell && (cell.slice_rect || cell.sliceRect));
+    if (rawRect) {
+      let sx, sy, sw, sh;
+      if (Array.isArray(rawRect)) {
+        [sx, sy, sw, sh] = rawRect.map(number);
+      } else if (typeof rawRect === 'object') {
+        sx = number(rawRect.x ?? 0);
+        sy = number(rawRect.y ?? 0);
+        sw = number(rawRect.width ?? (rawRect.w ?? 1));
+        sh = number(rawRect.height ?? (rawRect.h ?? 1));
+      }
+      if (sx !== undefined && !(Math.abs(sx) < 1e-5 && Math.abs(sy) < 1e-5 && Math.abs(sw - 1) < 1e-5 && Math.abs(sh - 1) < 1e-5)) {
+        const x = Math.max(0, Math.min(1-sw, sx - pose.azimuth/(2*Math.PI)));
+        const y = Math.max(0, Math.min(1-sh, sy - pose.elevation/(2*Math.PI)));
+        node.media.style.left = `${-100*x/sw}%`;
+        node.media.style.top = `${-100*y/sh}%`;
+        setCssProp(node.media.style, '--slice-x', String(x));
+        setCssProp(node.media.style, '--slice-y', String(y));
+        if (node.box) {
+          setCssProp(node.box.style, '--slice-x', String(x));
+          setCssProp(node.box.style, '--slice-y', String(y));
+        }
+        return;
+      }
     }
     /* Azimuth is the score's horizontal sweep; the panel's own focal point is
      * the centre it returns to, so the sweep moves the frame around it rather
@@ -876,3 +980,94 @@ stage.addEventListener('click', () => {
   else runtime.start().catch(error=>{if(!runtime.audio.blocked)fail(error);});
 });
 stage.addEventListener('keydown', event => { if (event.code === 'Space') { event.preventDefault(); stage.click(); } });
+
+// Deterministic seeding and bounded snapshot paging helper (Issue #27)
+function seededRng(seed) {
+  let h = 0x811c9dc5;
+  const s = String(seed);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return function() {
+    h = Math.imul(h ^ (h >>> 15), 1 | h);
+    h ^= h + Math.imul(h ^ (h >>> 7), 61 | h) ^ h;
+    return ((h ^ (h >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function deterministicShuffle(arr, seed) {
+  const result = arr.slice();
+  const rng = seededRng(seed);
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = result[i];
+    result[i] = result[j];
+    result[j] = tmp;
+  }
+  return result;
+}
+
+function pageSnapshot(items, options = {}) {
+  const list = Array.isArray(items) ? items : (items ? Array.from(items) : []);
+  const totalItems = list.length;
+  const rawPageSize = Number(options.pageSize ?? 24);
+  const pageSize = (Number.isFinite(rawPageSize) && rawPageSize > 0) ? Math.floor(rawPageSize) : 24;
+  const totalPages = totalItems > 0 ? Math.ceil(totalItems / pageSize) : 0;
+
+  const rawPageIndex = Number(options.pageIndex ?? 0);
+  let pageIndex = (Number.isFinite(rawPageIndex) && rawPageIndex >= 0) ? Math.floor(rawPageIndex) : 0;
+  if (totalPages > 0 && pageIndex >= totalPages) {
+    pageIndex = Math.max(0, totalPages - 1);
+  }
+
+  // Active decoder cap strictly enforces maxActiveDecoders <= 6
+  const maxActiveDecoders = Math.min(
+    Math.max(0, Math.floor(Number(options.maxActiveDecoders ?? 6))),
+    6
+  );
+
+  let ordered = list.slice();
+  if (options.seed !== null && options.seed !== undefined) {
+    ordered = deterministicShuffle(ordered, options.seed);
+  }
+
+  const start = totalPages === 0 ? 0 : pageIndex * pageSize;
+  const end = Math.min(start + pageSize, totalItems);
+  const sliced = ordered.slice(start, end);
+
+  const pageItems = sliced.map((item, idx) => {
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      return Object.assign({}, item, {
+        activeDecoder: idx < maxActiveDecoders,
+        active_decoder: idx < maxActiveDecoders,
+      });
+    }
+    return item;
+  });
+
+  return {
+    items: pageItems,
+    pageIndex,
+    pageSize,
+    totalItems,
+    totalPages,
+    hasNextPage: totalPages > 0 && pageIndex < totalPages - 1,
+    hasPrevPage: totalPages > 0 && pageIndex > 0,
+    maxActiveDecoders,
+    activeDecoders: Math.min(pageItems.length, maxActiveDecoders),
+  };
+}
+
+runtime.pageSnapshot = pageSnapshot;
+runtime.applySlice = applySlice;
+
+if (typeof window !== 'undefined') {
+  window.pageSnapshot = pageSnapshot;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = runtime;
+  module.exports.runtime = runtime;
+  module.exports.pageSnapshot = pageSnapshot;
+  module.exports.applySlice = applySlice;
+}
