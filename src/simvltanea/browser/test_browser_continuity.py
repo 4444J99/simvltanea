@@ -255,6 +255,48 @@ class ContinuityTests(unittest.TestCase):
     def test_reject_rate_change(self):
         self.mutation('rate-change', 'document.querySelector("video").playbackRate=2')
 
+    def test_visibility_change_loop_clock_preservation(self):
+        page, state = self.open(3)
+        res = page.evaluate("""() => {
+            const r = window.compositionRuntime;
+            const before = r.snapshot();
+            // Simulate page visibility hidden
+            Object.defineProperty(document, 'hidden', {value: true, configurable: true});
+            document.dispatchEvent(new Event('visibilitychange'));
+
+            // Simulate page restored to visible
+            Object.defineProperty(document, 'hidden', {value: false, configurable: true});
+            document.dispatchEvent(new Event('visibilitychange'));
+
+            const events = r.events.filter(e => e.type === 'visibility-change');
+            return {
+                eventCount: events.length,
+                firstHidden: events[0].hidden,
+                secondHidden: events[1].hidden,
+                running: r.running,
+            };
+        }""")
+        self.assertEqual(res['eventCount'], 2)
+        self.assertTrue(res['firstHidden'])
+        self.assertFalse(res['secondHidden'])
+        self.assertTrue(res['running'])
+
+    def test_event_log_cap_during_orientation_updates(self):
+        page, state = self.open(3)
+        res = page.evaluate("""() => {
+            const r = window.compositionRuntime;
+            r.maxEvents = 16;
+            for (let i = 0; i < 50; i++) {
+                record('layout', null, {orientation: i % 2 === 0 ? 'landscape' : 'portrait'});
+            }
+            return {
+                eventCount: r.events.length,
+                maxEvents: r.maxEvents,
+            };
+        }""")
+        self.assertEqual(res['eventCount'], 16)
+        self.assertEqual(res['maxEvents'], 16)
+
 
 if __name__ == '__main__':
     unittest.main()

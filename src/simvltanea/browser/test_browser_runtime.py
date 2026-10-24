@@ -454,5 +454,101 @@ class BrowserTests(unittest.TestCase):
         # Restore the private synthetic test copy so the deliverable has no corrupt media.
         build_preview(ROOT/'state-3.json',target)
 
+    def test_paused_intent_preserved_during_async_start(self):
+        page = self.open_preview(3)
+        res = page.evaluate("""async () => {
+            const r = window.compositionRuntime;
+            const startPromise = r.start();
+            r.pause();
+            await startPromise;
+            return {
+                running: r.running,
+                datasetStatus: stage.dataset.status,
+                pauseIntent: r.pauseIntent,
+                events: r.events.map(e => e.type),
+            };
+        }""")
+        self.assertFalse(res['running'])
+        self.assertEqual(res['datasetStatus'], 'paused')
+        self.assertFalse(res['pauseIntent'])
+        self.assertIn('pause-intent', res['events'])
+        self.assertIn('paused', res['events'])
+
+    def test_bounded_event_log_cap(self):
+        page = self.open_preview(3)
+        res = page.evaluate("""() => {
+            const r = window.compositionRuntime;
+            r.maxEvents = 10;
+            for (let i = 0; i < 25; i++) {
+                record('test-cap-event', null, {index: i});
+            }
+            return {
+                eventCount: r.events.length,
+                firstIndex: r.events[0].index,
+                lastIndex: r.events[r.events.length - 1].index,
+            };
+        }""")
+        self.assertEqual(res['eventCount'], 10)
+        self.assertEqual(res['firstIndex'], 15)
+        self.assertEqual(res['lastIndex'], 24)
+
+    def test_repeated_initialization_and_dispose_cleanup(self):
+        page = self.open_preview(3)
+        self.assertTrue(page.evaluate('compositionRuntime.ready'))
+        self.assertGreater(page.locator('#stage > .loop').count(), 0)
+        # Dispose
+        page.evaluate('compositionRuntime.dispose()')
+        snap = page.evaluate('compositionRuntime.snapshot()')
+        self.assertFalse(page.evaluate('compositionRuntime.ready'))
+        self.assertTrue(snap['disposed'])
+        self.assertEqual(page.locator('#stage > .loop').count(), 0)
+        self.assertEqual(page.evaluate('compositionRuntime.sources.size'), 0)
+        self.assertEqual(page.evaluate('compositionRuntime.nodes.size'), 0)
+        # Re-initialize
+        page.evaluate('compositionRuntime.initialize()')
+        page.wait_for_function('compositionRuntime.ready')
+        self.assertTrue(page.evaluate('compositionRuntime.ready'))
+        self.assertGreater(page.locator('#stage > .loop').count(), 0)
+
+    def test_explicit_controls_play_pause_resume_replay(self):
+        page = self.open_preview(3)
+        # play()
+        page.evaluate('compositionRuntime.play()')
+        page.wait_for_function('compositionRuntime.running')
+        self.assertTrue(page.evaluate('compositionRuntime.running'))
+        # pause()
+        page.evaluate('compositionRuntime.pause()')
+        self.assertFalse(page.evaluate('compositionRuntime.running'))
+        # resume()
+        page.evaluate('compositionRuntime.resume()')
+        self.assertTrue(page.evaluate('compositionRuntime.running'))
+        # replay()
+        page.wait_for_timeout(150)
+        page.evaluate('compositionRuntime.replay()')
+        page.wait_for_function('compositionRuntime.running')
+        self.assertTrue(page.evaluate('compositionRuntime.running'))
+
+    def test_asset_load_failure_explicit_retryable_state(self):
+        page = self.open_preview(3)
+        res = page.evaluate("""async () => {
+            const r = window.compositionRuntime;
+            const originalPlan = r.plan;
+            fail(new Error('Missing media: source-1'), true);
+            const snap = r.snapshot();
+            const planRetained = (r.plan === originalPlan);
+            return {
+                retryable: r.retryable,
+                hasAssetError: !!r.assetError,
+                error: r.error,
+                planRetained: planRetained,
+                snapshotRetryable: snap.retryable,
+            };
+        }""")
+        self.assertTrue(res['retryable'])
+        self.assertTrue(res['hasAssetError'])
+        self.assertIn('Missing media', res['error'])
+        self.assertTrue(res['planRetained'])
+        self.assertTrue(res['snapshotRetryable'])
+
 
 if __name__=='__main__':unittest.main()

@@ -15,20 +15,31 @@ const number = value => {
 const stage = document.querySelector('#stage');
 const runtime = window.compositionRuntime = {
   ready: false, running: false, finished: false, error: null, frame: 0,
-  events: [], nodes: new Map(), sources: new Map(), plan: null, origin: 0,
+  events: [], maxEvents: 256, nodes: new Map(), sources: new Map(), plan: null, origin: 0,
   orientation: null, layoutIndex: 0, position: 0, generation: 0, starting: false,
-  audio: {mode:'none', context:null, enabled:false, buffer:null, source:null, gain:null},
+  pauseIntent: false, initializing: false, retryable: false, assetError: null, disposed: false,
+  audio: {mode:'none', context:null, enabled:false, buffer:null, source:null, gain:null, interrupted:false},
 };
 function record(type, id, details = {}) {
+  const cap = Number.isInteger(runtime.maxEvents) && runtime.maxEvents > 0 ? runtime.maxEvents : 256;
   runtime.events.push({type, id, frame: runtime.frame, wall: performance.now(), ...details});
+  if (runtime.events.length > cap) {
+    runtime.events.splice(0, runtime.events.length - cap);
+  }
 }
 function setStatus(status,message) {
   stage.dataset.status=status;
   const label=document.querySelector('#runtime-status');
   if(label) label.textContent=message;
 }
-function fail(error) {
+function fail(error, isAsset = false) {
+  if (runtime.disposed) return;
   runtime.error = String(error); runtime.running = false; runtime.ready = false;
+  if (isAsset || /Media (?:failure|timeout|decode|integrity)|Missing media|Cannot load compiled plan/.test(String(error))) {
+    runtime.retryable = true;
+    runtime.assetError = {message: String(error), retryable: true};
+    record('asset-load-failed', null, {message: String(error), retryable: true});
+  }
   for (const node of runtime.nodes.values()) node.media?.pause?.();
   stopSoundtrack();
   if (runtime.audio.context) runtime.audio.context.suspend().catch(() => {});
@@ -316,7 +327,8 @@ function applyLayout() {
   renderSeams();
   record('layout', null, {orientation, width, height});
 }
-new ResizeObserver(applyLayout).observe(stage);
+runtime.resizeObserver = new ResizeObserver(applyLayout);
+runtime.resizeObserver.observe(stage);
 
 async function activate(node, span, frame, initial = false) {
   const source = runtime.sources.get(span.source);
@@ -339,7 +351,7 @@ async function activate(node, span, frame, initial = false) {
       node.media.preservesPitch = true;
       node.media.addEventListener('loadstart', () => record('loadstart', node.id));
       node.media.addEventListener('seeking', () => record('seeking', node.id));
-      node.media.addEventListener('error', () => fail(new Error(`Media failure: ${node.id}`)));
+      node.media.addEventListener('error', () => fail(new Error(`Media failure: ${node.id}`), true));
       frameProbe(node);
       connectLoopAudio(node);
     }
@@ -401,6 +413,7 @@ function tick(generation) {
 runtime.start = async () => {
   if (!runtime.ready || runtime.running || runtime.starting || runtime.finished || runtime.error) throw new Error('Runtime is not ready');
   runtime.starting=true;
+  runtime.pauseIntent=false;
   try {
     if (runtime.audio.context) {
       const context=runtime.audio.context;
@@ -413,6 +426,7 @@ runtime.start = async () => {
       if (context.state!=='running') throw new Error('Audio context did not start');
       runtime.audio.enabled=true;
       runtime.audio.blocked=null;
+      runtime.audio.interrupted=false;
     }
     runtime.origin=runtime.audio.context ? runtime.audio.context.currentTime-runtime.position :
       performance.now()-runtime.position*1000;
@@ -426,6 +440,12 @@ runtime.start = async () => {
     // A decoder error can arrive while play() promises are outstanding.
     // Never turn that terminal error back into an apparent playing state.
     if (runtime.error) throw new Error(runtime.error);
+    if (runtime.pauseIntent) {
+      runtime.pauseIntent = false;
+      runtime.starting = false;
+      runtime.pause();
+      return;
+    }
     setStatus('playing',runtime.audio.mode==='none' ? 'Playing · silent field · click or Space to pause' :
       'Playing with sound · click or Space to pause');
     const generation=runtime.generation; requestAnimationFrame(()=>tick(generation));
@@ -441,15 +461,38 @@ runtime.start = async () => {
   }
   finally { runtime.starting=false; }
 };
+runtime.play = async () => {
+  if (runtime.running) return;
+  if (runtime.finished) {
+    await runtime.seek(0);
+  }
+  return runtime.start();
+};
 runtime.pause = () => {
-  if (runtime.starting || [...runtime.nodes.values()].some(node=>node.busy)) throw new Error('Media transition is still pending');
+  if (runtime.starting || runtime.initializing) {
+    runtime.pauseIntent = true;
+    record('pause-intent', null);
+    return;
+  }
+  if ([...runtime.nodes.values()].some(node=>node.busy)) {
+    runtime.pauseIntent = true;
+    record('pause-intent', null);
+    return;
+  }
   if (!runtime.running) return;
   runtime.position=compositionTime(); runtime.running=false; runtime.generation++;
   runtime.frame=Math.min(Math.floor(runtime.position*runtime.plan.fps),runtime.plan.frames-1);
   for (const node of runtime.nodes.values()) { node.media?.pause?.(); scheduleLoopGain(node); }
   stopSoundtrack(); setStatus('paused','Paused · click or Space to resume'); record('paused',null,{time:runtime.position});
 };
-runtime.resume = runtime.start;
+runtime.resume = runtime.play;
+runtime.replay = async () => {
+  if (runtime.running) {
+    runtime.pause();
+  }
+  await runtime.seek(0);
+  return runtime.play();
+};
 runtime.seek = async seconds => {
   if (!runtime.ready || runtime.error || runtime.starting || [...runtime.nodes.values()].some(node=>node.busy))
     throw new Error('Runtime is not ready to seek');
@@ -467,12 +510,98 @@ runtime.seek = async seconds => {
   record('transport-seek',null,{time:seconds}); setStatus('paused','Paused · click or Space to resume');
   if (wasRunning) await runtime.start();
 };
+runtime.retry = async () => {
+  if (!runtime.retryable && !runtime.error && !runtime.assetError) return;
+  runtime.error = null;
+  runtime.retryable = false;
+  runtime.assetError = null;
+  record('retry', null);
+  await initialize();
+};
+runtime.recoverAudio = async () => {
+  if (!runtime.audio.context) return;
+  try {
+    record('audio-recover-attempt', null, {state: runtime.audio.context.state});
+    await runtime.audio.context.resume();
+    if (runtime.audio.context.state === 'running') {
+      runtime.audio.interrupted = false;
+      runtime.audio.enabled = true;
+      runtime.audio.blocked = null;
+      if (runtime.running && runtime.audio.mode === 'soundtrack') {
+        startSoundtrack();
+      }
+      record('audio-recovered', null, {state: 'running'});
+      setStatus('playing', runtime.audio.mode === 'none' ? 'Playing · silent field · click or Space to pause' :
+        'Playing with sound · click or Space to pause');
+    }
+  } catch (error) {
+    record('audio-recover-failed', null, {message: String(error)});
+    throw error;
+  }
+};
+runtime.dispose = () => {
+  runtime.disposed = true;
+  runtime.running = false;
+  runtime.ready = false;
+  runtime.starting = false;
+  runtime.generation++;
+  stopSoundtrack();
+  for (const node of runtime.nodes.values()) {
+    try { node.media?.pause?.(); } catch (_) {}
+    if (node.audio) {
+      try { node.audio.source?.disconnect(); } catch (_) {}
+      try { node.audio.pan?.disconnect(); } catch (_) {}
+      try { node.audio.gain?.disconnect(); } catch (_) {}
+      node.audio = null;
+    }
+    if (node.media) {
+      node.media.onloadeddata = null;
+      node.media.onseeked = null;
+      node.media.onerror = null;
+      const media = node.media;
+      node.media = null;
+      media.remove();
+      try { media.removeAttribute('src'); media.load(); } catch (_) {}
+    }
+    if (node.box) {
+      node.box.remove();
+      node.box = null;
+    }
+  }
+  runtime.nodes.clear();
+  for (const entry of runtime.sources.values()) {
+    if (entry.url && entry.url.startsWith('blob:')) {
+      try { URL.revokeObjectURL(entry.url); } catch (_) {}
+    }
+  }
+  runtime.sources.clear();
+  if (runtime.audio.context) {
+    try { runtime.audio.context.close(); } catch (_) {}
+    runtime.audio.context = null;
+    runtime.audio.buffer = null;
+    runtime.audio.gain = null;
+    runtime.audio.source = null;
+    runtime.audio.enabled = false;
+    runtime.audio.interrupted = false;
+  }
+  [...stage.querySelectorAll('.seam')].forEach(el => el.remove());
+  if (runtime.resizeObserver) {
+    try { runtime.resizeObserver.disconnect(); } catch (_) {}
+    runtime.resizeObserver = null;
+  }
+  setStatus('disposed', 'Runtime disposed.');
+  record('disposed', null);
+};
 runtime.snapshot = () => {
   // Bind every derived value to the same instant, including while playing.
   const sampledTime = compositionTime();
   return {
     frame: runtime.frame, wall: performance.now(), orientation: runtime.orientation,
     running: runtime.running, finished: runtime.finished, error: runtime.error,
+    retryable: !!runtime.retryable,
+    assetError: runtime.assetError ?? null,
+    pauseIntent: runtime.pauseIntent,
+    disposed: !!runtime.disposed,
     compositionTime:sampledTime,
     /* The shared engine's contribution, reported so a test can assert the module
      * actually ran rather than inferring it from unchanged panel framing. */
@@ -486,14 +615,15 @@ runtime.snapshot = () => {
     },
     audio:{mode:runtime.audio.mode,enabled:runtime.audio.enabled,contextState:runtime.audio.context?.state??null,
       blocked:runtime.audio.blocked??null,
+      interrupted:!!runtime.audio.interrupted,
       soundtrackPlaying:!!runtime.audio.source,gain:runtime.audio.gain?.gain.value??null},
     loops: [...runtime.nodes.values()].map(n => ({
-      id:n.id, source:n.source, kind:n.kind, currentTime:n.media.currentTime ?? null,
-      rate:n.media.playbackRate ?? 0, paused:n.media.paused ?? true, readyState:n.media.readyState ?? null,
+      id:n.id, source:n.source, kind:n.kind, currentTime:n.media?.currentTime ?? null,
+      rate:n.media?.playbackRate ?? 0, paused:n.media?.paused ?? true, readyState:n.media?.readyState ?? null,
       busy:n.busy, callbacks:n.callbacks, decoded:n.decoded,
       audio:n.audio ? {gain:n.audio.gain.gain.value,pan:n.audio.pan.pan.value}:null,
-      rect:n.box.getBoundingClientRect().toJSON(),
-      quality:n.media.getVideoPlaybackQuality?.().toJSON?.() ?? (n.kind === 'video' ? {
+      rect:n.box ? n.box.getBoundingClientRect().toJSON() : null,
+      quality:n.media?.getVideoPlaybackQuality?.().toJSON?.() ?? (n.kind === 'video' && n.media ? {
         totalVideoFrames:n.media.getVideoPlaybackQuality().totalVideoFrames,
         droppedVideoFrames:n.media.getVideoPlaybackQuality().droppedVideoFrames} : null),
     })),
@@ -617,71 +747,128 @@ function validatePlan(plan) {
   }
 }
 async function initialize() {
-  runtime.plan = await io.plan();
-  validatePlan(runtime.plan);
-  let total = 0;
-  runtime.audio.mode=runtime.plan.plan_version===1 ? 'none' : runtime.plan.audio.mode;
-  const assets=[...runtime.plan.sources];
-  if (runtime.audio.mode==='soundtrack') assets.push(runtime.plan.audio.asset);
-  let soundtrackBytes;
-  for (const source of assets) {
-    if (!/^media\/[a-f0-9]{64}\.[a-z0-9]+$/.test(source.path)) throw new Error('Unsafe media URL');
-    total += source.bytes;
-    if (total > 256*1024*1024) throw new Error('Media memory guard');
-    const bytes = await io.bytes(source);
-    const digest = await io.digest(bytes);
-    if (digest !== source.sha256 || bytes.byteLength !== source.bytes) throw new Error(`Media integrity: ${source.id}`);
-    if (source.kind==='audio') { soundtrackBytes=bytes; continue; }
-    const type = source.kind === 'video' ? 'video/mp4' : (source.path.endsWith('.png') ? 'image/png' : 'image/jpeg');
-    runtime.sources.set(source.id, {url:URL.createObjectURL(new Blob([bytes], {type}))});
+  runtime.error = null;
+  runtime.retryable = false;
+  runtime.assetError = null;
+  runtime.disposed = false;
+  runtime.initializing = true;
+  runtime.position = 0;
+  runtime.frame = 0;
+  runtime.layoutIndex = 0;
+  if (!runtime.resizeObserver) {
+    runtime.resizeObserver = new ResizeObserver(applyLayout);
+    runtime.resizeObserver.observe(stage);
   }
-  if (runtime.audio.mode!=='none') {
-    if (!window.AudioContext) throw new Error('Web Audio is required for this opted-in audio mode');
-    runtime.audio.context=new AudioContext({sampleRate:48000});
-    if (runtime.audio.mode==='soundtrack') {
-      runtime.audio.buffer=await runtime.audio.context.decodeAudioData(soundtrackBytes);
-      if (![1,2].includes(runtime.audio.buffer.numberOfChannels))
-        throw new Error('Browser soundtrack requires mono or stereo audio');
-      const duration=number(runtime.plan.audio.duration);
-      if (Math.abs(runtime.audio.buffer.duration-duration)>1/runtime.plan.fps)
-        throw new Error('Decoded soundtrack duration differs from verified duration');
-      // Probe tolerance permits a partial video frame discrepancy. Pad/trim the
-      // decoded PCM to the declared sample count so every loop still uses T.
-      const decoded=runtime.audio.buffer, length=Math.max(1,Math.round(duration*decoded.sampleRate));
-      if (length!==decoded.length) {
-        const normalized=runtime.audio.context.createBuffer(decoded.numberOfChannels,length,decoded.sampleRate);
-        for(let channel=0;channel<decoded.numberOfChannels;channel++)
-          normalized.copyToChannel(decoded.getChannelData(channel).subarray(0,length),channel);
-        runtime.audio.buffer=normalized;
-      }
-      runtime.audio.gain=runtime.audio.context.createGain();
-      runtime.audio.gain.gain.value=0;
-      runtime.audio.gain.connect(runtime.audio.context.destination);
+  try {
+    runtime.plan = await io.plan();
+    validatePlan(runtime.plan);
+    let total = 0;
+    runtime.audio.mode=runtime.plan.plan_version===1 ? 'none' : runtime.plan.audio.mode;
+    const assets=[...runtime.plan.sources];
+    if (runtime.audio.mode==='soundtrack') assets.push(runtime.plan.audio.asset);
+    let soundtrackBytes;
+    for (const source of assets) {
+      if (!/^media\/[a-f0-9]{64}\.[a-z0-9]+$/.test(source.path)) throw new Error('Unsafe media URL');
+      total += source.bytes;
+      if (total > 256*1024*1024) throw new Error('Media memory guard');
+      const bytes = await io.bytes(source);
+      const digest = await io.digest(bytes);
+      if (digest !== source.sha256 || bytes.byteLength !== source.bytes) throw new Error(`Media integrity: ${source.id}`);
+      if (source.kind==='audio') { soundtrackBytes=bytes; continue; }
+      const type = source.kind === 'video' ? 'video/mp4' : (source.path.endsWith('.png') ? 'image/png' : 'image/jpeg');
+      runtime.sources.set(source.id, {url:URL.createObjectURL(new Blob([bytes], {type}))});
     }
-    runtime.audio.context.addEventListener('statechange',()=>{
-      if (runtime.running && !runtime.starting && runtime.audio.context.state!=='running')
-        fail(new Error('Audio context interrupted; playback stopped'));
-    });
+    if (runtime.audio.mode!=='none') {
+      if (!window.AudioContext) throw new Error('Web Audio is required for this opted-in audio mode');
+      runtime.audio.context=new AudioContext({sampleRate:48000});
+      if (runtime.audio.mode==='soundtrack') {
+        runtime.audio.buffer=await runtime.audio.context.decodeAudioData(soundtrackBytes);
+        if (![1,2].includes(runtime.audio.buffer.numberOfChannels))
+          throw new Error('Browser soundtrack requires mono or stereo audio');
+        const duration=number(runtime.plan.audio.duration);
+        if (Math.abs(runtime.audio.buffer.duration-duration)>1/runtime.plan.fps)
+          throw new Error('Decoded soundtrack duration differs from verified duration');
+        // Probe tolerance permits a partial video frame discrepancy. Pad/trim the
+        // decoded PCM to the declared sample count so every loop still uses T.
+        const decoded=runtime.audio.buffer, length=Math.max(1,Math.round(duration*decoded.sampleRate));
+        if (length!==decoded.length) {
+          const normalized=runtime.audio.context.createBuffer(decoded.numberOfChannels,length,decoded.sampleRate);
+          for(let channel=0;channel<decoded.numberOfChannels;channel++)
+            normalized.copyToChannel(decoded.getChannelData(channel).subarray(0,length),channel);
+          runtime.audio.buffer=normalized;
+        }
+        runtime.audio.gain=runtime.audio.context.createGain();
+        runtime.audio.gain.gain.value=0;
+        runtime.audio.gain.connect(runtime.audio.context.destination);
+      }
+      runtime.audio.context.addEventListener('statechange',()=>{
+        const state = runtime.audio.context ? runtime.audio.context.state : 'closed';
+        record('audio-statechange', null, {state});
+        if (runtime.running && !runtime.starting && (state==='suspended' || state==='interrupted')) {
+          runtime.audio.interrupted = true;
+          runtime.audio.enabled = false;
+          record('audio-interrupted', null, {state});
+          setStatus('audio-interrupted', 'Audio interrupted. Click or press Space to recover sound.');
+          stopSoundtrack();
+        } else if (state==='running' && runtime.audio.interrupted) {
+          runtime.audio.interrupted = false;
+          runtime.audio.enabled = true;
+          record('audio-recovered', null, {state});
+          if (runtime.running && runtime.audio.mode==='soundtrack') {
+            startSoundtrack();
+          }
+          setStatus('playing', runtime.audio.mode==='none' ? 'Playing · silent field · click or Space to pause' :
+            'Playing with sound · click or Space to pause');
+        }
+      });
+    }
+    for (const track of runtime.plan.tracks) {
+      if (runtime.nodes.has(track.id)) throw new Error('Duplicate loop');
+      const box = document.createElement('div'); box.className = 'loop'; box.dataset.loopId = track.id; stage.append(box);
+      runtime.nodes.set(track.id, {id:track.id, box, media:null, kind:null, source:null,
+        spans:track.spans, index:0, span:null, callbacks:0, decoded:null, busy:false});
+    }
+    await Promise.all([...runtime.nodes.values()].map(n => activate(n, n.spans[0], 0, true)));
+    if (runtime.error) throw new Error(runtime.error);
+    runtime.ready = true;
+    setStatus('ready',runtime.audio.mode==='none' ? 'Click or press Space to play the silent field.' :
+      'Click or press Space to play with sound.');
+    applyLayout();
+    if (runtime.sharedEngineError) setStatus('error', 'Shared engine unavailable: ' + runtime.sharedEngineError);
+  } finally {
+    runtime.initializing = false;
   }
-  for (const track of runtime.plan.tracks) {
-    if (runtime.nodes.has(track.id)) throw new Error('Duplicate loop');
-    const box = document.createElement('div'); box.className = 'loop'; box.dataset.loopId = track.id; stage.append(box);
-    runtime.nodes.set(track.id, {id:track.id, box, media:null, kind:null, source:null,
-      spans:track.spans, index:0, span:null, callbacks:0, decoded:null, busy:false});
-  }
-  await Promise.all([...runtime.nodes.values()].map(n => activate(n, n.spans[0], 0, true)));
-  if (runtime.error) throw new Error(runtime.error);
-  runtime.ready = true;
-  setStatus('ready',runtime.audio.mode==='none' ? 'Click or press Space to play the silent field.' :
-    'Click or press Space to play with sound.');
-  applyLayout();
-  if (runtime.sharedEngineError) setStatus('error', 'Shared engine unavailable: ' + runtime.sharedEngineError);
 }
+runtime.initialize = initialize;
 initialize().catch(fail);
+
+// Page visibility change recovery preserving independent source loop clocks
+document.addEventListener('visibilitychange', () => {
+  const hidden = document.hidden;
+  record('visibility-change', null, {hidden, time: compositionTime()});
+  if (!hidden && runtime.running && runtime.plan) {
+    const nowSec = compositionTime();
+    const curFrame = Math.min(Math.floor(nowSec * runtime.plan.fps), runtime.plan.frames - 1);
+    for (const node of runtime.nodes.values()) {
+      if (node.kind === 'video' && node.span && !node.span.held && !node.busy && node.media) {
+        const elapsed = (curFrame - node.span.frame) / runtime.plan.fps;
+        const target = number(node.span.source_offset) + elapsed * number(node.span.rate);
+        if (Math.abs(node.media.currentTime - target) > 0.25) {
+          node.media.currentTime = target;
+          record('visibility-resync', node.id, {target, currentTime: node.media.currentTime});
+        }
+      }
+    }
+  }
+});
 
 // A local preview can be started directly without a developer console.
 stage.tabIndex = 0;
 stage.addEventListener('click', () => {
+  if (runtime.audio.interrupted) {
+    runtime.recoverAudio().catch(() => {});
+    return;
+  }
   if (!runtime.ready || runtime.starting || runtime.finished || runtime.error) return;
   if (runtime.running) { try { runtime.pause(); } catch (error) { record('transport-busy',null,{message:String(error)}); } }
   else runtime.start().catch(error=>{if(!runtime.audio.blocked)fail(error);});

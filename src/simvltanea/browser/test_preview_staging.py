@@ -252,7 +252,7 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
     def test_git_environment_cannot_hide_real_tracked_files(self):
         self.build()
         subprocess.run(['git', 'init', '-q', str(self.fixture_root)], check=True)
-        subprocess.run(['git', '-C', str(self.fixture_root), 'add', 'var/preview/index.html'], check=True)
+        subprocess.run(['git', '-C', str(self.fixture_root), 'add', '-f', 'var/preview/index.html'], check=True)
         unrelated = self.fixture_root / 'unrelated'
         subprocess.run(['git', 'init', '-q', str(unrelated)], check=True)
         before = self.snapshot()
@@ -267,7 +267,7 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
         self.output = self.generated / 'preview[own]'
         self.build()
         subprocess.run(['git', 'init', '-q', str(self.fixture_root)], check=True)
-        subprocess.run(['git', '-C', str(self.fixture_root), 'add', 'var/preview[own]/index.html'], check=True)
+        subprocess.run(['git', '-C', str(self.fixture_root), 'add', '-f', 'var/preview[own]/index.html'], check=True)
         before = self.snapshot()
         with self.assertRaisesRegex(runtime.c.StateError, 'tracked files'):
             self.build()
@@ -284,9 +284,155 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
             calls += 1
             rename(staging, output, exchange=exchange)
             if calls == 1:
-                subprocess.run(['git', '-C', str(self.fixture_root), 'add', 'var/preview/index.html'], check=True)
+                subprocess.run(['git', '-C', str(self.fixture_root), 'add', '-f', 'var/preview/index.html'], check=True)
         with patch.object(runtime, '_rename_preview', side_effect=track_after_exchange):
             with self.assertRaisesRegex(runtime.c.StateError, 'tracked files'):
                 self.build()
         self.assertEqual(before, self.snapshot())
         self.assertEqual(list(self.generated.glob('.preview-stage-*')), [])
+
+
+class SafeStagingAndPreviewLabellingTests(unittest.TestCase):
+    def test_safe_staging_collision_refusal_on_unprovenanced_nonempty_directory(self):
+        from tools.media import import_photos
+        from tools.editions import build_edition
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir) / "staged"
+            out_dir.mkdir()
+            (out_dir / "unrelated.mp4").write_text("foreign media")
+            proj_path = Path(tmpdir) / "project.json"
+            lib_path = Path(tmpdir) / "Photos.photoslibrary"
+
+            # import_photos provenance check fails on unprovenanced directory
+            self.assertFalse(
+                import_photos.verify_staging_provenance(out_dir, proj_path, lib_path, {})
+            )
+            # build_edition provenance check fails on unprovenanced directory
+            self.assertFalse(
+                build_edition.verify_edition_provenance(out_dir, proj_path, "test-edition")
+            )
+
+    def test_safe_staging_provenance_verified_with_matching_staging_manifest(self):
+        from tools.media import import_photos
+        from tools.editions import build_edition
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir) / "staged"
+            out_dir.mkdir()
+            (out_dir / "valid_clip.mp4").write_text("valid clip")
+            proj_path = Path(tmpdir) / "project.json"
+            lib_path = Path(tmpdir) / "Photos.photoslibrary"
+
+            import_photos.write_staging_manifest(out_dir, lib_path, {"album": ["test"]}, 1, dry_run=False)
+            self.assertTrue(
+                import_photos.verify_staging_provenance(out_dir, proj_path, lib_path, {"album": ["test"]})
+            )
+
+            build_edition.write_staging_manifest(out_dir, "my-slug", dry_run=False)
+            self.assertTrue(
+                build_edition.verify_edition_provenance(out_dir, proj_path, "my-slug")
+            )
+
+    def test_prepare_output_dir_never_destructively_empties_active_staging(self):
+        from tools.media import import_photos
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir) / "staged"
+            out_dir.mkdir()
+            canary = out_dir / "staged_001.mov"
+            canary.write_text("precious staged bytes")
+
+            import_photos.prepare_output_dir(out_dir, keep_existing=False, dry_run=False)
+            self.assertTrue(canary.exists())
+            self.assertEqual(canary.read_text(), "precious staged bytes")
+
+    def test_photos_library_protection_refuses_staging_inside_photos(self):
+        from tools.media import import_photos
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lib_path = Path(tmpdir) / "Photos.photoslibrary"
+            lib_path.mkdir()
+            out_dir = lib_path / "inside_photos"
+            self.assertTrue(import_photos.path_inside(out_dir, lib_path))
+
+    def test_build_edition_bounded_preview_labelling(self):
+        from tools.editions import build_edition
+        import tempfile
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.object(build_edition, "SCRIPT_DIR", root):
+                proj_path = root / "project.json"
+                proj_path.write_text("{}")
+                edition = {
+                    "name": "Bounded Edition",
+                    "slug": "bounded-edition",
+                    "_cli_limit": 8,
+                    "source": {"type": "photos_album", "limit": 8},
+                }
+                project = build_edition.apply_edition_settings(proj_path, edition, dry_run=False)
+                self.assertEqual(project["edition"]["coverage_mode"], "bounded_preview")
+                self.assertEqual(project["edition"]["preview_limit"], 8)
+                self.assertFalse(project["edition"]["full_album_complete"])
+                self.assertEqual(project["coverage_mode"], "bounded_preview")
+                self.assertEqual(project["preview_limit"], 8)
+                self.assertFalse(project["full_album_complete"])
+
+    def test_build_edition_full_album_labelling(self):
+        from tools.editions import build_edition
+        import tempfile
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.object(build_edition, "SCRIPT_DIR", root):
+                proj_path = root / "project.json"
+                proj_path.write_text("{}")
+                edition = {
+                    "name": "Full Edition",
+                    "slug": "full-edition",
+                    "source": {"type": "photos_album", "all_local": True},
+                }
+                project = build_edition.apply_edition_settings(proj_path, edition, dry_run=False)
+                self.assertEqual(project["edition"]["coverage_mode"], "full")
+                self.assertTrue(project["edition"]["full_album_complete"])
+                self.assertEqual(project["coverage_mode"], "full")
+                self.assertTrue(project["full_album_complete"])
+
+    def test_import_photos_bounded_preview_labelling(self):
+        from tools.media import import_photos
+        import tempfile
+        import json
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_proj = Path(tmpdir) / "base.json"
+            base_proj.write_text("{}")
+            local_proj = Path(tmpdir) / "local.json"
+            out_dir = Path(tmpdir) / "staged"
+            out_dir.mkdir()
+            lib_path = Path(tmpdir) / "Photos.photoslibrary"
+
+            import_photos.write_local_project(
+                base_project_path=base_proj,
+                local_project_path=local_proj,
+                output_dir=out_dir,
+                items=[],
+                mode="copy",
+                library=lib_path,
+                photos_export_missing=False,
+                selection={"order": "oldest", "limit": 12},
+                dry_run=False,
+            )
+            saved = json.loads(local_proj.read_text(encoding="utf-8"))
+            self.assertEqual(saved["photos_import"]["coverage_mode"], "bounded_preview")
+            self.assertEqual(saved["photos_import"]["preview_limit"], 12)
+            self.assertFalse(saved["photos_import"]["full_album_complete"])
+            self.assertEqual(saved["coverage_mode"], "bounded_preview")
+            self.assertEqual(saved["preview_limit"], 12)
+            self.assertFalse(saved["full_album_complete"])

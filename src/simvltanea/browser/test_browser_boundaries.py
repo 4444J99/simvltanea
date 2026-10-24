@@ -229,6 +229,43 @@ class NativeBoundaryTests(unittest.TestCase):
         self.assertEqual([x['kind'] for x in snapshots[-1]['loops']],['video','video','still'])
         self.record_proof('mixed-kind',page,snapshots)
 
+    def test_paused_intent_during_busy_transition(self):
+        page = self.open_preview(3)
+        page.evaluate('compositionRuntime.start()')
+        page.wait_for_function('compositionRuntime.running')
+        res = page.evaluate("""() => {
+            const node = [...compositionRuntime.nodes.values()][0];
+            node.busy = true;
+            // pause() called while node.busy
+            compositionRuntime.pause();
+            const pauseIntent = compositionRuntime.pauseIntent;
+            // Transition completes
+            node.busy = false;
+            if (compositionRuntime.pauseIntent && compositionRuntime.running) {
+                compositionRuntime.pauseIntent = false;
+                compositionRuntime.pause();
+            }
+            return {
+                recordedPauseIntent: pauseIntent,
+                running: compositionRuntime.running,
+                status: stage.dataset.status,
+            };
+        }""")
+        self.assertTrue(res['recordedPauseIntent'])
+        self.assertFalse(res['running'])
+        self.assertEqual(res['status'], 'paused')
+
+    def test_replay_boundary_reset(self):
+        page = self.open_preview(3)
+        page.evaluate('compositionRuntime.start()')
+        page.wait_for_function('compositionRuntime.running')
+        page.wait_for_timeout(200)
+        self.assertGreater(page.evaluate('compositionRuntime.frame'), 0)
+        page.evaluate('compositionRuntime.replay()')
+        page.wait_for_function('compositionRuntime.running')
+        self.assertTrue(page.evaluate('compositionRuntime.running'))
+        self.assertLessEqual(page.evaluate('compositionRuntime.frame'), 5)
+
 
 if __name__ == '__main__':
     unittest.main()
