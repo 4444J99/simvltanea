@@ -7,7 +7,15 @@ from pathlib import Path
 
 
 from simvltanea.authoring.artifact001_layouts import AUTHORED, build_artifact001
-from simvltanea.authoring.composition_model import Composition
+from simvltanea.authoring.composition_model import (
+    Composition,
+    SliceRect,
+    AmalgamatedPanel,
+    amalgamate_viewports,
+    color_subject_affinity,
+    select_neighbor_sequence,
+    LoopState,
+)
 
 
 class CompositionModelTests(unittest.TestCase):
@@ -80,6 +88,122 @@ class CompositionModelTests(unittest.TestCase):
     def test_unsupported_count_is_explicit(self):
         with self.assertRaisesRegex(ValueError, "no reviewed engineering layout pair"):
             build_artifact001(8)
+
+    def test_amalgamate_viewports_valid_counts_and_invariants(self):
+        for count in range(3, 11):
+            viewports = amalgamate_viewports(count, seed=42)
+            self.assertEqual(len(viewports), count)
+            # Invariant: no panel displays full frame
+            for rect in viewports:
+                self.assertIsInstance(rect, SliceRect)
+                self.assertFalse(rect.is_full_frame, f"Count {count} produced full-frame viewport {rect}")
+                self.assertFalse(rect.x == 0.0 and rect.y == 0.0 and rect.width == 1.0 and rect.height == 1.0)
+                self.assertGreaterEqual(rect.x, 0.0)
+                self.assertGreaterEqual(rect.y, 0.0)
+                self.assertLessEqual(rect.x + rect.width, 1.000001)
+                self.assertLessEqual(rect.y + rect.height, 1.000001)
+                self.assertGreater(rect.width, 0.0)
+                self.assertGreater(rect.height, 0.0)
+
+            # Check coverage spans from x=0 to x+w=1 across the amalgamated ribbon
+            min_x = min(r.x for r in viewports)
+            max_right = max(r.x + r.width for r in viewports)
+            self.assertAlmostEqual(min_x, 0.0, places=4)
+            self.assertAlmostEqual(max_right, 1.0, places=4)
+
+    def test_amalgamate_viewports_invalid_counts_raise_value_error(self):
+        for bad_count in (0, 1, 2, 11, 12, -5):
+            with self.assertRaises(ValueError):
+                amalgamate_viewports(bad_count)
+
+    def test_amalgamate_viewports_modes_and_seeding(self):
+        v_ribbon = amalgamate_viewports(4, seed=10, mode="ribbon")
+        v_vert = amalgamate_viewports(4, seed=10, mode="vertical")
+        v_grid = amalgamate_viewports(4, seed=10, mode="grid")
+        self.assertEqual(len(v_ribbon), 4)
+        self.assertEqual(len(v_vert), 4)
+        self.assertEqual(len(v_grid), 4)
+
+        # Seeding determinism: identical seed -> identical rects
+        v_ribbon2 = amalgamate_viewports(4, seed=10, mode="ribbon")
+        self.assertEqual(v_ribbon, v_ribbon2)
+
+        # Different seed -> different rects
+        v_diff = amalgamate_viewports(4, seed=999, mode="ribbon")
+        self.assertNotEqual(v_ribbon, v_diff)
+
+        with self.assertRaises(ValueError):
+            amalgamate_viewports(4, mode="invalid_mode")
+
+    def test_color_subject_affinity(self):
+        clip1 = {"id": "c1", "color_profile": "#FF0000", "subject_tags": ["red", "warm", "circle"]}
+        clip2 = {"id": "c2", "color_profile": "#EE0000", "subject_tags": ["red", "warm", "square"]}
+        clip3 = {"id": "c3", "color_profile": "#0000FF", "subject_tags": ["blue", "cold", "triangle"]}
+
+        # Self-affinity is 1.0
+        self.assertAlmostEqual(color_subject_affinity(clip1, clip1), 1.0, places=4)
+
+        # Near color and overlapping tags -> high affinity
+        aff_12 = color_subject_affinity(clip1, clip2)
+        # Distant color and disjoint tags -> lower affinity
+        aff_13 = color_subject_affinity(clip1, clip3)
+        self.assertGreater(aff_12, aff_13)
+        self.assertGreaterEqual(aff_13, 0.0)
+        self.assertLessEqual(aff_12, 1.0)
+
+        # HSL and RGB tuple formats
+        hsl_clip = {"id": "hsl", "color_profile": {"hue": 0, "saturation": 1.0, "luminance": 0.5}}
+        rgb_clip = {"id": "rgb", "color_profile": (1.0, 0.0, 0.0)}
+        self.assertGreater(color_subject_affinity(hsl_clip, rgb_clip), 0.9)
+
+        # Fallback for clips without metadata
+        plain_a = {"id": "plain_a"}
+        plain_b = {"id": "plain_b"}
+        aff_fallback = color_subject_affinity(plain_a, plain_b)
+        self.assertIsInstance(aff_fallback, float)
+        self.assertTrue(0.0 <= aff_fallback <= 1.0)
+
+    def test_select_neighbor_sequence(self):
+        candidates = [
+            {"id": "red_1", "color_profile": "#FF0000", "subject_tags": ["ruby", "fire"]},
+            {"id": "red_2", "color_profile": "#E00000", "subject_tags": ["ruby", "flame"]},
+            {"id": "orange", "color_profile": "#FFA500", "subject_tags": ["fire", "sun"]},
+            {"id": "blue_1", "color_profile": "#0000FF", "subject_tags": ["ocean", "water"]},
+            {"id": "blue_2", "color_profile": "#0020EE", "subject_tags": ["ocean", "ice"]},
+            {"id": "green_1", "color_profile": "#00FF00", "subject_tags": ["leaf", "forest"]},
+        ]
+
+        seq = select_neighbor_sequence(candidates, panel_count=5, seed=0)
+        self.assertEqual(len(seq), 5)
+
+        # Check pairing of clip and viewport
+        for panel in seq:
+            self.assertIsInstance(panel, AmalgamatedPanel)
+            self.assertIn("id", panel.clip)
+            self.assertIsInstance(panel.viewport, SliceRect)
+            self.assertFalse(panel.viewport.is_full_frame)
+            # Tuple unpacking
+            clip, vp = panel
+            self.assertEqual(clip, panel.clip)
+            self.assertEqual(vp, panel.viewport)
+            # Property and dict access
+            self.assertEqual(panel.slice_rect, panel.viewport)
+            self.assertEqual(panel["viewport"], panel.viewport)
+            self.assertEqual(panel["clip"], panel.clip)
+
+        # No duplicate clips in sequence
+        selected_ids = [p.clip["id"] for p in seq]
+        self.assertEqual(len(selected_ids), len(set(selected_ids)))
+
+        # Insufficient candidates raises ValueError
+        with self.assertRaises(ValueError):
+            select_neighbor_sequence(candidates[:2], panel_count=3)
+
+        # Invalid panel_count raises ValueError
+        with self.assertRaises(ValueError):
+            select_neighbor_sequence(candidates, panel_count=2)
+        with self.assertRaises(ValueError):
+            select_neighbor_sequence(candidates, panel_count=11)
 
 
 if __name__ == "__main__":

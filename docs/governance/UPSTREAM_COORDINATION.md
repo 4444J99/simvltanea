@@ -83,3 +83,15 @@ PERSONA / VISUAL FORM CANON
 ```
 
 PORTVS serves as the portal/gateway connecting these visual works, while ORGANVM provides the overarching *ideal form → instantiation → observation → revision* lifecycle.
+
+---
+
+## 5. Consumer, Version & Edition Contract Inventory (Issue #27)
+
+| Contract / Surface | Canonical Schema / Version | Status & Invariants | Consumer Boundary |
+|---|---|---|---|
+| **Package Distribution** | `simvltanea` version `0.1.0` | Production library and tools baseline. | Standalone distribution consumed by Portvs and downstream exhibition rigs. |
+| **Edition Manifest** | `edition.manifest.v1` | Immutable edition publication receipt with digest tree, source references, coverage mode, and preview limits. | Ingested by gallery displays, album catalogues, and automated staging pipelines. |
+| **TMB Composition** | `tmb.composition.v1` / `visual-form-composition/v1` | Rational clocks, zero-restart continuous orientation, deterministic event log history. | Authoring models, preview generator, and headless FFmpeg rendering harness. |
+| **Amalgamated Viewports** | Invariant $N \in [3, 10]$ | No panel reveals the full frame surface (`width < 1.0` or `height < 1.0`). Every `SliceRect` coordinates in $[0.0, 1.0]$ with `x + width <= 1.0`, `y + height <= 1.0`. Viewports partition or overlap-stitch into one composite evolving whole. | Implemented via `amalgamate_viewports()` and `select_neighbor_sequence()` in `composition_model.py` and `composition.py`. |
+| **Bounded Snapshot Paging** | `pageSnapshot` (`pageSize=24`, `maxActiveDecoders <= 6`) | Deterministic PRNG seeding (`seed`), pagination metadata (`items`, `pageIndex`, `pageSize`, `totalItems`, `totalPages`, `hasNextPage`, `hasPrevPage`), and strict active decoder capping $\le 6$. | Exported on browser player runtime controller (`browser.runtime.js`) for catalogue grids and spatial previews. |

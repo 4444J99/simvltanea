@@ -13,6 +13,7 @@ import functools
 import http.server
 import json
 import shutil
+import subprocess
 import threading
 import unittest
 from fractions import Fraction
@@ -549,6 +550,160 @@ class BrowserTests(unittest.TestCase):
         self.assertIn('Missing media', res['error'])
         self.assertTrue(res['planRetained'])
         self.assertTrue(res['snapshotRetryable'])
+
+    def test_browser_page_snapshot_and_viewport_rendering(self):
+        page = self.open_preview(3)
+        res = page.evaluate("""() => {
+            const r = window.compositionRuntime;
+            const items = Array.from({length: 30}, (_, i) => ({id: 'c' + i}));
+            const p = r.pageSnapshot(items, { pageSize: 24, seed: 1234 });
+            const node = r.nodes.get('loop-1');
+            node.span.slice_rect = ['1/4', '1/4', '1/2', '1/2'];
+            r.applySlice(node);
+            return {
+                totalPages: p.totalPages,
+                activeDecoders: p.activeDecoders,
+                maxActiveDecoders: p.maxActiveDecoders,
+                datasetSliceRect: node.box.dataset.sliceRect,
+                cssSliceX: node.media.style.getPropertyValue('--slice-x'),
+            };
+        }""")
+        self.assertEqual(res['totalPages'], 2)
+        self.assertEqual(res['maxActiveDecoders'], 6)
+        self.assertEqual(res['activeDecoders'], 6)
+        self.assertEqual(res['datasetSliceRect'], '0.25,0.25,0.5,0.5')
+        self.assertEqual(res['cssSliceX'], '0.25')
+
+
+class SnapshotPagingAndViewportTests(unittest.TestCase):
+    def test_page_snapshot_pure_helper_and_decoder_bounds(self):
+        runtime_js = HERE / 'browser.runtime.js'
+        script = r'''
+const vm = require('node:vm'), fs = require('node:fs'), assert = require('node:assert/strict');
+const stage = {dataset:{}, style:{setProperty(){}, removeProperty(){}}, addEventListener(){}};
+const context = vm.createContext({
+  window:{}, document:{querySelector(){return stage;}, addEventListener(){}},
+  performance:{now(){return 1000;}},
+  ResizeObserver:class {observe(){}}, fetch(){return new Promise(()=>{});},
+  setTimeout, clearTimeout, URL, Blob, console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+const r = context.window.compositionRuntime;
+const pageSnapshot = r.pageSnapshot || context.window.pageSnapshot;
+assert(typeof pageSnapshot === 'function', 'pageSnapshot must be exported');
+
+// 1. Empty items
+const empty = pageSnapshot([], { pageSize: 24 });
+assert.equal(empty.totalItems, 0);
+assert.equal(empty.totalPages, 0);
+assert.equal(empty.pageIndex, 0);
+assert.equal(empty.hasNextPage, false);
+assert.equal(empty.hasPrevPage, false);
+assert.deepEqual(empty.items, []);
+
+// 2. 100 items paged at 24 items per page
+const catalogue = Array.from({length: 100}, (_, i) => ({ id: `clip-${i}`, name: `Clip ${i}` }));
+const p0 = pageSnapshot(catalogue, { pageIndex: 0, pageSize: 24 });
+assert.equal(p0.totalItems, 100);
+assert.equal(p0.totalPages, 5);
+assert.equal(p0.pageSize, 24);
+assert.equal(p0.pageIndex, 0);
+assert.equal(p0.items.length, 24);
+assert.equal(p0.hasNextPage, true);
+assert.equal(p0.hasPrevPage, false);
+assert.equal(p0.maxActiveDecoders, 6);
+assert.equal(p0.activeDecoders, 6);
+
+// Decoder cap invariant: exactly first 6 items have activeDecoder true, remaining false
+const activeCount = p0.items.filter(it => it.activeDecoder).length;
+assert.equal(activeCount, 6);
+assert.equal(p0.items[5].activeDecoder, true);
+assert.equal(p0.items[6].activeDecoder, false);
+
+// Last page (index 4)
+const p4 = pageSnapshot(catalogue, { pageIndex: 4, pageSize: 24 });
+assert.equal(p4.pageIndex, 4);
+assert.equal(p4.items.length, 4);
+assert.equal(p4.hasNextPage, false);
+assert.equal(p4.hasPrevPage, true);
+assert.equal(p4.activeDecoders, 4);
+
+// Clamping out-of-bounds pageIndex
+const pOver = pageSnapshot(catalogue, { pageIndex: 99, pageSize: 24 });
+assert.equal(pOver.pageIndex, 4);
+
+// Clamping maxActiveDecoders > 6
+const pClamp = pageSnapshot(catalogue, { pageSize: 24, maxActiveDecoders: 16 });
+assert.equal(pClamp.maxActiveDecoders, 6);
+
+// Deterministic seeding
+const seedA1 = pageSnapshot(catalogue, { seed: 'seed-xyz', pageSize: 10 });
+const seedA2 = pageSnapshot(catalogue, { seed: 'seed-xyz', pageSize: 10 });
+assert.deepEqual(seedA1.items.map(i => i.id), seedA2.items.map(i => i.id));
+
+const seedB = pageSnapshot(catalogue, { seed: 'seed-diff', pageSize: 10 });
+assert.notDeepEqual(seedA1.items.map(i => i.id), seedB.items.map(i => i.id));
+
+console.log(JSON.stringify({ok: true}));
+'''
+        result = subprocess.run(['node', '-e', script, str(runtime_js)],
+                                check=True, capture_output=True, text=True, timeout=15)
+        self.assertTrue(json.loads(result.stdout).get('ok'))
+
+    def test_apply_slice_viewport_crop_and_css_properties(self):
+        runtime_js = HERE / 'browser.runtime.js'
+        script = r'''
+const vm = require('node:vm'), fs = require('node:fs'), assert = require('node:assert/strict');
+const stage = {dataset:{}, style:{setProperty(){}, removeProperty(){}}, addEventListener(){}};
+const context = vm.createContext({
+  window:{}, document:{querySelector(){return stage;}, addEventListener(){}},
+  performance:{now(){return 1000;}},
+  ResizeObserver:class {observe(){}}, fetch(){return new Promise(()=>{});},
+  setTimeout, clearTimeout, URL, Blob, console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+const r = context.window.compositionRuntime;
+const applySlice = r.applySlice;
+assert(typeof applySlice === 'function');
+
+const props = {};
+const mediaStyle = {
+  setProperty(k, v) { props[k] = v; },
+  removeProperty(k) { delete props[k]; }
+};
+const boxProps = {};
+const boxStyle = {
+  setProperty(k, v) { boxProps[k] = v; },
+  removeProperty(k) { delete boxProps[k]; }
+};
+const node = {
+  id: 'panel-0',
+  box: { dataset: {}, style: boxStyle },
+  media: { dataset: {}, style: mediaStyle },
+  span: { slice_rect: ['1/3', '1/4', '1/3', '1/2'] }
+};
+
+applySlice(node);
+assert.equal(node.box.dataset.sliceRect, `${1/3},${1/4},${1/3},${1/2}`);
+assert.equal(node.media.dataset.sliceRect, `${1/3},${1/4},${1/3},${1/2}`);
+assert.equal(props['--slice-x'], String(1/3));
+assert.equal(props['--slice-y'], String(1/4));
+assert.equal(props['--slice-w'], String(1/3));
+assert.equal(props['--slice-h'], String(1/2));
+assert.equal(boxProps['--slice-x'], String(1/3));
+
+// Full-frame slice clears dataset and custom properties
+node.span.slice_rect = ['0', '0', '1', '1'];
+applySlice(node);
+assert.equal(node.box.dataset.sliceRect, undefined);
+assert.equal(node.media.dataset.sliceRect, undefined);
+assert.equal(props['--slice-x'], undefined);
+
+console.log(JSON.stringify({ok: true}));
+'''
+        result = subprocess.run(['node', '-e', script, str(runtime_js)],
+                                check=True, capture_output=True, text=True, timeout=15)
+        self.assertTrue(json.loads(result.stdout).get('ok'))
 
 
 if __name__=='__main__':unittest.main()
