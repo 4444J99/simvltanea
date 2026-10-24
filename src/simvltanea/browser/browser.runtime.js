@@ -843,24 +843,26 @@ runtime.initialize = initialize;
 initialize().catch(fail);
 
 // Page visibility change recovery preserving independent source loop clocks
-document.addEventListener('visibilitychange', () => {
-  const hidden = document.hidden;
-  record('visibility-change', null, {hidden, time: compositionTime()});
-  if (!hidden && runtime.running && runtime.plan) {
-    const nowSec = compositionTime();
-    const curFrame = Math.min(Math.floor(nowSec * runtime.plan.fps), runtime.plan.frames - 1);
-    for (const node of runtime.nodes.values()) {
-      if (node.kind === 'video' && node.span && !node.span.held && !node.busy && node.media) {
-        const elapsed = (curFrame - node.span.frame) / runtime.plan.fps;
-        const target = number(node.span.source_offset) + elapsed * number(node.span.rate);
-        if (Math.abs(node.media.currentTime - target) > 0.25) {
-          node.media.currentTime = target;
-          record('visibility-resync', node.id, {target, currentTime: node.media.currentTime});
+if (typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    const hidden = document.hidden;
+    record('visibility-change', null, {hidden, time: compositionTime()});
+    if (!hidden && runtime.running && runtime.plan) {
+      const nowSec = compositionTime();
+      const curFrame = Math.min(Math.floor(nowSec * runtime.plan.fps), runtime.plan.frames - 1);
+      for (const node of runtime.nodes.values()) {
+        if (node.kind === 'video' && node.span && !node.span.held && !node.busy && node.media) {
+          const elapsed = (curFrame - node.span.frame) / runtime.plan.fps;
+          const target = number(node.span.source_offset) + elapsed * number(node.span.rate);
+          if (Math.abs(node.media.currentTime - target) > 0.25) {
+            node.media.currentTime = target;
+            record('visibility-resync', node.id, {target, currentTime: node.media.currentTime});
+          }
         }
       }
     }
-  }
-});
+  });
+}
 
 // A local preview can be started directly without a developer console.
 stage.tabIndex = 0;
