@@ -12,7 +12,7 @@ requires-python = ">=3.12"
 independent-loop-compositor = "independent_loop_compositor.cli:main"
 
 [project.optional-dependencies]
-verification = ["Pillow==12.3.0", "playwright==1.57.0", "pytest>=8,<10"]
+verification = ["Pillow==13.0.0", "playwright==1.57.0", "pytest>=8,<10"]
 
 [tool.pytest.ini_options]
 testpaths = ["src/simvltanea", "tools", "tests"]
