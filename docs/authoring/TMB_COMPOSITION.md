@@ -30,7 +30,8 @@ The output must be a fresh directory inside the ignored proof lane. A sibling
 staging directory is published atomically after every check succeeds; failed
 builds leave no incomplete edition at the final path. Concurrent destinations
 are preserved. The edition contains
-the authoring model, composition state, muxed media, portable browser preview,
+the authoring model, composition state, muxed media, portable browser preview powered by
+[`src/simvltanea/browser/browser.runtime.js`](../../src/simvltanea/browser/browser.runtime.js),
 source admission and edition receipt. The receipt records the source revisions,
 recipe digest, accepted engine commit, observed owner HEAD and every served
 preview file's digest. Keep this output private and out of Git.

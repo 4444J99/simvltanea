@@ -113,7 +113,7 @@ independent-loop-compositor/
 - Authoring model: [`src/simvltanea/authoring/composition_model.py`](src/simvltanea/authoring/composition_model.py)
 - Compiler / state: [`src/simvltanea/authoring/composition.py`](src/simvltanea/authoring/composition.py)
 - FFmpeg renderer: [`src/simvltanea/rendering/render_triptych.py`](src/simvltanea/rendering/render_triptych.py)
-- Browser preview: [`src/simvltanea/browser/browser_runtime.py`](src/simvltanea/browser/browser_runtime.py) / [`src/simvltanea/browser/browser_runtime.js`](src/simvltanea/browser/browser_runtime.js)
+- Browser preview: [`src/simvltanea/browser/browser_runtime.py`](src/simvltanea/browser/browser_runtime.py) / [`src/simvltanea/browser/browser.runtime.js`](src/simvltanea/browser/browser.runtime.js)
 
 Schema-1 loop exports remain silent. Explicit v1.1 states support a synchronized
 soundtrack or spatial loop mix. Legacy `none` / `panel` / `mix` audio routing is

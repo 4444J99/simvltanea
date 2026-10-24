@@ -75,7 +75,7 @@ PERSONA / VISUAL FORM CANON
         │     ├── Model:            composition_model.py (visual-form-composition/v1)
         │     ├── Compiler:         composition.py (Rational clocks, continuous orientation)
         │     ├── FFmpeg Renderer:  render_triptych.py (Clocked N-loop multi-stream export)
-        │     └── Web Player:       browser_runtime.js (Self-contained zero-restart client)
+        │     └── Web Player:       browser.runtime.js (Self-contained zero-restart client)
         │
         ├── Floating Points         (Historical work; lineage neighbor)
         ├── Up the Hill Backwards   (Historical work; lineage neighbor)

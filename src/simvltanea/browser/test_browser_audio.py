@@ -367,5 +367,39 @@ class NativeAudioTests(unittest.TestCase):
         self.assertIn('Media failure', page.locator('#runtime-status').inner_text())
         self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every(node=>node.media.paused)'))
 
+    def test_audio_context_interruption_and_recovery(self):
+        page = self.open_preview('audio-spatial')
+        page.click('#stage', position={'x': 4, 'y': 4})
+        page.wait_for_function('compositionRuntime.running')
+        self.assertTrue(page.evaluate('compositionRuntime.running'))
+        self.assertIsNone(page.evaluate('compositionRuntime.error'))
+
+        # Simulate AudioContext suspension/interruption (e.g. OS interruption or tab backgrounding)
+        page.evaluate('''() => {
+            const context = compositionRuntime.audio.context;
+            Object.defineProperty(context, 'state', {value: 'suspended', configurable: true, writable: true});
+            context.dispatchEvent(new Event('statechange'));
+        }''')
+        self.assertIsNone(page.evaluate('compositionRuntime.error'))
+        snap = page.evaluate('compositionRuntime.snapshot()')
+        self.assertTrue(snap['audio']['interrupted'])
+        self.assertEqual(page.evaluate('stage.dataset.status'), 'audio-interrupted')
+        events = page.evaluate('compositionRuntime.events.map(e => e.type)')
+        self.assertIn('audio-interrupted', events)
+
+        # Recover audio via recoverAudio()
+        page.evaluate('''async () => {
+            const context = compositionRuntime.audio.context;
+            Object.defineProperty(context, 'state', {value: 'running', configurable: true, writable: true});
+            context.resume = async () => {};
+            await compositionRuntime.recoverAudio();
+        }''')
+        snap2 = page.evaluate('compositionRuntime.snapshot()')
+        self.assertFalse(snap2['audio']['interrupted'])
+        self.assertTrue(snap2['audio']['enabled'])
+        self.assertEqual(page.evaluate('stage.dataset.status'), 'playing')
+        events2 = page.evaluate('compositionRuntime.events.map(e => e.type)')
+        self.assertIn('audio-recovered', events2)
+
 
 if __name__ == '__main__': unittest.main()

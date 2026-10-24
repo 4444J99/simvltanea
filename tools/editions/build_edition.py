@@ -459,6 +459,43 @@ def append_unique_prompts(project: dict[str, Any], edition: dict[str, Any]) -> N
     project["prompts"] = prompts
 
 
+def verify_edition_provenance(output_dir: Path, project_path: Path, slug: str) -> bool:
+    manifest_file = output_dir / ".staging_manifest.json"
+    if manifest_file.exists():
+        try:
+            data = json.loads(manifest_file.read_text(encoding="utf-8"))
+            if data.get("slug") == slug:
+                return True
+        except Exception:
+            pass
+    if project_path.exists():
+        try:
+            proj = json.loads(project_path.read_text(encoding="utf-8"))
+            if proj.get("edition", {}).get("slug") == slug:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def write_staging_manifest(output_dir: Path, slug: str, dry_run: bool = False) -> None:
+    if dry_run:
+        return
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / ".staging_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "slug": slug,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def apply_edition_settings(project_path: Path, edition: dict[str, Any], dry_run: bool) -> dict[str, Any]:
     if not project_path.exists() and not dry_run:
         raise SystemExit(f"Generated project not found: {project_path}")
@@ -467,17 +504,44 @@ def apply_edition_settings(project_path: Path, edition: dict[str, Any], dry_run:
     project_base = project_path.parent
     scoped_project_defaults(project, slug, project_base)
 
-    project["edition"] = {
+    cli_limit = edition.get("_cli_limit")
+    source_info = edition.get("source", {})
+    is_bounded_preview = cli_limit is not None or (
+        isinstance(source_info, dict)
+        and source_info.get("limit") is not None
+        and not source_info.get("all_local")
+    )
+    preview_limit = cli_limit if cli_limit is not None else (
+        source_info.get("limit") if isinstance(source_info, dict) else None
+    )
+
+    clean_source = {k: v for k, v in source_info.items() if not k.startswith("_")} if isinstance(source_info, dict) else source_info
+
+    edition_metadata = {
         "name": edition.get("name", slug),
         "slug": slug,
         "work_title": edition.get("work_title"),
         "family": edition.get("family"),
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "source": edition.get("source", {}),
+        "source": clean_source,
         "composition": edition.get("composition", {}),
         "status": edition.get("status", "ready"),
         "note": edition.get("note"),
     }
+    if is_bounded_preview and preview_limit is not None:
+        edition_metadata["coverage_mode"] = "bounded_preview"
+        edition_metadata["preview_limit"] = preview_limit
+        edition_metadata["full_album_complete"] = False
+        project["coverage_mode"] = "bounded_preview"
+        project["preview_limit"] = preview_limit
+        project["full_album_complete"] = False
+    else:
+        edition_metadata["coverage_mode"] = "full"
+        edition_metadata["full_album_complete"] = True
+        project["coverage_mode"] = "full"
+        project["full_album_complete"] = True
+
+    project["edition"] = edition_metadata
     composition = edition.get("composition")
     if isinstance(composition, dict):
         existing_composition = project.get("composition", {})
@@ -584,6 +648,7 @@ def apply_cli_overrides(edition: dict[str, Any], args: argparse.Namespace) -> di
         if args.limit <= 0:
             raise SystemExit("--limit must be positive when provided.")
         source["limit"] = args.limit
+        updated["_cli_limit"] = args.limit
     if args.photos_export_missing:
         source["photos_export_missing"] = True
     return updated
@@ -607,6 +672,13 @@ def main() -> int:
     require_inside(project_path, "project")
     require_inside(output_dir, "output-dir")
 
+    if output_dir.exists():
+        existing_files = [p for p in output_dir.iterdir() if p.name not in (".gitkeep", ".staging_manifest.json")]
+        if existing_files and not verify_edition_provenance(output_dir, project_path, slug):
+            raise SystemExit(
+                f"Collision refusal: staging output directory '{output_dir}' is non-empty and lacks matching manifest provenance for edition '{slug}'."
+            )
+
     if not args.skip_import:
         run_command(
             import_command(
@@ -621,6 +693,8 @@ def main() -> int:
         )
 
     apply_edition_settings(project_path, edition, args.dry_run)
+    if not args.dry_run:
+        write_staging_manifest(output_dir, slug, args.dry_run)
 
     if args.sketch:
         run_command(sketch_command(project_path, slug, edition, args.dry_run), args.dry_run)
