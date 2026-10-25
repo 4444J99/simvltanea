@@ -114,6 +114,7 @@ independent-loop-compositor/
 - Compiler / state: [`src/simvltanea/authoring/composition.py`](src/simvltanea/authoring/composition.py)
 - FFmpeg renderer: [`src/simvltanea/rendering/render_triptych.py`](src/simvltanea/rendering/render_triptych.py)
 - Browser preview: [`src/simvltanea/browser/browser_runtime.py`](src/simvltanea/browser/browser_runtime.py) / [`src/simvltanea/browser/browser.runtime.js`](src/simvltanea/browser/browser.runtime.js)
+- Release seal: `build_simvltanea_release_seal` (Wave 5) produces a SHA-256 digested seal covering spatial amalgamation manifest and custody parity for release readiness.
 
 Schema-1 loop exports remain silent. Explicit v1.1 states support a synchronized
 soundtrack or spatial loop mix. Legacy `none` / `panel` / `mix` audio routing is
