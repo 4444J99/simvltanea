@@ -226,5 +226,131 @@ class ReviewIdentityTests(unittest.TestCase):
                 _extract_clip_features(value)
 
 
+class CustodyParityGateTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        tools_verify = Path(__file__).resolve().parents[3] / "tools" / "verification" / "verify_custody_parity.py"
+        spec = importlib.util.spec_from_file_location("verify_custody_parity", tools_verify)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cls.evaluate = staticmethod(module.evaluate_custody_parity)
+
+    def test_eligible_retirement_when_parity_and_receipt_verified(self):
+        assigned = {
+            "path": "simvltanea",
+            "head_sha": "abcd1234abcd1234abcd1234abcd1234abcd1234",
+            "dirty_files": 0,
+            "unpushed_commits": 0,
+        }
+        receipt = {
+            "verified": True,
+            "missing_blobs": 0,
+            "head_sha": "abcd1234abcd1234abcd1234abcd1234abcd1234",
+        }
+        candidates = [
+            {
+                "path": "duplicates/simvltanea-bak",
+                "head_sha": "abcd1234abcd1234abcd1234abcd1234abcd1234",
+                "dirty_files": 0,
+                "untracked_media_count": 0,
+            }
+        ]
+        res = self.evaluate(assigned, candidates, receipt)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["eligible_count"], 1)
+        self.assertEqual(res["blocked_count"], 0)
+        self.assertTrue(res["duplicates"][0]["eligible_for_retirement"])
+        self.assertEqual(res["duplicates"][0]["blocking_reasons"], [])
+
+    def test_blocked_when_duplicate_head_mismatch(self):
+        assigned = {
+            "path": "simvltanea",
+            "head_sha": "1111222233334444555566667777888899990000",
+            "dirty_files": 0,
+            "unpushed_commits": 0,
+        }
+        receipt = {
+            "verified": True,
+            "missing_blobs": 0,
+            "head_sha": "1111222233334444555566667777888899990000",
+        }
+        candidates = [
+            {
+                "path": "duplicates/simvltanea-stale",
+                "head_sha": "9999888877776666555544443333222211110000",
+                "dirty_files": 0,
+                "untracked_media_count": 0,
+            }
+        ]
+        res = self.evaluate(assigned, candidates, receipt)
+        self.assertEqual(res["status"], "GATED")
+        self.assertFalse(res["duplicates"][0]["eligible_for_retirement"])
+        self.assertTrue(any("does not match canonical HEAD" in r for r in res["duplicates"][0]["blocking_reasons"]))
+
+    def test_blocked_when_duplicate_has_dirty_or_untracked_files(self):
+        assigned = {
+            "path": "simvltanea",
+            "head_sha": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
+            "dirty_files": 0,
+            "unpushed_commits": 0,
+        }
+        receipt = {
+            "verified": True,
+            "missing_blobs": 0,
+            "head_sha": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
+        }
+        candidates = [
+            {
+                "path": "duplicates/dirty-cand",
+                "head_sha": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
+                "dirty_files": 2,
+                "untracked_media_count": 0,
+            },
+            {
+                "path": "duplicates/untracked-media-cand",
+                "head_sha": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
+                "dirty_files": 0,
+                "untracked_media_count": 5,
+            },
+        ]
+        res = self.evaluate(assigned, candidates, receipt)
+        self.assertEqual(res["status"], "GATED")
+        self.assertEqual(res["blocked_count"], 2)
+        self.assertFalse(res["duplicates"][0]["eligible_for_retirement"])
+        self.assertTrue(any("dirty files" in r for r in res["duplicates"][0]["blocking_reasons"]))
+        self.assertFalse(res["duplicates"][1]["eligible_for_retirement"])
+        self.assertTrue(any("untracked media" in r for r in res["duplicates"][1]["blocking_reasons"]))
+
+    def test_blocked_when_canonical_lacks_clean_parity_or_receipt_unverified(self):
+        assigned_dirty = {
+            "path": "simvltanea",
+            "head_sha": "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
+            "dirty_files": 1,
+            "unpushed_commits": 0,
+        }
+        receipt_missing = {
+            "verified": False,
+            "missing_blobs": 3,
+            "head_sha": "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
+        }
+        candidates = [
+            {
+                "path": "duplicates/cand-a",
+                "head_sha": "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222",
+                "dirty_files": 0,
+                "untracked_media_count": 0,
+            }
+        ]
+        res = self.evaluate(assigned_dirty, candidates, receipt_missing)
+        self.assertEqual(res["status"], "GATED")
+        self.assertFalse(res["canonical_assigned"]["clean_parity"])
+        self.assertFalse(res["custody_receipt"]["valid"])
+        self.assertFalse(res["duplicates"][0]["eligible_for_retirement"])
+        reasons = res["duplicates"][0]["blocking_reasons"]
+        self.assertTrue(any("Canonical repository copy lacks clean parity" in r for r in reasons))
+        self.assertTrue(any("Custody receipt is unverified" in r for r in reasons))
+
+
 if __name__ == "__main__":
     unittest.main()
