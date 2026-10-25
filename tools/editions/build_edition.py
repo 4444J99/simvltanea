@@ -464,14 +464,18 @@ def verify_edition_provenance(output_dir: Path, project_path: Path, slug: str) -
     if manifest_file.exists():
         try:
             data = json.loads(manifest_file.read_text(encoding="utf-8"))
-            if data.get("slug") == slug:
+            if (data.get("slug") == slug
+                    and data.get("output_dir") == str(output_dir.resolve())):
                 return True
         except Exception:
             pass
     if project_path.exists():
         try:
             proj = json.loads(project_path.read_text(encoding="utf-8"))
-            if proj.get("edition", {}).get("slug") == slug:
+            staging = proj.get("input_dir")
+            if (proj.get("edition", {}).get("slug") == slug
+                    and isinstance(staging, str)
+                    and (project_path.parent / staging).resolve() == output_dir.resolve()):
                 return True
         except Exception:
             pass
@@ -483,9 +487,17 @@ def write_staging_manifest(output_dir: Path, slug: str, dry_run: bool = False) -
         return
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / ".staging_manifest.json"
+    existing = {}
+    if manifest_path.is_file():
+        try:
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            pass
     manifest_path.write_text(
         json.dumps(
             {
+                **existing,
+                "output_dir": str(output_dir.resolve()),
                 "slug": slug,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
@@ -504,16 +516,22 @@ def apply_edition_settings(project_path: Path, edition: dict[str, Any], dry_run:
     project_base = project_path.parent
     scoped_project_defaults(project, slug, project_base)
 
-    cli_limit = edition.get("_cli_limit")
     source_info = edition.get("source", {})
-    is_bounded_preview = cli_limit is not None or (
-        isinstance(source_info, dict)
-        and source_info.get("limit") is not None
-        and not source_info.get("all_local")
-    )
-    preview_limit = cli_limit if cli_limit is not None else (
-        source_info.get("limit") if isinstance(source_info, dict) else None
-    )
+    # Import evidence owns coverage. Reapplying settings does not ingest media.
+    imported = project.get("photos_import")
+    if not isinstance(imported, dict) and "coverage_mode" in project:
+        imported = project
+    if isinstance(imported, dict):
+        selection = imported.get("selection", {})
+        preview_limit = imported.get("preview_limit", selection.get("limit"))
+        is_bounded_preview = (imported.get("full_album_complete") is not True
+                              or preview_limit is not None or bool(selection.get("offset", 0)))
+    else:
+        preview_limit = edition.get("_cli_limit", source_info.get("limit"))
+        if (source_info.get("type") == "photos_album" and preview_limit is None
+                and not source_info.get("all_local")):
+            preview_limit = 12  # import_photos CLI default
+        is_bounded_preview = preview_limit is not None or bool(source_info.get("offset", 0))
 
     clean_source = {k: v for k, v in source_info.items() if not k.startswith("_")} if isinstance(source_info, dict) else source_info
 
@@ -528,7 +546,13 @@ def apply_edition_settings(project_path: Path, edition: dict[str, Any], dry_run:
         "status": edition.get("status", "ready"),
         "note": edition.get("note"),
     }
-    if is_bounded_preview and preview_limit is not None:
+    unknown_coverage = (not isinstance(imported, dict)
+                        and source_info.get("type") == "photos_album"
+                        and not is_bounded_preview)
+    if unknown_coverage:
+        for target in (edition_metadata, project):
+            target.update(coverage_mode="unknown", preview_limit=None, full_album_complete=False)
+    elif is_bounded_preview:
         edition_metadata["coverage_mode"] = "bounded_preview"
         edition_metadata["preview_limit"] = preview_limit
         edition_metadata["full_album_complete"] = False
@@ -537,8 +561,10 @@ def apply_edition_settings(project_path: Path, edition: dict[str, Any], dry_run:
         project["full_album_complete"] = False
     else:
         edition_metadata["coverage_mode"] = "full"
+        edition_metadata["preview_limit"] = None
         edition_metadata["full_album_complete"] = True
         project["coverage_mode"] = "full"
+        project["preview_limit"] = None
         project["full_album_complete"] = True
 
     project["edition"] = edition_metadata
