@@ -840,5 +840,22 @@ assert.equal(node.decoded,undefined);
         subprocess.run(['node','-e',script,str(HERE/'browser.runtime.js')],check=True,
                        capture_output=True,text=True,timeout=15)
 
+    def test_decimal_slice_arrays_render_and_malformed_arrays_fail(self):
+        script=r"""
+const vm=require('node:vm'), fs=require('node:fs'), assert=require('node:assert/strict');
+const source=fs.readFileSync(process.argv[1],'utf8');
+const ctx=vm.createContext({});
+vm.runInContext(source.slice(source.indexOf('const number ='),source.indexOf('const stage ='))+
+    source.slice(source.indexOf('function sliceValues('),source.indexOf('function isPartialSlice(')),ctx);
+assert.equal(vm.runInContext('sliceValues([.25,.25,.5,.5]).join(",")',ctx),'0.25,0.25,0.5,0.5');
+assert.equal(vm.runInContext('sliceValues(["1/4","1/4","1/2","1/2"]).join(",")',ctx),'0.25,0.25,0.5,0.5');
+for (const rect of ['[0,0,1]','[0,0,1,1,1]','[0,0,NaN,1]']) {
+    assert.throws(()=>vm.runInContext('sliceValues('+rect+')',ctx));
+}
+assert.throws(()=>vm.runInContext('number(.25)',ctx)); // compiled clocks remain strict
+"""
+        subprocess.run(['node','-e',script,str(HERE/'browser.runtime.js')],check=True,
+                       capture_output=True,text=True,timeout=15)
+
 
 if __name__=='__main__':unittest.main()

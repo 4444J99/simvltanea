@@ -206,10 +206,6 @@ class CompositionModelTests(unittest.TestCase):
             select_neighbor_sequence(candidates, panel_count=11)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ReviewIdentityTests(unittest.TestCase):
     def test_unset_loop_extensions_preserve_historical_snapshot(self):
         comp=build_artifact001(3)
@@ -228,3 +224,7 @@ class ReviewIdentityTests(unittest.TestCase):
         for value in ({'color':'red'},object()):
             with self.assertRaisesRegex(ValueError,'stable'):
                 _extract_clip_features(value)
+
+
+if __name__ == "__main__":
+    unittest.main()

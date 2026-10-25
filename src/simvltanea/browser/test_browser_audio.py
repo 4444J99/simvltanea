@@ -478,29 +478,36 @@ class NativeAudioTests(unittest.TestCase):
         self.assertEqual(result,dict(running=False,interrupted=True,status='audio-interrupted',paused=True))
 
     def test_pr34_second_interruption_during_recovery_is_not_lost(self):
-        page=self.open_preview('audio-soundtrack')
-        page.evaluate('compositionRuntime.start()')
-        page.wait_for_timeout(150)
-        page.evaluate('compositionRuntime.audio.context.suspend()')
-        page.wait_for_function('compositionRuntime.audio.interrupted')
-        page.evaluate("""() => {
-            const r=compositionRuntime; let entered, release;
-            window.secondStart=new Promise(resolve=>entered=resolve);
-            const gate=new Promise(resolve=>release=resolve); window.releaseSecondStart=release;
-            for (const n of r.nodes.values()) if (n.kind==='video') {
-                const play=n.media.play.bind(n.media); let first=true;
-                n.media.play=async ()=>{await play(); if(first){first=false; entered(); await gate;}};
-            }
-            window.firstRecovery=r.recoverAudio();
-        }""")
-        page.evaluate('window.secondStart')
-        page.evaluate('compositionRuntime.audio.context.suspend()')
-        page.wait_for_function('compositionRuntime.audio.interrupted')
-        page.evaluate('compositionRuntime.audio.context.resume()')
-        page.evaluate('window.releaseSecondStart()')
-        page.evaluate('window.firstRecovery')
-        page.wait_for_function('compositionRuntime.running && !compositionRuntime.audio.interrupted',timeout=3000)
-        self.assertIsNone(page.evaluate('compositionRuntime.error'))
+        for resume_before_release in (True, False):
+            with self.subTest(resume_before_release=resume_before_release):
+                page=self.open_preview('audio-soundtrack')
+                page.evaluate('compositionRuntime.start()')
+                page.wait_for_timeout(150)
+                page.evaluate('compositionRuntime.audio.context.suspend()')
+                page.wait_for_function('compositionRuntime.audio.interrupted')
+                page.evaluate("""() => {
+                    const r=compositionRuntime; let entered, release;
+                    window.secondStart=new Promise(resolve=>entered=resolve);
+                    const gate=new Promise(resolve=>release=resolve); window.releaseSecondStart=release;
+                    for (const n of r.nodes.values()) if (n.kind==='video') {
+                        const play=n.media.play.bind(n.media); let first=true;
+                        n.media.play=async ()=>{await play(); if(first){first=false; entered(); await gate;}};
+                    }
+                    window.firstRecovery=r.recoverAudio();
+                }""")
+                page.evaluate('window.secondStart')
+                page.evaluate('compositionRuntime.audio.context.suspend()')
+                page.wait_for_function('compositionRuntime.audio.interrupted')
+                if resume_before_release:
+                    page.evaluate('compositionRuntime.audio.context.resume()')
+                page.evaluate('window.releaseSecondStart()')
+                page.evaluate('window.firstRecovery')
+                if not resume_before_release:
+                    self.assertFalse(page.evaluate('compositionRuntime.running'))
+                    self.assertEqual(page.evaluate('stage.dataset.status'),'audio-interrupted')
+                    page.evaluate('compositionRuntime.audio.context.resume()')
+                page.wait_for_function('compositionRuntime.running && !compositionRuntime.audio.interrupted',timeout=3000)
+                self.assertIsNone(page.evaluate('compositionRuntime.error'))
 
 
 if __name__ == '__main__': unittest.main()

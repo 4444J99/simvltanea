@@ -546,7 +546,7 @@ def apply_edition_settings(project_path: Path, edition: dict[str, Any], dry_run:
         "status": edition.get("status", "ready"),
         "note": edition.get("note"),
     }
-    unknown_coverage = (not isinstance(imported, dict)
+    unknown_coverage = (isinstance(imported, dict) and imported.get("coverage_mode") == "unknown") or (not isinstance(imported, dict)
                         and source_info.get("type") == "photos_album"
                         and not is_bounded_preview)
     if unknown_coverage:

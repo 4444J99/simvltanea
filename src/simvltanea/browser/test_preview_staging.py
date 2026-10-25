@@ -559,3 +559,83 @@ class ReviewRegressionTests(unittest.TestCase):
             value=json.loads(project.read_text())
             self.assertFalse(value['photos_import']['full_album_complete'])
             self.assertFalse(value['full_album_complete'])
+
+    def test_unknown_coverage_is_stable_across_reapplication(self):
+        from tools.editions import build_edition as e
+        from unittest.mock import patch
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); path=root/'project.json'; path.write_text('{}')
+            edition={'slug':'live','source':{'type':'photos_album','all_local':True}}
+            with patch.object(e,'SCRIPT_DIR',root):
+                for _ in range(2):
+                    value=e.apply_edition_settings(path,edition,False)
+                    self.assertEqual(value['coverage_mode'],'unknown')
+                    self.assertFalse(value['full_album_complete'])
+
+    def test_filtered_imports_do_not_claim_full_album(self):
+        from tools.media import import_photos as p
+        import tempfile
+        import json
+        cases=({'start_date':'2026-01-01'}, {'end_date':'2026-02-01'},
+               {'excluded_uuid_count':1}, {'duration_filtered_count':1})
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); base=root/'base.json'; base.write_text('{}'); project=root/'project.json'
+            for extra in cases:
+                with self.subTest(selection=extra):
+                    p.write_local_project(base,project,root/'out',[],'copy',root/'Photos.photoslibrary',False,
+                                          {'limit':None,'offset':0,**extra},False)
+                    value=json.loads(project.read_text())
+                    self.assertFalse(value['full_album_complete'])
+                    self.assertEqual(value['coverage_mode'],'bounded_preview')
+            p.write_local_project(base,project,root/'out',[],'copy',root/'Photos.photoslibrary',False,
+                                  {'limit':None,'max_duration':45,'duration_filtered_count':0},False)
+            self.assertTrue(json.loads(project.read_text())['full_album_complete'])
+
+    def test_duration_filter_counts_actual_omissions_and_preserves_live_photos(self):
+        from tools.media import import_photos as p
+        def asset(name,duration,style=4):
+            return p.Asset(1,name,None,None,duration,10,10,name,None,style)
+        clips=[asset('short',1),asset('long',60),asset('live',0,3)]
+        selected=p.duration_filtered_assets(clips,.1,45)
+        self.assertEqual([x.uuid for x in selected],['short','live'])
+        self.assertEqual(len(clips)-len(selected),1)
+        self.assertEqual(p.duration_filtered_assets(clips,.1,0),clips)
+
+    def test_cli_records_album_duration_omissions_with_real_sqlite_catalog(self):
+        from tools.media import import_photos as p
+        from unittest.mock import patch
+        import tempfile
+        import sqlite3
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); library=root/'Photos.photoslibrary'; library.mkdir()
+            database=library/'database'; database.mkdir(); db=database/'Photos.sqlite'
+            short='11111111-1111-1111-1111-111111111111'
+            long='22222222-2222-2222-2222-222222222222'
+            with sqlite3.connect(db) as conn:
+                conn.execute('CREATE TABLE ZASSET (Z_PK, ZUUID, ZDATECREATED, ZADDEDDATE, ZDURATION, ZWIDTH, ZHEIGHT, ZFILENAME, ZPLAYBACKSTYLE, ZTRASHEDSTATE, ZHIDDEN, ZVISIBILITYSTATE)')
+                conn.execute('CREATE TABLE ZADDITIONALASSETATTRIBUTES (ZASSET, ZORIGINALFILENAME)')
+                for i,(identity,duration) in enumerate(((short,1),(long,60)),1):
+                    conn.execute('INSERT INTO ZASSET VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                                 (i,identity,1,1,duration,10,10,identity+'.mov',4,0,0,0))
+                    (library/(identity+'.mov')).write_bytes(identity.encode())
+            base=root/'base.json'; base.write_text('{}'); project=root/'project.json'
+            argv=['import_photos','--library',str(library),'--source-project',str(base),
+                  '--project',str(project),'--output-dir',str(root/'out'),
+                  '--photos-export-work-dir',str(root/'work'),'--exclude-file',str(root/'exclude'),
+                  '--all-local']
+            with patch.object(p,'SCRIPT_DIR',root),patch.object(p.sys,'argv',argv):
+                self.assertEqual(p.main(),0)
+                value=json.loads(project.read_text())
+                self.assertEqual(value['photos_import']['selection']['duration_filtered_count'],1)
+                self.assertEqual(len(value['clips']),1)
+                self.assertFalse(value['full_album_complete'])
+                with sqlite3.connect(db) as conn:
+                    conn.execute('DELETE FROM ZASSET WHERE ZUUID=?',(long,))
+                self.assertEqual(p.main(),0)
+                value=json.loads(project.read_text())
+                self.assertEqual(value['photos_import']['selection']['duration_filtered_count'],0)
+                self.assertTrue(value['full_album_complete'])
+            for identity in (short,long):
+                self.assertEqual((library/(identity+'.mov')).read_bytes(),identity.encode())
