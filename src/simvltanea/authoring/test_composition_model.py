@@ -20,6 +20,8 @@ from simvltanea.authoring.composition_model import (
     MAX_AMALGAMATED_DECODERS,
     export_amalgamated_manifest,
     verify_amalgamated_manifest,
+    RELEASE_SEAL_SCHEMA,
+    build_simvltanea_release_seal,
 )
 
 
@@ -276,6 +278,55 @@ class AmalgamatedManifestTests(unittest.TestCase):
         ok, errors = verify_amalgamated_manifest(manifest)
         self.assertFalse(ok)
         self.assertTrue(any("active_decoders" in e.lower() for e in errors))
+
+    def test_build_simvltanea_release_seal_success(self):
+        manifest = export_amalgamated_manifest(panel_count=4, media_candidates=self.candidates, seed=99)
+        parity_report = {
+            "status": "PASS",
+            "canonical_parity_ok": True,
+            "receipt_verified": True,
+            "canonical_assigned": {"clean_parity": True},
+            "custody_receipt": {"verified": True},
+        }
+        seal = build_simvltanea_release_seal(manifest, parity_report)
+        self.assertEqual(seal["schema"], RELEASE_SEAL_SCHEMA)
+        self.assertTrue(seal["ready"])
+        self.assertTrue(seal["checks"]["amalgamated_manifest"]["passed"])
+        self.assertTrue(seal["checks"]["custody_parity"]["passed"])
+        self.assertEqual(seal["seal_digest"], seal["digest"])
+        self.assertEqual(len(seal["seal_digest"]), 64)
+
+        # Verify digest reproducibility
+        payload = {k: v for k, v in seal.items() if k not in ("seal_digest", "digest")}
+        expected = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+        self.assertEqual(seal["seal_digest"], expected)
+
+    def test_build_simvltanea_release_seal_tampered_manifest(self):
+        manifest = export_amalgamated_manifest(panel_count=4, media_candidates=self.candidates, seed=99)
+        manifest["preview_mode"] = "invalid_preview"
+        parity_report = {"status": "PASS", "canonical_parity_ok": True, "receipt_verified": True}
+        seal = build_simvltanea_release_seal(manifest, parity_report)
+        self.assertFalse(seal["ready"])
+        self.assertFalse(seal["checks"]["amalgamated_manifest"]["passed"])
+        self.assertTrue(seal["checks"]["custody_parity"]["passed"])
+
+    def test_build_simvltanea_release_seal_custody_failure(self):
+        manifest = export_amalgamated_manifest(panel_count=4, media_candidates=self.candidates, seed=99)
+        bad_parity = {
+            "status": "GATED",
+            "canonical_parity_ok": False,
+            "receipt_verified": True,
+        }
+        seal = build_simvltanea_release_seal(manifest, bad_parity)
+        self.assertFalse(seal["ready"])
+        self.assertTrue(seal["checks"]["amalgamated_manifest"]["passed"])
+        self.assertFalse(seal["checks"]["custody_parity"]["passed"])
+
+    def test_build_simvltanea_release_seal_empty_inputs(self):
+        seal = build_simvltanea_release_seal({}, {})
+        self.assertFalse(seal["ready"])
+        self.assertFalse(seal["checks"]["amalgamated_manifest"]["passed"])
+        self.assertFalse(seal["checks"]["custody_parity"]["passed"])
 
 
 class ReviewIdentityTests(unittest.TestCase):
