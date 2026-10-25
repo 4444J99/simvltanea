@@ -599,6 +599,11 @@ def load_assets(
         for row in rows
         if row[1]
     ]
+    return sorted(duration_filtered_assets(assets, min_duration, max_duration),
+                  key=lambda asset: sort_key(asset, order))
+
+
+def duration_filtered_assets(assets: list[Asset], min_duration: float, max_duration: float) -> list[Asset]:
     filtered = []
     for asset in assets:
         if asset.playback_style == 3:
@@ -609,7 +614,7 @@ def load_assets(
         if max_duration > 0 and asset.duration > max_duration:
             continue
         filtered.append(asset)
-    return sorted(filtered, key=lambda asset: sort_key(asset, order))
+    return filtered
 
 
 def video_file_index(library: Path) -> dict[str, list[Path]]:
@@ -879,7 +884,10 @@ def write_local_project(
         for item in items
     ]
     is_bounded = (selection.get("limit") is not None or bool(selection.get("offset", 0))
-                  or bool(selection.get("missing_local_count", 0)))
+                  or bool(selection.get("missing_local_count", 0))
+                  or bool(selection.get("start_date") or selection.get("end_date"))
+                  or bool(selection.get("excluded_uuid_count", 0))
+                  or bool(selection.get("duration_filtered_count", 0)))
     project["photos_import"] = {
         "library": str(library.expanduser()),
         "mode": mode,
@@ -971,11 +979,11 @@ def main() -> int:
     assets = load_assets(
         db_path=db_path,
         include_live_photos=args.include_live_photos or args.live_photos_only,
-        min_duration=args.min_duration,
-        max_duration=args.max_duration,
+        min_duration=0,
+        max_duration=0,
         order=args.order,
     )
-    print(f"catalog matches after filters: {len(assets)}")
+    print(f"catalog matches before duration and selection filters: {len(assets)}")
     if args.live_photos_only:
         assets = [asset for asset in assets if asset.playback_style == 3]
     if args.album_via_photos_app:
@@ -1000,6 +1008,9 @@ def main() -> int:
                 f"{record['selector']!r} -> {record['matched_path']} "
                 f"(descendants: {record['descendant_album_count']})"
             )
+    before_duration = len(assets)
+    assets = duration_filtered_assets(assets, args.min_duration, args.max_duration)
+    duration_filtered_count = before_duration - len(assets)
     assets = date_filtered_assets(assets, args.start_date, args.end_date)
     excluded_uuids = load_excluded_uuids(exclude_file, args.exclude_uuid)
     assets = exclude_assets(assets, excluded_uuids)
@@ -1052,6 +1063,7 @@ def main() -> int:
             "order": args.order,
             "limit": limit,
             "offset": args.offset,
+            "duration_filtered_count": duration_filtered_count,
             "missing_local_count": 0 if args.photos_export_missing else missing_local,
             "photos_export_required_count": sum(item.photos_export for item in items),
             "start_date": args.start_date,

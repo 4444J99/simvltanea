@@ -187,11 +187,14 @@ function resolveSliceRect(node) {
 
 }
 function sliceValues(raw) {
-  if (Array.isArray(raw)) return raw.map(number);
   const coordinate = value => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
     return number(value);
   };
+  if (Array.isArray(raw)) {
+    if (raw.length !== 4) throw new Error('Invalid slice rectangle');
+    return raw.map(coordinate);
+  }
   return [raw.x ?? 0, raw.y ?? 0, raw.width ?? raw.w ?? 1, raw.height ?? raw.h ?? 1].map(coordinate);
 }
 function isPartialSlice(raw) {
