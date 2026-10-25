@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
 import unittest
 from pathlib import Path
@@ -15,6 +16,10 @@ from simvltanea.authoring.composition_model import (
     color_subject_affinity,
     select_neighbor_sequence,
     LoopState,
+    AMALGAMATED_MANIFEST_SCHEMA,
+    MAX_AMALGAMATED_DECODERS,
+    export_amalgamated_manifest,
+    verify_amalgamated_manifest,
 )
 
 
@@ -204,6 +209,73 @@ class CompositionModelTests(unittest.TestCase):
             select_neighbor_sequence(candidates, panel_count=2)
         with self.assertRaises(ValueError):
             select_neighbor_sequence(candidates, panel_count=11)
+
+
+class AmalgamatedManifestTests(unittest.TestCase):
+    def setUp(self):
+        self.candidates = [
+            {"id": f"clip_{i:02d}", "color": [0.1 * (i % 10), 0.2, 0.5], "tags": [f"theme_{i % 3}"]}
+            for i in range(12)
+        ]
+
+    def test_export_and_verify_amalgamated_manifest(self):
+        for panel_count in (3, 6, 8, 10):
+            manifest = export_amalgamated_manifest(
+                panel_count=panel_count,
+                media_candidates=self.candidates,
+                seed=42,
+            )
+            self.assertEqual(manifest["schema"], AMALGAMATED_MANIFEST_SCHEMA)
+            self.assertEqual(manifest["panel_count"], panel_count)
+            self.assertEqual(manifest["preview_mode"], "bounded_preview")
+            self.assertLessEqual(manifest["active_decoders"], MAX_AMALGAMATED_DECODERS)
+            if panel_count <= 6:
+                self.assertEqual(manifest["active_decoders"], panel_count)
+            else:
+                self.assertEqual(manifest["active_decoders"], 6)
+
+            self.assertEqual(len(manifest["panels"]), panel_count)
+            for p in manifest["panels"]:
+                rect = SliceRect(**p["viewport"])
+                self.assertFalse(rect.is_full_frame)
+
+            ok, errors = verify_amalgamated_manifest(manifest)
+            self.assertTrue(ok, f"Verification failed for count {panel_count}: {errors}")
+            self.assertEqual(errors, [])
+
+    def test_export_rejects_out_of_bounds(self):
+        with self.assertRaises(ValueError):
+            export_amalgamated_manifest(panel_count=2, media_candidates=self.candidates)
+        with self.assertRaises(ValueError):
+            export_amalgamated_manifest(panel_count=11, media_candidates=self.candidates)
+        with self.assertRaises(ValueError):
+            export_amalgamated_manifest(panel_count=5, media_candidates=self.candidates[:4])
+
+    def test_verify_detects_tampering_or_digest_mismatch(self):
+        manifest = export_amalgamated_manifest(panel_count=4, media_candidates=self.candidates, seed=123)
+        tampered = json.loads(json.dumps(manifest))
+        tampered["preview_mode"] = "tampered_preview"
+        ok, errors = verify_amalgamated_manifest(tampered)
+        self.assertFalse(ok)
+        self.assertTrue(any("digest mismatch" in e.lower() for e in errors))
+
+    def test_verify_detects_full_frame_violation(self):
+        manifest = export_amalgamated_manifest(panel_count=3, media_candidates=self.candidates, seed=1)
+        manifest["panels"][0]["viewport"] = {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+        payload = {k: v for k, v in manifest.items() if k != "digest"}
+        manifest["digest"] = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+        ok, errors = verify_amalgamated_manifest(manifest)
+        self.assertFalse(ok)
+        self.assertTrue(any("full frame" in e.lower() for e in errors))
+
+    def test_verify_detects_decoder_cap_violation(self):
+        manifest = export_amalgamated_manifest(panel_count=4, media_candidates=self.candidates, seed=1)
+        manifest["active_decoders"] = 7
+        payload = {k: v for k, v in manifest.items() if k != "digest"}
+        manifest["digest"] = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+        ok, errors = verify_amalgamated_manifest(manifest)
+        self.assertFalse(ok)
+        self.assertTrue(any("active_decoders" in e.lower() for e in errors))
 
 
 class ReviewIdentityTests(unittest.TestCase):

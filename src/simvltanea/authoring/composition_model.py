@@ -661,3 +661,136 @@ def select_neighbor_sequence(candidates: Sequence[Any], panel_count: int, seed: 
 
     viewports = amalgamate_viewports(panel_count=panel_count, seed=seed)
     return [AmalgamatedPanel(clip=clip, viewport=vp) for clip, vp in zip(selected, viewports)]
+
+
+AMALGAMATED_MANIFEST_SCHEMA = "simvltanea.amalgamated_manifest.v1"
+MAX_AMALGAMATED_DECODERS = 6
+
+
+def export_amalgamated_manifest(
+    panel_count: int,
+    media_candidates: Sequence[Any],
+    seed: int | str = 0,
+    preview_mode: str = "bounded_preview",
+) -> dict[str, Any]:
+    """Export an amalgamated manifest conforming to simvltanea.amalgamated_manifest.v1.
+
+    Pairs panel_count neighbor clips with SliceRect viewports (3 <= panel_count <= 10),
+    enforces decoder cap active_decoders <= 6, guarantees no full-frame slices,
+    and seals the payload with a canonical SHA-256 digest.
+    """
+    if not isinstance(panel_count, int) or not (3 <= panel_count <= 10):
+        raise ValueError(f"panel_count must be an integer between 3 and 10, got {panel_count}")
+    cand_list = list(media_candidates)
+    if len(cand_list) < panel_count:
+        raise ValueError(f"insufficient candidates: requested {panel_count} panels but only have {len(cand_list)} candidates")
+
+    panels = select_neighbor_sequence(candidates=cand_list, panel_count=panel_count, seed=seed)
+    active_decoders = min(panel_count, MAX_AMALGAMATED_DECODERS)
+
+    panel_records = []
+    for idx, p in enumerate(panels):
+        if p.viewport.is_full_frame:
+            raise ValueError(f"panel {idx} viewport is full frame (forbidden in amalgamated mode)")
+        clip_repr = p.clip if isinstance(p.clip, (dict, str, int, float)) else getattr(p.clip, "__dict__", str(p.clip))
+        vp_dict = p.viewport.to_dict()
+        panel_records.append({
+            "panel_index": idx,
+            "clip": clip_repr,
+            "viewport": vp_dict,
+            "slice_rect": vp_dict,
+        })
+
+    manifest: dict[str, Any] = {
+        "schema": AMALGAMATED_MANIFEST_SCHEMA,
+        "panel_count": panel_count,
+        "active_decoders": active_decoders,
+        "preview_mode": preview_mode,
+        "seed": seed,
+        "panels": panel_records,
+    }
+
+    canonical_bytes = json.dumps(manifest, sort_keys=True).encode("utf-8")
+    manifest["digest"] = hashlib.sha256(canonical_bytes).hexdigest()
+    return manifest
+
+
+def verify_amalgamated_manifest(manifest: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Verify an amalgamated manifest against schema, bounds, and SHA-256 digest.
+
+    Returns (is_valid, error_reasons).
+    """
+    errors: list[str] = []
+    if not isinstance(manifest, dict):
+        return False, ["Manifest must be a dictionary"]
+
+    # 1. Schema check
+    schema = manifest.get("schema")
+    if schema != AMALGAMATED_MANIFEST_SCHEMA:
+        errors.append(f"Invalid schema: expected '{AMALGAMATED_MANIFEST_SCHEMA}', got {schema!r}")
+
+    # 2. Panel count bounds
+    panel_count = manifest.get("panel_count")
+    if not isinstance(panel_count, int) or not (3 <= panel_count <= 10):
+        errors.append(f"panel_count must be an integer between 3 and 10, got {panel_count!r}")
+
+    # 3. Active decoders cap
+    active_decoders = manifest.get("active_decoders")
+    if not isinstance(active_decoders, int) or active_decoders < 1:
+        errors.append(f"active_decoders must be a positive integer, got {active_decoders!r}")
+    elif active_decoders > MAX_AMALGAMATED_DECODERS:
+        errors.append(f"active_decoders {active_decoders} exceeds maximum allowed {MAX_AMALGAMATED_DECODERS}")
+
+    # 4. Preview mode
+    preview_mode = manifest.get("preview_mode")
+    if not isinstance(preview_mode, str) or not preview_mode.strip():
+        errors.append("preview_mode must be a non-empty string")
+
+    # 5. Panels array
+    panels = manifest.get("panels")
+    if not isinstance(panels, list):
+        errors.append("manifest missing 'panels' list")
+    else:
+        if isinstance(panel_count, int) and len(panels) != panel_count:
+            errors.append(f"panels length {len(panels)} does not match panel_count {panel_count}")
+
+        for idx, panel in enumerate(panels):
+            if not isinstance(panel, dict):
+                errors.append(f"Panel {idx} is not a dictionary")
+                continue
+            vp = panel.get("viewport") or panel.get("slice_rect")
+            if not isinstance(vp, dict):
+                errors.append(f"Panel {idx} missing valid viewport/slice_rect dict")
+                continue
+            try:
+                rect = SliceRect(
+                    x=float(vp["x"]),
+                    y=float(vp["y"]),
+                    width=float(vp["width"]),
+                    height=float(vp["height"]),
+                )
+                if rect.is_full_frame:
+                    errors.append(f"Panel {idx} viewport is full frame (forbidden in amalgamated mode)")
+            except Exception as e:
+                errors.append(f"Panel {idx} has invalid SliceRect: {e}")
+
+    # 6. Digest verification
+    raw_digest = manifest.get("digest")
+    if not raw_digest:
+        errors.append("Manifest missing 'digest'")
+    else:
+        if isinstance(raw_digest, dict):
+            expected_hex = raw_digest.get("value") or raw_digest.get("hex") or ""
+        elif isinstance(raw_digest, str):
+            expected_hex = raw_digest.split(":")[-1] if raw_digest.startswith("sha256:") else raw_digest
+        else:
+            expected_hex = ""
+
+        payload_to_verify = {k: v for k, v in manifest.items() if k != "digest"}
+        canonical_bytes = json.dumps(payload_to_verify, sort_keys=True).encode("utf-8")
+        computed_hex = hashlib.sha256(canonical_bytes).hexdigest()
+
+        if expected_hex != computed_hex:
+            errors.append(f"SHA-256 digest mismatch: expected {expected_hex}, computed {computed_hex}")
+
+    return (len(errors) == 0, errors)
