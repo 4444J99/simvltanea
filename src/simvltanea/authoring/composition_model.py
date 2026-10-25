@@ -794,3 +794,82 @@ def verify_amalgamated_manifest(manifest: dict[str, Any]) -> tuple[bool, list[st
             errors.append(f"SHA-256 digest mismatch: expected {expected_hex}, computed {computed_hex}")
 
     return (len(errors) == 0, errors)
+
+
+RELEASE_SEAL_SCHEMA = "simvltanea.release_seal.v1"
+
+
+def build_simvltanea_release_seal(
+    amalgamated_manifest: dict[str, Any],
+    custody_parity_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a canonical SHA-256 digested release seal for SIMVLTANEA spatial composition and custody."""
+    checks: dict[str, Any] = {}
+
+    # 1. Spatial Amalgamation Manifest validation
+    manifest_ok, manifest_errors = verify_amalgamated_manifest(amalgamated_manifest)
+    checks["amalgamated_manifest"] = {
+        "passed": manifest_ok,
+        "errors": manifest_errors,
+        "panel_count": amalgamated_manifest.get("panel_count") if isinstance(amalgamated_manifest, dict) else None,
+        "active_decoders": amalgamated_manifest.get("active_decoders") if isinstance(amalgamated_manifest, dict) else None,
+    }
+
+    # 2. Custody Parity validation
+    custody_errors: list[str] = []
+    canonical_parity_ok = False
+    receipt_verified = False
+
+    if not isinstance(custody_parity_report, dict):
+        custody_errors.append("Custody parity report must be a dictionary")
+    else:
+        # Check canonical parity
+        if "canonical_parity_ok" in custody_parity_report:
+            canonical_parity_ok = bool(custody_parity_report["canonical_parity_ok"])
+        elif "canonical_assigned" in custody_parity_report:
+            canonical_parity_ok = bool(custody_parity_report["canonical_assigned"].get("clean_parity", False))
+        elif custody_parity_report.get("status") == "PASS":
+            canonical_parity_ok = True
+
+        if not canonical_parity_ok:
+            custody_errors.append("Canonical repository lacks clean parity")
+
+        # Check custody receipt
+        if "receipt_verified" in custody_parity_report:
+            receipt_verified = bool(custody_parity_report["receipt_verified"])
+        elif "custody_receipt" in custody_parity_report:
+            receipt_verified = bool(custody_parity_report["custody_receipt"].get("verified", False))
+        elif custody_parity_report.get("status") == "PASS":
+            receipt_verified = True
+
+        if not receipt_verified:
+            custody_errors.append("Custody receipt is not verified")
+
+        if custody_parity_report.get("status") not in ("PASS", None) and not (canonical_parity_ok and receipt_verified):
+            custody_errors.append(f"Custody parity status is {custody_parity_report.get('status')}")
+
+    custody_ok = (len(custody_errors) == 0) and canonical_parity_ok and receipt_verified
+    checks["custody_parity"] = {
+        "passed": custody_ok,
+        "canonical_parity_ok": canonical_parity_ok,
+        "receipt_verified": receipt_verified,
+        "errors": custody_errors,
+    }
+
+    ready = bool(manifest_ok and custody_ok)
+
+    seal: dict[str, Any] = {
+        "schema": RELEASE_SEAL_SCHEMA,
+        "ready": ready,
+        "checks": checks,
+    }
+    if isinstance(amalgamated_manifest, dict) and "digest" in amalgamated_manifest:
+        seal["amalgamated_manifest_digest"] = amalgamated_manifest["digest"]
+
+    payload_to_hash = {k: v for k, v in seal.items() if k not in ("seal_digest", "digest")}
+    canonical_bytes = json.dumps(payload_to_hash, sort_keys=True).encode("utf-8")
+    seal_digest = hashlib.sha256(canonical_bytes).hexdigest()
+
+    seal["seal_digest"] = seal_digest
+    seal["digest"] = seal_digest
+    return seal
