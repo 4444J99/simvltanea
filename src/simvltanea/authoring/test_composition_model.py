@@ -208,3 +208,23 @@ class CompositionModelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewIdentityTests(unittest.TestCase):
+    def test_unset_loop_extensions_preserve_historical_snapshot(self):
+        comp=build_artifact001(3)
+        for loop in comp.to_dict()['loops']:
+            self.assertNotIn('color_profile',loop)
+            self.assertNotIn('subject_tags',loop)
+
+    def test_color_profile_json_roundtrip(self):
+        from dataclasses import replace
+        comp=build_artifact001(3)
+        comp=replace(comp,loops=(replace(comp.loops[0],color_profile=(.1,.2,.3)),)+comp.loops[1:])
+        self.assertEqual(comp,Composition.from_dict(json.loads(comp.to_json())))
+
+    def test_neighbor_selection_rejects_unidentified_candidates(self):
+        from simvltanea.authoring.composition_model import _extract_clip_features
+        for value in ({'color':'red'},object()):
+            with self.assertRaisesRegex(ValueError,'stable'):
+                _extract_clip_features(value)

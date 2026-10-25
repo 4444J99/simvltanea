@@ -102,6 +102,8 @@ class LoopState:
     subject_tags: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if isinstance(self.color_profile, list):
+            object.__setattr__(self, "color_profile", tuple(self.color_profile))
         if isinstance(self.subject_tags, list):
             object.__setattr__(self, "subject_tags", tuple(self.subject_tags))
 
@@ -283,7 +285,10 @@ class Composition:
             "engine_version": self.engine_version,
             "id": self.id,
             "seed": self.seed,
-            "loops": [loop.__dict__ for loop in self.loops],
+            "loops": [{key: value for key, value in loop.__dict__.items()
+                       if not ((key == "color_profile" and value is None)
+                               or (key == "subject_tags" and not value))}
+                      for loop in self.loops],
             "layouts": [{"id": l.id, "orientation": l.orientation, "placements": [p.__dict__ for p in l.placements]} for l in self.layouts],
             "event_history": list(self.event_history),
         }
@@ -485,13 +490,19 @@ def _normalize_subject_tags(tags: Any, fallback_seed: str = "") -> set[str]:
 def _extract_clip_features(clip: Any) -> tuple[str, Any, Any]:
     """Extract (clip_id, color_profile, subject_tags) from a candidate record."""
     if isinstance(clip, dict):
-        cid = str(clip.get("id") or clip.get("source") or clip.get("path") or id(clip))
+        raw_id = clip.get("id") or clip.get("source") or clip.get("path")
+        if not raw_id:
+            raise ValueError("clip requires a stable id, source, or path")
+        cid = str(raw_id)
         cp = clip.get("color_profile") or clip.get("color")
         tags = clip.get("subject_tags") or clip.get("tags") or clip.get("subjects")
         return cid, cp, tags
     if isinstance(clip, str):
         return clip, None, None
-    cid = str(getattr(clip, "id", getattr(clip, "source", str(id(clip)))))
+    raw_id = getattr(clip, "id", None) or getattr(clip, "source", None) or getattr(clip, "path", None)
+    if not raw_id:
+        raise ValueError("clip requires a stable id, source, or path")
+    cid = str(raw_id)
     cp = getattr(clip, "color_profile", None)
     tags = getattr(clip, "subject_tags", None)
     return cid, cp, tags

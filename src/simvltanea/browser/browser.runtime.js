@@ -17,7 +17,7 @@ const runtime = window.compositionRuntime = {
   ready: false, running: false, finished: false, error: null, frame: 0,
   events: [], maxEvents: 256, nodes: new Map(), sources: new Map(), plan: null, origin: 0,
   orientation: null, layoutIndex: 0, position: 0, generation: 0, starting: false,
-  pauseIntent: false, initializing: false, retryable: false, assetError: null, disposed: false,
+  initEpoch: 0, initController: null, transitions: new Set(), pauseIntent: false, initializing: false, retryable: false, assetError: null, disposed: false,
   audio: {mode:'none', context:null, enabled:false, buffer:null, source:null, gain:null, interrupted:false},
 };
 function record(type, id, details = {}) {
@@ -107,7 +107,7 @@ function startSoundtrack() {
   if (runtime.audio.mode!=='soundtrack') return;
   stopSoundtrack();
   const {context,buffer,gain}=runtime.audio, config=runtime.plan.audio;
-  const now=context.currentTime, time=runtime.position, duration=buffer.duration;
+  const now=context.currentTime, time=compositionTime(), duration=buffer.duration;
   const end=Math.min(runtime.plan.frames/runtime.plan.fps,config.loop ? Infinity : duration);
   const param=gain.gain, volume=number(config.volume);
   const fadeIn=number(config.fade_in_seconds), fadeOut=number(config.fade_out_seconds);
@@ -131,26 +131,35 @@ function startSoundtrack() {
   };
   record('soundtrack-start',null,{time,offset:config.loop ? time%duration : time});
 }
+function assertActive(epoch) {
+  if (runtime.disposed || epoch !== runtime.initEpoch) throw new DOMException('Lifecycle cancelled', 'AbortError');
+}
 function waitFor(media, event, action) {
+  const signal = runtime.initController?.signal;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => finish(new Error(`Media timeout: ${event}`)), 10000);
+    const aborted = () => finish(new DOMException('Lifecycle cancelled', 'AbortError'));
     const good = () => finish();
     const bad = () => finish(new Error('Media decode failed'));
     function finish(error) {
-      clearTimeout(timer); media.removeEventListener(event, good);
+      clearTimeout(timer); signal?.removeEventListener('abort', aborted); media.removeEventListener(event, good);
       media.removeEventListener('error', bad); error ? reject(error) : resolve();
     }
+    if (signal?.aborted) { aborted(); return; }
+    signal?.addEventListener('abort', aborted, {once:true});
     media.addEventListener(event, good, {once: true});
     media.addEventListener('error', bad, {once: true});
     try { action(); } catch (error) { finish(error); }
   });
 }
 function frameProbe(node) {
-  if (typeof node.media.requestVideoFrameCallback !== 'function') return;
-  node.media.requestVideoFrameCallback((now, metadata) => {
+  const media=node.media, epoch=runtime.initEpoch;
+  if (!media || typeof media.requestVideoFrameCallback !== 'function') return;
+  media.requestVideoFrameCallback((now, metadata) => {
+    if (runtime.disposed || epoch !== runtime.initEpoch || node.media !== media) return;
     node.decoded = {wall: now, mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames};
     node.callbacks += 1;
-    if (node.media.isConnected) frameProbe(node);
+    if (media.isConnected) frameProbe(node);
   });
 }
 function setCssProp(style, prop, val) {
@@ -170,11 +179,28 @@ function removeCssProp(style, prop) {
   }
 }
 
-function applySlice(node) {
-  const rawRect = (node.span && (node.span.slice_rect || node.span.sliceRect)) ||
+function resolveSliceRect(node) {
+  return (node.span && (node.span.slice_rect || node.span.sliceRect)) ||
                   node.slice_rect || node.sliceRect ||
                   (node.cell && (node.cell.slice_rect || node.cell.sliceRect)) ||
                   (node.item && (node.item.slice_rect || node.item.sliceRect || node.item.viewport));
+
+}
+function sliceValues(raw) {
+  if (Array.isArray(raw)) return raw.map(number);
+  const coordinate = value => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    return number(value);
+  };
+  return [raw.x ?? 0, raw.y ?? 0, raw.width ?? raw.w ?? 1, raw.height ?? raw.h ?? 1].map(coordinate);
+}
+function isPartialSlice(raw) {
+  if (!raw) return false;
+  const [x,y,w,h] = sliceValues(raw);
+  return !(Math.abs(x)<1e-5 && Math.abs(y)<1e-5 && Math.abs(w-1)<1e-5 && Math.abs(h-1)<1e-5);
+}
+function applySlice(node) {
+  const rawRect = resolveSliceRect(node);
 
   if (!rawRect) {
     if (node.box) {
@@ -195,19 +221,8 @@ function applySlice(node) {
     return;
   }
 
-  let sx, sy, sw, sh;
-  if (Array.isArray(rawRect)) {
-    [sx, sy, sw, sh] = rawRect.map(number);
-  } else if (typeof rawRect === 'object') {
-    sx = number(rawRect.x ?? 0);
-    sy = number(rawRect.y ?? 0);
-    sw = number(rawRect.width ?? (rawRect.w ?? 1));
-    sh = number(rawRect.height ?? (rawRect.h ?? 1));
-  } else {
-    return;
-  }
-
-  const isFullFrame = (Math.abs(sx) < 1e-5 && Math.abs(sy) < 1e-5 && Math.abs(sw - 1) < 1e-5 && Math.abs(sh - 1) < 1e-5);
+  const [sx,sy,sw,sh] = sliceValues(rawRect);
+  const isFullFrame = !isPartialSlice(rawRect);
   if (isFullFrame) {
     if (node.box) {
       if (node.box.dataset) delete node.box.dataset.sliceRect;
@@ -360,20 +375,9 @@ function applyPanelOrientation(seconds) {
     const node = runtime.nodes.get(cell.loop);
     if (!node || !node.media) return;
     const pose = poses[indices.get(cell.loop)];
-    const rawRect = (node.span && (node.span.slice_rect || node.span.sliceRect)) ||
-                    node.slice_rect || node.sliceRect ||
-                    (cell && (cell.slice_rect || cell.sliceRect));
-    if (rawRect) {
-      let sx, sy, sw, sh;
-      if (Array.isArray(rawRect)) {
-        [sx, sy, sw, sh] = rawRect.map(number);
-      } else if (typeof rawRect === 'object') {
-        sx = number(rawRect.x ?? 0);
-        sy = number(rawRect.y ?? 0);
-        sw = number(rawRect.width ?? (rawRect.w ?? 1));
-        sh = number(rawRect.height ?? (rawRect.h ?? 1));
-      }
-      if (sx !== undefined && !(Math.abs(sx) < 1e-5 && Math.abs(sy) < 1e-5 && Math.abs(sw - 1) < 1e-5 && Math.abs(sh - 1) < 1e-5)) {
+    const rawRect = resolveSliceRect(node);
+    if (isPartialSlice(rawRect)) {
+      const [sx,sy,sw,sh] = sliceValues(rawRect);
         const x = Math.max(0, Math.min(1-sw, sx - pose.azimuth/(2*Math.PI)));
         const y = Math.max(0, Math.min(1-sh, sy - pose.elevation/(2*Math.PI)));
         node.media.style.left = `${-100*x/sw}%`;
@@ -385,7 +389,6 @@ function applyPanelOrientation(seconds) {
           setCssProp(node.box.style, '--slice-y', String(y));
         }
         return;
-      }
     }
     /* Azimuth is the score's horizontal sweep; the panel's own focal point is
      * the centre it returns to, so the sweep moves the frame around it rather
@@ -419,7 +422,8 @@ function applyLayout() {
     Object.assign(node.box.style, {left:`${x*100}%`, top:`${y*100}%`,
       width:`${w*100}%`, height:`${h*100}%`, zIndex:String(z), overflow:'hidden'});
     // Default focal/cover; slice overrides via applySlice per span
-    if (!node.span || !node.span.slice_rect) {
+    node.cell = cell;
+    if (!isPartialSlice(resolveSliceRect(node))) {
       node.media.style.objectFit = cell.fit;
       node.media.style.objectPosition = cell.focal.map(v => `${number(v)*100}%`).join(' ');
     }
@@ -435,6 +439,8 @@ runtime.resizeObserver = new ResizeObserver(applyLayout);
 runtime.resizeObserver.observe(stage);
 
 async function activate(node, span, frame, initial = false) {
+  const epoch = runtime.initEpoch;
+  assertActive(epoch);
   const source = runtime.sources.get(span.source);
   const kindChange = node.kind !== span.kind;
   if (kindChange) {
@@ -455,7 +461,7 @@ async function activate(node, span, frame, initial = false) {
       node.media.preservesPitch = true;
       node.media.addEventListener('loadstart', () => record('loadstart', node.id));
       node.media.addEventListener('seeking', () => record('seeking', node.id));
-      node.media.addEventListener('error', () => fail(new Error(`Media failure: ${node.id}`), true));
+      node.media.addEventListener('error', () => { if (epoch === runtime.initEpoch && !runtime.disposed) fail(new Error(`Media failure: ${node.id}`), true); });
       frameProbe(node);
       connectLoopAudio(node);
     }
@@ -467,6 +473,7 @@ async function activate(node, span, frame, initial = false) {
     if (span.kind === 'video') await waitFor(node.media, 'loadeddata', () => { node.media.src = source.url; });
     else await waitFor(node.media, 'load', () => { node.media.src = source.url; });
   }
+  assertActive(epoch);
   if (span.kind === 'video') {
     const elapsed = (frame - span.frame) / runtime.plan.fps;
     const target = number(span.source_offset) + (span.held ? 0 : elapsed * number(span.rate));
@@ -477,8 +484,10 @@ async function activate(node, span, frame, initial = false) {
       record('seek-command', node.id, {target, reason: initial ? 'initial' : 'timeline-boundary'});
       await waitFor(node.media, 'seeked', () => { node.media.currentTime = target; });
     }
+    assertActive(epoch);
     if (!initial && runtime.running && !span.held) await node.media.play();
   }
+  assertActive(epoch);
   scheduleLoopGain(node);
   applyLayout();
 }
@@ -504,7 +513,16 @@ function tick(generation) {
       while (next + 1 < node.spans.length && node.spans[next + 1].frame <= frame) next += 1;
       if (next !== node.index) {
         node.index = next; node.busy = true;
-        activate(node, node.spans[next], frame).catch(fail).finally(() => { node.busy = false; });
+        const epoch = runtime.initEpoch;
+        const transition = activate(node, node.spans[next], frame).catch(error => {
+          if (epoch === runtime.initEpoch && !runtime.disposed) fail(error);
+        }).finally(() => {
+          runtime.transitions.delete(transition);
+          if (epoch !== runtime.initEpoch || runtime.disposed) return;
+          node.busy = false;
+          if (runtime.pauseIntent && ![...runtime.nodes.values()].some(n => n.busy)) runtime.pause();
+        });
+        runtime.transitions.add(transition);
       }
     }
     /* The shared evaluator's sweep is applied per frame, not per layout change:
@@ -516,6 +534,7 @@ function tick(generation) {
 }
 runtime.start = async () => {
   if (!runtime.ready || runtime.running || runtime.starting || runtime.finished || runtime.error) throw new Error('Runtime is not ready');
+  const epoch = runtime.initEpoch;
   runtime.starting=true;
   runtime.pauseIntent=false;
   try {
@@ -527,6 +546,7 @@ runtime.start = async () => {
       try { await Promise.race([resumed,new Promise((_,reject)=>{
         timer=setTimeout(()=>reject(new Error('Audio blocked: click or press Space to enable sound')),3000);
       })]); } finally { clearTimeout(timer); }
+      assertActive(epoch);
       if (context.state!=='running') throw new Error('Audio context did not start');
       runtime.audio.enabled=true;
       runtime.audio.blocked=null;
@@ -540,7 +560,10 @@ runtime.start = async () => {
       scheduleLoopGain(node);
     }
     startSoundtrack();
-    await Promise.all([...runtime.nodes.values()].filter(n => n.kind === 'video' && !n.span.held).map(n => n.media.play()));
+    runtime.startMedia = Promise.all([...runtime.nodes.values()].filter(n => n.kind === 'video' && !n.span.held).map(n => n.media.play()));
+    await runtime.startMedia;
+    assertActive(epoch);
+    if (runtime.audio.interrupted) return;
     // A decoder error can arrive while play() promises are outstanding.
     // Never turn that terminal error back into an apparent playing state.
     if (runtime.error) throw new Error(runtime.error);
@@ -554,6 +577,7 @@ runtime.start = async () => {
       'Playing with sound · click or Space to pause');
     const generation=runtime.generation; requestAnimationFrame(()=>tick(generation));
   } catch (error) {
+    if (epoch !== runtime.initEpoch || runtime.disposed || runtime.audio.interrupted) return;
     if (!runtime.error && runtime.audio.context &&
         (error.name==='NotAllowedError' || String(error).includes('Audio blocked:'))) {
       runtime.running=false; runtime.audio.enabled=false; runtime.audio.blocked=String(error);
@@ -563,7 +587,7 @@ runtime.start = async () => {
     } else fail(error);
     throw error;
   }
-  finally { runtime.starting=false; }
+  finally { if (epoch === runtime.initEpoch) runtime.starting=false; }
 };
 runtime.play = async () => {
   if (runtime.running) return;
@@ -573,6 +597,11 @@ runtime.play = async () => {
   return runtime.start();
 };
 runtime.pause = () => {
+  if (runtime.audio.resumeRequested) {
+    runtime.audio.resumeRequested = false;
+    runtime.pauseIntent = false;
+    setStatus('paused','Paused · click or Space to resume');
+  }
   if (runtime.starting || runtime.initializing) {
     runtime.pauseIntent = true;
     record('pause-intent', null);
@@ -583,6 +612,7 @@ runtime.pause = () => {
     record('pause-intent', null);
     return;
   }
+  runtime.pauseIntent = false;
   if (!runtime.running) return;
   runtime.position=compositionTime(); runtime.running=false; runtime.generation++;
   runtime.frame=Math.min(Math.floor(runtime.position*runtime.plan.fps),runtime.plan.frames-1);
@@ -597,12 +627,8 @@ runtime.replay = async () => {
   await runtime.seek(0);
   return runtime.play();
 };
-runtime.seek = async seconds => {
-  if (!runtime.ready || runtime.error || runtime.starting || [...runtime.nodes.values()].some(node=>node.busy))
-    throw new Error('Runtime is not ready to seek');
-  if (!Number.isFinite(seconds) || seconds<0 || seconds>=runtime.plan.frames/runtime.plan.fps)
-    throw new Error('Seek must remain within composition duration');
-  const wasRunning=runtime.running; runtime.pause();
+async function alignPosition(seconds) {
+  const epoch = runtime.initEpoch;
   runtime.position=seconds; runtime.frame=Math.floor(seconds*runtime.plan.fps); runtime.finished=false;
   runtime.layoutIndex=runtime.plan.layout_keyframes.findLastIndex(item=>item.frame<=runtime.frame);
   await Promise.all([...runtime.nodes.values()].map(async node=>{
@@ -610,44 +636,87 @@ runtime.seek = async seconds => {
     node.busy=true;
     try { await activate(node,node.spans[node.index],seconds*runtime.plan.fps,true); }
     finally { node.busy=false; }
-  })).catch(error=>{fail(error);throw error;});
+  }));
+  assertActive(epoch);
+}
+runtime.seek = async seconds => {
+  if (!runtime.ready || runtime.error || runtime.starting || [...runtime.nodes.values()].some(node=>node.busy))
+    throw new Error('Runtime is not ready to seek');
+  if (!Number.isFinite(seconds) || seconds<0 || seconds>=runtime.plan.frames/runtime.plan.fps)
+    throw new Error('Seek must remain within composition duration');
+  const epoch = runtime.initEpoch;
+  const wasRunning=runtime.running; runtime.pause();
+  try { await alignPosition(seconds); }
+  catch (error) {
+    if (epoch !== runtime.initEpoch || runtime.disposed) return;
+    fail(error); throw error;
+  }
   record('transport-seek',null,{time:seconds}); setStatus('paused','Paused · click or Space to resume');
-  if (wasRunning) await runtime.start();
+  const resume = wasRunning && !runtime.pauseIntent;
+  runtime.pauseIntent = false;
+  if (resume) await runtime.start();
 };
 runtime.retry = async () => {
-  if (!runtime.retryable && !runtime.error && !runtime.assetError) return;
-  runtime.error = null;
-  runtime.retryable = false;
-  runtime.assetError = null;
+  if (runtime.disposed || (!runtime.retryable && !runtime.error && !runtime.assetError)) return;
   record('retry', null);
   await initialize();
 };
-runtime.recoverAudio = async () => {
-  if (!runtime.audio.context) return;
-  try {
-    record('audio-recover-attempt', null, {state: runtime.audio.context.state});
-    await runtime.audio.context.resume();
-    if (runtime.audio.context.state === 'running') {
+let audioRecovery = null;
+function finishAudioRecovery() {
+  if (audioRecovery) return audioRecovery;
+  if (!runtime.audio.interrupted) return Promise.resolve();
+  const epoch = runtime.initEpoch;
+  audioRecovery = (async () => {
+    do {
+      await Promise.allSettled([...runtime.transitions, runtime.startMedia]);
+      assertActive(epoch);
+      if (runtime.audio.context.state !== 'running') return;
+      // Reconcile every source to the frozen composition position before restart.
+      await alignPosition(runtime.position);
+      assertActive(epoch);
+      const resume = runtime.audio.resumeRequested;
       runtime.audio.interrupted = false;
+      runtime.audio.resumeRequested = false;
       runtime.audio.enabled = true;
       runtime.audio.blocked = null;
-      if (runtime.running && runtime.audio.mode === 'soundtrack') {
-        startSoundtrack();
-      }
-      record('audio-recovered', null, {state: 'running'});
-      setStatus('playing', runtime.audio.mode === 'none' ? 'Playing · silent field · click or Space to pause' :
-        'Playing with sound · click or Space to pause');
+      if (resume) await runtime.start();
+      assertActive(epoch);
+      record('audio-recovered', null, {state:'running'});
+    } while (runtime.audio.interrupted && runtime.audio.context?.state === 'running');
+  })().finally(() => { if (epoch === runtime.initEpoch) audioRecovery = null; });
+  return audioRecovery;
+}
+runtime.recoverAudio = async () => {
+  const context = runtime.audio.context, epoch = runtime.initEpoch;
+  if (!context || runtime.disposed) return;
+  try {
+    record('audio-recover-attempt', null, {state:context.state});
+    await context.resume();
+    assertActive(epoch);
+    if (context.state === 'running') {
+      await finishAudioRecovery();
+      assertActive(epoch);
+      runtime.audio.enabled = true;
+      runtime.audio.blocked = null;
     }
   } catch (error) {
-    record('audio-recover-failed', null, {message: String(error)});
+    if (epoch !== runtime.initEpoch || runtime.disposed) return;
+    record('audio-recover-failed', null, {message:String(error)});
     throw error;
   }
 };
-runtime.dispose = () => {
-  runtime.disposed = true;
+function releaseResources() {
+  runtime.initEpoch++;
+  runtime.initController?.abort();
+  runtime.initController = null;
+  runtime.initializing = false;
+  runtime.pauseIntent = false;
+  runtime.audio.resumeRequested = false;
+  audioRecovery = null;
   runtime.running = false;
   runtime.ready = false;
   runtime.starting = false;
+  runtime.startMedia = null;
   runtime.generation++;
   stopSoundtrack();
   for (const node of runtime.nodes.values()) {
@@ -688,11 +757,17 @@ runtime.dispose = () => {
     runtime.audio.enabled = false;
     runtime.audio.interrupted = false;
   }
+  runtime.transitions.clear();
+  panelDriver = null;
   [...stage.querySelectorAll('.seam')].forEach(el => el.remove());
   if (runtime.resizeObserver) {
     try { runtime.resizeObserver.disconnect(); } catch (_) {}
     runtime.resizeObserver = null;
   }
+}
+runtime.dispose = () => {
+  runtime.disposed = true;
+  releaseResources();
   setStatus('disposed', 'Runtime disposed.');
   record('disposed', null);
 };
@@ -851,6 +926,10 @@ function validatePlan(plan) {
   }
 }
 async function initialize() {
+  releaseResources();
+  const epoch = runtime.initEpoch;
+  runtime.initController = new AbortController();
+  runtime.finished = false;
   runtime.error = null;
   runtime.retryable = false;
   runtime.assetError = null;
@@ -864,7 +943,9 @@ async function initialize() {
     runtime.resizeObserver.observe(stage);
   }
   try {
-    runtime.plan = await io.plan();
+    const plan = await io.plan();
+    assertActive(epoch);
+    runtime.plan = plan;
     validatePlan(runtime.plan);
     let total = 0;
     runtime.audio.mode=runtime.plan.plan_version===1 ? 'none' : runtime.plan.audio.mode;
@@ -876,7 +957,9 @@ async function initialize() {
       total += source.bytes;
       if (total > 256*1024*1024) throw new Error('Media memory guard');
       const bytes = await io.bytes(source);
+      assertActive(epoch);
       const digest = await io.digest(bytes);
+      assertActive(epoch);
       if (digest !== source.sha256 || bytes.byteLength !== source.bytes) throw new Error(`Media integrity: ${source.id}`);
       if (source.kind==='audio') { soundtrackBytes=bytes; continue; }
       const type = source.kind === 'video' ? 'video/mp4' : (source.path.endsWith('.png') ? 'image/png' : 'image/jpeg');
@@ -886,7 +969,9 @@ async function initialize() {
       if (!window.AudioContext) throw new Error('Web Audio is required for this opted-in audio mode');
       runtime.audio.context=new AudioContext({sampleRate:48000});
       if (runtime.audio.mode==='soundtrack') {
-        runtime.audio.buffer=await runtime.audio.context.decodeAudioData(soundtrackBytes);
+        const buffer=await runtime.audio.context.decodeAudioData(soundtrackBytes);
+        assertActive(epoch);
+        runtime.audio.buffer=buffer;
         if (![1,2].includes(runtime.audio.buffer.numberOfChannels))
           throw new Error('Browser soundtrack requires mono or stereo audio');
         const duration=number(runtime.plan.audio.duration);
@@ -905,24 +990,26 @@ async function initialize() {
         runtime.audio.gain.gain.value=0;
         runtime.audio.gain.connect(runtime.audio.context.destination);
       }
-      runtime.audio.context.addEventListener('statechange',()=>{
-        const state = runtime.audio.context ? runtime.audio.context.state : 'closed';
+      const context = runtime.audio.context;
+      context.addEventListener('statechange',()=>{
+        if (epoch !== runtime.initEpoch || runtime.disposed) return;
+        const state = context.state;
         record('audio-statechange', null, {state});
-        if (runtime.running && !runtime.starting && (state==='suspended' || state==='interrupted')) {
+        if (runtime.running && (state==='suspended' || state==='interrupted')) {
+          runtime.position = compositionTime();
+          runtime.running = false;
+          runtime.generation++;
           runtime.audio.interrupted = true;
+          runtime.audio.resumeRequested = true;
           runtime.audio.enabled = false;
+          for (const node of runtime.nodes.values()) { node.media?.pause?.(); scheduleLoopGain(node); }
+          stopSoundtrack();
           record('audio-interrupted', null, {state});
           setStatus('audio-interrupted', 'Audio interrupted. Click or press Space to recover sound.');
-          stopSoundtrack();
         } else if (state==='running' && runtime.audio.interrupted) {
-          runtime.audio.interrupted = false;
-          runtime.audio.enabled = true;
-          record('audio-recovered', null, {state});
-          if (runtime.running && runtime.audio.mode==='soundtrack') {
-            startSoundtrack();
-          }
-          setStatus('playing', runtime.audio.mode==='none' ? 'Playing · silent field · click or Space to pause' :
-            'Playing with sound · click or Space to pause');
+          finishAudioRecovery().catch(error => {
+            if (epoch === runtime.initEpoch && !runtime.disposed) fail(error);
+          });
         }
       });
     }
@@ -933,14 +1020,19 @@ async function initialize() {
         spans:track.spans, index:0, span:null, callbacks:0, decoded:null, busy:false});
     }
     await Promise.all([...runtime.nodes.values()].map(n => activate(n, n.spans[0], 0, true)));
+    assertActive(epoch);
     if (runtime.error) throw new Error(runtime.error);
     runtime.ready = true;
     setStatus('ready',runtime.audio.mode==='none' ? 'Click or press Space to play the silent field.' :
       'Click or press Space to play with sound.');
     applyLayout();
     if (runtime.sharedEngineError) setStatus('error', 'Shared engine unavailable: ' + runtime.sharedEngineError);
+  } catch (error) {
+    if (epoch !== runtime.initEpoch || runtime.disposed) return;
+    fail(error);
+    throw error;
   } finally {
-    runtime.initializing = false;
+    if (epoch === runtime.initEpoch) runtime.initializing = false;
   }
 }
 runtime.initialize = initialize;
@@ -1022,10 +1114,9 @@ function pageSnapshot(items, options = {}) {
   }
 
   // Active decoder cap strictly enforces maxActiveDecoders <= 6
-  const maxActiveDecoders = Math.min(
-    Math.max(0, Math.floor(Number(options.maxActiveDecoders ?? 6))),
-    6
-  );
+  const rawDecoders = Number(options.maxActiveDecoders ?? 6);
+  const maxActiveDecoders = Number.isFinite(rawDecoders)
+    ? Math.min(Math.max(0, Math.floor(rawDecoders)), 6) : 6;
 
   let ordered = list.slice();
   if (options.seed !== null && options.seed !== undefined) {

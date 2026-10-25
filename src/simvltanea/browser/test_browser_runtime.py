@@ -574,6 +574,123 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(res['datasetSliceRect'], '0.25,0.25,0.5,0.5')
         self.assertEqual(res['cssSliceX'], '0.25')
 
+    def test_pr34_retry_releases_nodes_and_can_retry_again_after_failure(self):
+        page = self.open_preview(3)
+        result = page.evaluate("""async () => {
+            const r = compositionRuntime, original = io.plan;
+            const urls = [...r.sources.values()].map(s => s.url);
+            const revoked = [], revoke = URL.revokeObjectURL;
+            URL.revokeObjectURL = url => { revoked.push(url); revoke(url); };
+            fail(Error('Media decode failed'), true);
+            io.plan = async () => { throw Error('Cannot load compiled plan'); };
+            try { await r.retry(); } catch (_) {}
+            const retryable = r.retryable && !!r.error;
+            io.plan = original;
+            await r.retry();
+            return {ready:r.ready, error:r.error, retryable,
+                released:urls.every(url => revoked.includes(url)), nodes:r.nodes.size};
+        }""")
+        self.assertTrue(result['retryable'])
+        self.assertTrue(result['released'])
+        self.assertTrue(result['ready'])
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['nodes'], 3)
+
+    def test_pr34_dispose_cancels_plan_and_media_initialization(self):
+        for boundary in ('plan', 'bytes', 'digest'):
+            with self.subTest(boundary=boundary):
+                page = self.open_preview(3)
+                result = page.evaluate("""async boundary => {
+                    const r=compositionRuntime;
+                    r.dispose();
+                    const original=io[boundary]; let release, entered;
+                    const gate=new Promise(resolve => release=resolve);
+                    const waiting=new Promise(resolve => entered=resolve);
+                    io[boundary]=async (...args) => { entered(); await gate; return original(...args); };
+                    const pending=r.initialize(); await waiting;
+                    r.dispose(); release(); await pending;
+                    return {ready:r.ready, initializing:r.initializing, disposed:r.disposed,
+                        nodes:r.nodes.size, sources:r.sources.size, status:stage.dataset.status};
+                }""", boundary)
+                self.assertEqual(result, dict(ready=False, initializing=False, disposed=True,
+                                             nodes=0, sources=0, status='disposed'))
+
+    def test_pr34_finished_runtime_reinitializes_for_gesture(self):
+        page = self.open_preview(3)
+        result = page.evaluate("""async () => {
+            const r=compositionRuntime;
+            await r.seek(r.plan.frames/r.plan.fps - .01); await r.start();
+            await new Promise(resolve => setTimeout(resolve, 150));
+            const finished=r.finished;
+            r.dispose(); await r.initialize(); await r.start();
+            return {finished, running:r.running};
+        }""")
+        self.assertTrue(result['finished'])
+        self.assertTrue(result['running'])
+
+    def test_pr34_decimal_viewport_and_partial_to_full_fit(self):
+        page = self.open_preview(3)
+        result = page.evaluate("""() => {
+            const n=compositionRuntime.nodes.values().next().value;
+            n.item={viewport:{x:.25,y:.25,width:.5,height:.5}};
+            applyLayout(); const partial=n.box.dataset.sliceRect;
+            n.span.slice_rect=['0','0','1','1']; applyLayout();
+            return {partial, fit:n.media.style.objectFit, expected:n.cell.fit};
+        }""")
+        self.assertEqual(result['partial'], '0.25,0.25,0.5,0.5')
+        self.assertEqual(result['fit'], result['expected'])
+
+    def test_pr34_invalid_decoder_cap_uses_default(self):
+        page = self.open_preview(3)
+        self.assertEqual(page.evaluate("compositionRuntime.pageSnapshot(Array.from({length:8},(_,i)=>({id:i})), {maxActiveDecoders:'bad'}).activeDecoders"), 6)
+
+    def test_pr34_dispose_cancels_media_activation(self):
+        page = self.open_preview(3)
+        result = page.evaluate("""async () => {
+            const r=compositionRuntime; r.dispose();
+            let release, entered;
+            const gate=new Promise(resolve=>release=resolve);
+            const waiting=new Promise(resolve=>entered=resolve);
+            const original=waitFor;
+            waitFor=async (...args)=>{await original(...args); entered(); await gate;};
+            const pending=r.initialize(); await waiting;
+            r.dispose(); release(); await pending;
+            waitFor=original;
+            return {ready:r.ready,nodes:r.nodes.size,sources:r.sources.size,status:stage.dataset.status};
+        }""")
+        self.assertEqual(result,dict(ready=False,nodes=0,sources=0,status='disposed'))
+
+    def test_pr34_stale_initialization_cannot_overwrite_new_generation(self):
+        page = self.open_preview(3)
+        result = page.evaluate("""async () => {
+            const r=compositionRuntime, original=io.plan;
+            let release, entered;
+            const gate=new Promise(resolve=>release=resolve);
+            const waiting=new Promise(resolve=>entered=resolve);
+            io.plan=async ()=>{entered(); await gate; throw Error('stale plan failure');};
+            const stale=r.initialize(); await waiting;
+            io.plan=original; await r.initialize();
+            const epoch=r.initEpoch;
+            release(); await stale;
+            return {ready:r.ready,error:r.error,epoch:r.initEpoch===epoch,nodes:r.nodes.size};
+        }""")
+        self.assertEqual(result,dict(ready=True,error=None,epoch=True,nodes=3))
+
+    def test_pr34_pause_during_running_seek_prevents_restart(self):
+        page=self.open_preview(3)
+        result=page.evaluate("""async () => {
+            const r=compositionRuntime; await r.start();
+            let release, entered;
+            const gate=new Promise(resolve=>release=resolve);
+            const waiting=new Promise(resolve=>entered=resolve);
+            const original=waitFor;
+            waitFor=async (...args)=>{await original(...args); entered(); await gate;};
+            const pending=r.seek(1); await waiting;
+            r.pause(); release(); await pending; waitFor=original;
+            return {running:r.running,pauseIntent:r.pauseIntent,status:stage.dataset.status};
+        }""")
+        self.assertEqual(result,dict(running=False,pauseIntent=False,status='paused'))
+
 
 class SnapshotPagingAndViewportTests(unittest.TestCase):
     def test_page_snapshot_pure_helper_and_decoder_bounds(self):
@@ -704,6 +821,24 @@ console.log(JSON.stringify({ok: true}));
         result = subprocess.run(['node', '-e', script, str(runtime_js)],
                                 check=True, capture_output=True, text=True, timeout=15)
         self.assertTrue(json.loads(result.stdout).get('ok'))
+
+    def test_pr34_decoded_frame_callback_after_dispose_is_inert(self):
+        script = r"""
+const vm=require('node:vm'), fs=require('node:fs'), assert=require('node:assert/strict');
+const source=fs.readFileSync(process.argv[1],'utf8');
+const body=source.slice(source.indexOf('function frameProbe('),source.indexOf('function setCssProp('));
+let callback;
+const runtime={initEpoch:1,disposed:false};
+const node={media:{requestVideoFrameCallback(fn){callback=fn;},isConnected:true},callbacks:0};
+const ctx=vm.createContext({runtime,node});
+vm.runInContext(body+';frameProbe(node);',ctx);
+runtime.disposed=true; runtime.initEpoch++; node.media=null;
+callback(1,{mediaTime:1,presentedFrames:1});
+assert.equal(node.callbacks,0);
+assert.equal(node.decoded,undefined);
+"""
+        subprocess.run(['node','-e',script,str(HERE/'browser.runtime.js')],check=True,
+                       capture_output=True,text=True,timeout=15)
 
 
 if __name__=='__main__':unittest.main()

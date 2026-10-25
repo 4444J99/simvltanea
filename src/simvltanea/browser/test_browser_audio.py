@@ -401,5 +401,106 @@ class NativeAudioTests(unittest.TestCase):
         events2 = page.evaluate('compositionRuntime.events.map(e => e.type)')
         self.assertIn('audio-recovered', events2)
 
+    def test_pr34_interruption_freezes_videos_and_recovers_current_offset(self):
+        for recovery in ('explicit','automatic'):
+            with self.subTest(recovery=recovery):
+                page=self.open_preview('audio-soundtrack')
+                page.evaluate('compositionRuntime.start()')
+                page.wait_for_timeout(450)
+                page.evaluate('compositionRuntime.audio.context.suspend()')
+                page.wait_for_function('compositionRuntime.audio.interrupted')
+                before=page.evaluate('''() => ({time:compositionTime(),
+                    videos:[...compositionRuntime.nodes.values()].filter(n=>n.kind==='video').map(n=>n.media.currentTime),
+                    paused:[...compositionRuntime.nodes.values()].filter(n=>n.kind==='video').every(n=>n.media.paused)})''')
+                self.assertTrue(before['paused'])
+                page.wait_for_timeout(300)
+                after=page.evaluate('compositionTime()')
+                self.assertAlmostEqual(after,before['time'],delta=.02)
+                if recovery=='explicit':
+                    page.evaluate('compositionRuntime.recoverAudio()')
+                else:
+                    page.evaluate('compositionRuntime.audio.context.resume()')
+                page.wait_for_function('compositionRuntime.running && !compositionRuntime.audio.interrupted', timeout=3000)
+                result=page.evaluate('''() => ({time:compositionTime(),
+                    offset:compositionRuntime.events.filter(e=>e.type==='soundtrack-start').at(-1).time,
+                    videos:[...compositionRuntime.nodes.values()].filter(n=>n.kind==='video').map(n=>n.media.currentTime)})''')
+                self.assertAlmostEqual(result['offset'],before['time'],delta=.08)
+                for old,new in zip(before['videos'],result['videos']):
+                    self.assertAlmostEqual(old,new,delta=.15)
+                page.close()
+
+    def test_pr34_recover_while_paused_does_not_publish_playing(self):
+        page=self.open_preview('audio-soundtrack')
+        page.evaluate('compositionRuntime.start()')
+        page.evaluate('compositionRuntime.pause()')
+        page.evaluate('compositionRuntime.audio.context.suspend()')
+        page.evaluate('compositionRuntime.recoverAudio()')
+        self.assertFalse(page.evaluate('compositionRuntime.running'))
+        self.assertEqual(page.evaluate('stage.dataset.status'),'paused')
+
+    def test_pr34_dispose_cancels_audio_decode(self):
+        page=self.open_preview('audio-soundtrack')
+        result=page.evaluate("""async () => {
+            const r=compositionRuntime; r.dispose();
+            const original=AudioContext.prototype.decodeAudioData;
+            let release, entered;
+            const gate=new Promise(resolve=>release=resolve);
+            const waiting=new Promise(resolve=>entered=resolve);
+            AudioContext.prototype.decodeAudioData=async function(bytes) {
+                const buffer=await original.call(this,bytes); entered(); await gate; return buffer;
+            };
+            const pending=r.initialize(); await waiting;
+            r.dispose(); release(); await pending;
+            AudioContext.prototype.decodeAudioData=original;
+            return {ready:r.ready,context:r.audio.context,buffer:r.audio.buffer,
+                nodes:r.nodes.size,sources:r.sources.size,status:stage.dataset.status};
+        }""")
+        self.assertEqual(result,dict(ready=False,context=None,buffer=None,nodes=0,sources=0,status='disposed'))
+
+    def test_pr34_interruption_during_async_start_cannot_publish_playing(self):
+        page=self.open_preview('audio-soundtrack')
+        result=page.evaluate("""async () => {
+            const r=compositionRuntime;
+            let release, entered;
+            const gate=new Promise(resolve=>release=resolve);
+            const waiting=new Promise(resolve=>entered=resolve);
+            for (const n of r.nodes.values()) if (n.kind==='video') {
+                const play=n.media.play.bind(n.media);
+                n.media.play=async ()=>{await play(); entered(); await gate;};
+            }
+            const pending=r.start(); await waiting;
+            await r.audio.context.suspend();
+            await new Promise(resolve=>setTimeout(resolve,50));
+            release(); await pending;
+            return {running:r.running,interrupted:r.audio.interrupted,status:stage.dataset.status,
+                paused:[...r.nodes.values()].filter(n=>n.kind==='video').every(n=>n.media.paused)};
+        }""")
+        self.assertEqual(result,dict(running=False,interrupted=True,status='audio-interrupted',paused=True))
+
+    def test_pr34_second_interruption_during_recovery_is_not_lost(self):
+        page=self.open_preview('audio-soundtrack')
+        page.evaluate('compositionRuntime.start()')
+        page.wait_for_timeout(150)
+        page.evaluate('compositionRuntime.audio.context.suspend()')
+        page.wait_for_function('compositionRuntime.audio.interrupted')
+        page.evaluate("""() => {
+            const r=compositionRuntime; let entered, release;
+            window.secondStart=new Promise(resolve=>entered=resolve);
+            const gate=new Promise(resolve=>release=resolve); window.releaseSecondStart=release;
+            for (const n of r.nodes.values()) if (n.kind==='video') {
+                const play=n.media.play.bind(n.media); let first=true;
+                n.media.play=async ()=>{await play(); if(first){first=false; entered(); await gate;}};
+            }
+            window.firstRecovery=r.recoverAudio();
+        }""")
+        page.evaluate('window.secondStart')
+        page.evaluate('compositionRuntime.audio.context.suspend()')
+        page.wait_for_function('compositionRuntime.audio.interrupted')
+        page.evaluate('compositionRuntime.audio.context.resume()')
+        page.evaluate('window.releaseSecondStart()')
+        page.evaluate('window.firstRecovery')
+        page.wait_for_function('compositionRuntime.running && !compositionRuntime.audio.interrupted',timeout=3000)
+        self.assertIsNone(page.evaluate('compositionRuntime.error'))
+
 
 if __name__ == '__main__': unittest.main()

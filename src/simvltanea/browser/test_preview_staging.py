@@ -393,7 +393,7 @@ class SafeStagingAndPreviewLabellingTests(unittest.TestCase):
             root = Path(tmpdir)
             with patch.object(build_edition, "SCRIPT_DIR", root):
                 proj_path = root / "project.json"
-                proj_path.write_text("{}")
+                proj_path.write_text('{"photos_import":{"coverage_mode":"full","preview_limit":null,"full_album_complete":true,"selection":{"limit":null,"offset":0}}}')
                 edition = {
                     "name": "Full Edition",
                     "slug": "full-edition",
@@ -436,3 +436,126 @@ class SafeStagingAndPreviewLabellingTests(unittest.TestCase):
             self.assertEqual(saved["coverage_mode"], "bounded_preview")
             self.assertEqual(saved["preview_limit"], 12)
             self.assertFalse(saved["full_album_complete"])
+
+
+class ReviewRegressionTests(unittest.TestCase):
+    def test_repeat_symlink_staging_preserves_original(self):
+        from tools.media import import_photos as p
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); library=root/'Photos.photoslibrary'; library.mkdir()
+            original=library/'original.mov'; original.write_bytes(b'original')
+            staged=root/'staged'; staged.mkdir(); dest=staged/'clip.mov'
+            asset=p.Asset(1,'stable-source',None,None,1.,10,10,'original.mov',None,0)
+            item=p.ImportItem(asset,original,dest,False)
+            for _ in range(2):
+                p.stage_media([item],'symlink',False,root/'work',library=library)
+            self.assertTrue(dest.is_symlink())
+            self.assertEqual(original.read_bytes(), b'original')
+            alias=root/'alias'; alias.symlink_to(library, target_is_directory=True)
+            with self.assertRaises(SystemExit):
+                p.stage_media([p.ImportItem(asset,original,alias/'other.mov',False)],'copy',False,root/'work',library=library)
+            self.assertFalse((library/'other.mov').exists())
+
+    def test_provenance_requires_library_and_destination(self):
+        from tools.media import import_photos as p
+        from tools.editions import build_edition as e
+        import tempfile
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); out=root/'out'; out.mkdir(); project=root/'project.json'
+            library=root/'Photos.photoslibrary'
+            for metadata in ({'edition':{'slug':'same'}},
+                             {'edition':{'slug':'same'},'photos_import':{'library':str(library)},'input_dir':'elsewhere'}):
+                project.write_text(json.dumps(metadata))
+                self.assertFalse(p.verify_staging_provenance(out,project,library,{}))
+                self.assertFalse(e.verify_edition_provenance(out,project,'same'))
+            project.write_text(json.dumps({'edition':{'slug':'same'},'photos_import':{'library':str(library)},'input_dir':'out'}))
+            self.assertTrue(p.verify_staging_provenance(out,project,library,{}))
+            self.assertTrue(e.verify_edition_provenance(out,project,'same'))
+
+    def test_reused_bounded_import_cannot_be_promoted(self):
+        from tools.editions import build_edition as e
+        import tempfile
+        from unittest.mock import patch
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); project=root/'project.json'
+            project.write_text(json.dumps({'photos_import':{'coverage_mode':'bounded_preview', 'preview_limit':8,'full_album_complete':False,'selection':{'limit':8}}}))
+            with patch.object(e,'SCRIPT_DIR',root):
+                value=e.apply_edition_settings(project,{'slug':'live','source':{'type':'photos_album','all_local':True}},False)
+            self.assertEqual(value['coverage_mode'],'bounded_preview')
+            self.assertEqual(value['preview_limit'],8)
+            self.assertFalse(value['edition']['full_album_complete'])
+
+    def test_default_photos_limit_is_bounded(self):
+        from tools.editions import build_edition as e
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); project=root/'project.json'; project.write_text('{}')
+            with patch.object(e,'SCRIPT_DIR',root):
+                value=e.apply_edition_settings(project,{'slug':'live','source':{'type':'photos_album'}},False)
+            self.assertEqual(value['coverage_mode'],'bounded_preview')
+            self.assertEqual(value['preview_limit'],12)
+            self.assertFalse(value['full_album_complete'])
+
+    def test_offset_import_is_partial_without_limit(self):
+        from tools.media import import_photos as p
+        import tempfile
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); base=root/'base.json'; base.write_text('{}'); project=root/'project.json'
+            p.write_local_project(base,project,root/'out',[],'copy',root/'Photos.photoslibrary',False,{'limit':None,'offset':20},False)
+            value=json.loads(project.read_text())
+            self.assertEqual(value['coverage_mode'],'bounded_preview')
+            self.assertFalse(value['photos_import']['full_album_complete'])
+
+    def test_copied_staging_markers_do_not_authorize_new_destination(self):
+        from tools.media import import_photos as p
+        from tools.editions import build_edition as e
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); out=root/'out'; out.mkdir(); other=root/'other'; other.mkdir()
+            library=root/'Photos.photoslibrary'; project=root/'absent.json'
+            p.write_staging_manifest(out,library,{},1,False)
+            (other/'.staging_manifest.json').write_bytes((out/'.staging_manifest.json').read_bytes())
+            self.assertFalse(p.verify_staging_provenance(other,project,library,{}))
+            e.write_staging_manifest(out,'live',False)
+            (other/'.staging_manifest.json').write_bytes((out/'.staging_manifest.json').read_bytes())
+            self.assertFalse(e.verify_edition_provenance(other,project,'live'))
+
+    def test_edition_manifest_preserves_photos_provenance_for_reimport(self):
+        from tools.media import import_photos as p
+        from tools.editions import build_edition as e
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); out=root/'out'; out.mkdir(); library=root/'Photos.photoslibrary'
+            p.write_staging_manifest(out,library,{},1,False)
+            e.write_staging_manifest(out,'live',False)
+            self.assertTrue(p.verify_staging_provenance(out,root/'absent.json',library,{}))
+            p.write_staging_manifest(out,library,{},1,False)
+            self.assertTrue(e.verify_edition_provenance(out,root/'absent.json','live'))
+
+    def test_all_local_preset_without_import_evidence_is_not_complete(self):
+        from tools.editions import build_edition as e
+        from unittest.mock import patch
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); project=root/'project.json'; project.write_text('{}')
+            with patch.object(e,'SCRIPT_DIR',root):
+                value=e.apply_edition_settings(project,{'slug':'live','source':{'type':'photos_album','all_local':True}},False)
+            self.assertFalse(value['full_album_complete'])
+            self.assertEqual(value['coverage_mode'],'unknown')
+
+    def test_missing_originals_cannot_claim_full_album(self):
+        from tools.media import import_photos as p
+        import tempfile
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); base=root/'base.json'; base.write_text('{}'); project=root/'project.json'
+            p.write_local_project(base,project,root/'out',[],'copy',root/'Photos.photoslibrary',False,
+                                  {'limit':None,'offset':0,'missing_local_count':1},False)
+            value=json.loads(project.read_text())
+            self.assertFalse(value['photos_import']['full_album_complete'])
+            self.assertFalse(value['full_album_complete'])

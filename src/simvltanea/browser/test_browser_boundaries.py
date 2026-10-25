@@ -230,30 +230,22 @@ class NativeBoundaryTests(unittest.TestCase):
         self.record_proof('mixed-kind',page,snapshots)
 
     def test_paused_intent_during_busy_transition(self):
-        page = self.open_preview(3)
-        page.evaluate('compositionRuntime.start()')
-        page.wait_for_function('compositionRuntime.running')
-        res = page.evaluate("""() => {
-            const node = [...compositionRuntime.nodes.values()][0];
-            node.busy = true;
-            // pause() called while node.busy
-            compositionRuntime.pause();
-            const pauseIntent = compositionRuntime.pauseIntent;
-            // Transition completes
-            node.busy = false;
-            if (compositionRuntime.pauseIntent && compositionRuntime.running) {
-                compositionRuntime.pauseIntent = false;
-                compositionRuntime.pause();
-            }
-            return {
-                recordedPauseIntent: pauseIntent,
-                running: compositionRuntime.running,
-                status: stage.dataset.status,
+        page = self.open_preview('controls')
+        page.evaluate("""async () => {
+            const r=compositionRuntime;
+            await r.seek(27/r.plan.fps);
+            const n=r.nodes.get('loop-1'), play=n.media.play.bind(n.media);
+            // Delay a real timeline activation; never clear busy/pauseIntent here.
+            n.media.play=async () => {
+                if (n.busy) { r.pause(); await new Promise(resolve=>setTimeout(resolve,80)); }
+                return play();
             };
+            await r.start();
         }""")
-        self.assertTrue(res['recordedPauseIntent'])
-        self.assertFalse(res['running'])
-        self.assertEqual(res['status'], 'paused')
+        page.wait_for_function("stage.dataset.status === 'paused'", timeout=3000)
+        self.assertFalse(page.evaluate('compositionRuntime.running'))
+        self.assertFalse(page.evaluate('compositionRuntime.pauseIntent'))
+        self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every(n=>n.media.paused)'))
 
     def test_replay_boundary_reset(self):
         page = self.open_preview(3)

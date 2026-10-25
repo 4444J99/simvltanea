@@ -702,7 +702,8 @@ def verify_staging_provenance(
     if manifest_file.exists():
         try:
             data = json.loads(manifest_file.read_text(encoding="utf-8"))
-            if data.get("library") == str(library.expanduser()):
+            if (data.get("library") == str(library.expanduser())
+                    and data.get("output_dir") == str(output_dir.resolve())):
                 return True
         except Exception:
             pass
@@ -710,9 +711,10 @@ def verify_staging_provenance(
         try:
             proj = json.loads(project_path.read_text(encoding="utf-8"))
             photos_info = proj.get("photos_import", {})
-            if photos_info.get("library") == str(library.expanduser()):
-                return True
-            if proj.get("edition"):
+            staging = proj.get("input_dir")
+            if (photos_info.get("library") == str(library.expanduser())
+                    and isinstance(staging, str)
+                    and (project_path.parent / staging).resolve() == output_dir.resolve()):
                 return True
         except Exception:
             pass
@@ -729,9 +731,17 @@ def write_staging_manifest(
     if dry_run:
         return
     manifest_path = output_dir / ".staging_manifest.json"
+    existing = {}
+    if manifest_path.is_file():
+        try:
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            pass
     manifest_path.write_text(
         json.dumps(
             {
+                **existing,
+                "output_dir": str(output_dir.resolve()),
                 "library": str(library.expanduser()),
                 "selection": selection,
                 "staged_count": count,
@@ -790,7 +800,7 @@ def stage_media(
     library: Path | None = None,
 ) -> None:
     for item in items:
-        if library and path_inside(item.destination_path, library):
+        if library and path_inside(item.destination_path.parent, library):
             raise SystemExit(
                 f"Safety violation: refusing to stage media inside the Photos library package: {item.destination_path}"
             )
@@ -868,7 +878,8 @@ def write_local_project(
         }
         for item in items
     ]
-    is_bounded = selection.get("limit") is not None
+    is_bounded = (selection.get("limit") is not None or bool(selection.get("offset", 0))
+                  or bool(selection.get("missing_local_count", 0)))
     project["photos_import"] = {
         "library": str(library.expanduser()),
         "mode": mode,
@@ -887,6 +898,7 @@ def write_local_project(
         project["full_album_complete"] = False
     else:
         project["coverage_mode"] = "full"
+        project["preview_limit"] = None
         project["full_album_complete"] = True
     if "edition" in project and isinstance(project["edition"], dict):
         if is_bounded:
@@ -895,6 +907,7 @@ def write_local_project(
             project["edition"]["full_album_complete"] = False
         else:
             project["edition"]["coverage_mode"] = "full"
+            project["edition"]["preview_limit"] = None
             project["edition"]["full_album_complete"] = True
     prompts = list(project.get("prompts", []))
     prompts.append(
@@ -1039,6 +1052,8 @@ def main() -> int:
             "order": args.order,
             "limit": limit,
             "offset": args.offset,
+            "missing_local_count": 0 if args.photos_export_missing else missing_local,
+            "photos_export_required_count": sum(item.photos_export for item in items),
             "start_date": args.start_date,
             "end_date": args.end_date,
             "random_seed": args.random_seed,
