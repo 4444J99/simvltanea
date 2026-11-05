@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import unittest
 from pathlib import Path
@@ -13,6 +14,10 @@ from unittest.mock import patch
 from simvltanea.browser import browser_runtime as runtime
 from simvltanea.browser.shared_engine import SharedEngineUnavailable
 from simvltanea.browser.test_shared_engine import HermeticEngineFixture
+
+# Absolute-path roots that must never reach staged (publishable) output.
+PRIVATE_PATH_FRAGMENTS = ('/Users/', '/Volumes/', '/private/', '/home/', '/var/', '/tmp/')
+WINDOWS_DRIVE = r'(?<![A-Za-z0-9])[A-Za-z]:[\\/]'
 
 
 class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
@@ -290,6 +295,74 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
                 self.build()
         self.assertEqual(before, self.snapshot())
         self.assertEqual(list(self.generated.glob('.preview-stage-*')), [])
+
+    def unavailable_errors(self):
+        """Real resolver refusals whose detailed messages carry absolute paths."""
+        from simvltanea.browser.shared_engine import resolve_shared_engine
+        isolated = self.fixture_root / 'isolated' / 'outer' / 'consumer' / 'src'
+        isolated.mkdir(parents=True)
+        (isolated.parent / 'pyproject.toml').write_text('[project]\nname="isolated"\n')
+        with self.assertRaises(SharedEngineUnavailable) as missing:
+            resolve_shared_engine(isolated, pin=self.pin)
+        shutil.rmtree(self.engine.root / '.git')
+        with self.assertRaises(SharedEngineUnavailable) as rejected:
+            resolve_shared_engine(self.start, pin=self.pin)
+        return ((missing.exception, runtime.SHARED_ENGINE_NOT_FOUND_NOTE),
+                (rejected.exception, runtime.SHARED_ENGINE_REJECTED_NOTE))
+
+    def test_unavailable_engine_note_is_path_free_but_detail_stays_on_stderr(self):
+        import contextlib
+        import io
+        for index, (error, note) in enumerate(self.unavailable_errors()):
+            with self.subTest(note=note):
+                # The detailed message is what used to be published: prove it had paths.
+                self.assertIn(str(self.fixture_root.resolve()), str(error))
+                output = self.generated / f'generation-{index}'
+                output.mkdir()
+                stderr = io.StringIO()
+                with patch.object(runtime, 'resolve_shared_engine', side_effect=error), \
+                        contextlib.redirect_stderr(stderr):
+                    self.assertIsNone(runtime.stage_shared_engine(output))
+                self.assertEqual({p.name for p in output.iterdir()}, {'shared-engine-unavailable.txt'})
+                staged = (output / 'shared-engine-unavailable.txt').read_text()
+                self.assertEqual(staged, note + '\n')
+                for fragment in PRIVATE_PATH_FRAGMENTS:
+                    self.assertNotIn(fragment, staged)
+                self.assertNotRegex(staged, WINDOWS_DRIVE)
+                self.assertNotIn(self.fixture_root.name, staged)
+                # Local diagnostics keep the full resolver explanation.
+                self.assertIn(str(error), stderr.getvalue())
+
+    def test_unavailable_engine_html_embeds_only_the_note(self):
+        (error, note), _ = self.unavailable_errors()
+        html = {}
+        original = runtime._build_preview_generation
+        def generation(state, output):
+            # Exercise the real HTML assembly with a minimal valid generation.
+            with patch.object(runtime.c, 'load_state', return_value=dict(sources=[])), \
+                    patch.object(runtime, 'compile_plan', return_value=dict(
+                        sources=[], audio='none', state_sha256='0' * 64)), \
+                    patch.object(runtime.c, 'media_paths', return_value={}), \
+                    patch.object(runtime.c, 'soundtrack_path', return_value=None), \
+                    patch.object(runtime.c, 'save_state'), \
+                    patch.object(runtime.c, 'canonical_json', return_value='{}'):
+                plan = original(state, output)
+            html['text'] = (output / 'index.html').read_text()
+            return plan
+        with patch.object(runtime, 'resolve_shared_engine', side_effect=error), \
+                patch.object(runtime, '_build_preview_generation', side_effect=generation):
+            runtime.build_preview(self.state, self.output)
+        text = (self.output / 'index.html').read_text()
+        self.assertEqual(text, html['text'])
+        self.assertIn('window.__sharedEngineUnavailable = ' + json.dumps(note + '\n') + ';', text)
+        self.assertNotIn('shared-engine.js', text)
+        for fragment in PRIVATE_PATH_FRAGMENTS:
+            self.assertNotIn(fragment, text)
+        self.assertNotRegex(text, WINDOWS_DRIVE)
+        self.assertIn('<html lang="en">', text)
+        self.assertIn(f'<title>{runtime.PREVIEW_TITLE}</title>', text)
+        self.assertIn('#stage:focus-visible{', text)
+        self.assertIn('<p id="runtime-status" role="status" aria-live="polite">', text)
 
 
 class SafeStagingAndPreviewLabellingTests(unittest.TestCase):

@@ -43,20 +43,42 @@ MAX_MEDIA_BYTES = 256 * 1024 * 1024
 # The installed Chromium rejects smaller nonzero playbackRate values.
 MIN_VIDEO_RATE = Fraction(1, 16)
 MAX_SOUNDTRACK_SECONDS = 600  # Eager decoded PCM, unlike streamed native videos.
+PREVIEW_TITLE = 'SIMVLTANEA: simultaneous loops'
+# Staged previews may be published. What they say about a missing shared engine
+# must never carry the build machine's filesystem layout: the detailed resolver
+# message stays on stderr and in the exception, and only these fixed notes reach
+# the page. Playback does not depend on the engine; it adds the framing sweep.
+SHARED_ENGINE_NOT_FOUND_NOTE = ('Shared engine not included in this build (not found at build time); '
+                                'loops play with their authored framing.')
+SHARED_ENGINE_REJECTED_NOTE = ('Shared engine not included in this build (failed verification at build time); '
+                               'loops play with their authored framing.')
 HTML = '''<!doctype html>
+<html lang="en">
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Composition runtime proof</title>
+<title>''' + PREVIEW_TITLE + '''</title>
 <style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
 #stage{position:relative;width:100%;height:100%;overflow:hidden;background:#000}
+#stage:focus-visible{outline:3px solid #fff;outline-offset:-3px}
+#stage:focus-visible::after{content:"";position:absolute;inset:0;z-index:99;pointer-events:none;
+box-shadow:inset 0 0 0 3px #fff,inset 0 0 0 5px #000}
 .loop{position:absolute;overflow:hidden;background:#000}
 .loop video,.loop img{width:100%;height:100%;display:block}
 #runtime-status{position:fixed;bottom:8px;left:8px;z-index:100;margin:0;padding:6px 9px;
 font:13px/1.4 system-ui,sans-serif;color:#fff;background:#000b;pointer-events:none}
+#runtime-note{position:fixed;top:8px;left:8px;z-index:100;margin:0;padding:4px 8px;
+font:12px/1.4 system-ui,sans-serif;color:#ccc;background:#000b;pointer-events:none}
 </style><main id="stage" aria-label="Composition runtime proof"></main>
 <p id="runtime-status" role="status" aria-live="polite">Loading verified composition…</p>
 <script src="runtime.js" defer></script>
 '''
+
+
+def shared_engine_note(error: SharedEngineUnavailable) -> str:
+    """Return the short, path-free note that staged output may carry."""
+    if str(error).startswith('shared engine not found.'):
+        return SHARED_ENGINE_NOT_FOUND_NOTE
+    return SHARED_ENGINE_REJECTED_NOTE
 
 
 def stage_shared_engine(output: Path) -> dict | None:
@@ -67,10 +89,11 @@ def stage_shared_engine(output: Path) -> dict | None:
     accepted release, and copies the exact verified bytes. Nothing is regenerated
     or patched on the way in.
 
-    A failure is not fatal to the preview and is not hidden either: the caller
-    writes the reason into the generated HTML, so an operator opening the preview
-    sees that the shared engine is absent instead of wondering why every panel
-    stayed centred.
+    A failure is not fatal to the preview and is not hidden either: the detailed
+    reason goes to stderr for the operator, and a short path-free note goes into
+    ``shared-engine-unavailable.txt`` and the generated HTML, so a viewer sees that
+    the shared engine is absent instead of wondering why every panel stayed
+    centred. Staged output may be published, so it never carries local paths.
     """
     for name in ('shared-engine', 'shared-engine-adapter.js', 'shared-engine.js',
                  'shared-engine-unavailable.txt', 'index.html'):
@@ -81,7 +104,7 @@ def stage_shared_engine(output: Path) -> dict | None:
     except SharedEngineUnavailable as error:
         print(f'shared engine unavailable: {error}', file=sys.stderr)
         (output / 'shared-engine-unavailable.txt').write_text(
-            str(error) + '\n', encoding='utf-8')
+            shared_engine_note(error) + '\n', encoding='utf-8')
         return None
 
     module_dir = output / 'shared-engine'
@@ -358,7 +381,7 @@ def _legacy_preview(output: Path) -> bool:
         if not isinstance(plan, dict) or plan.get('state_sha256') != hashlib.sha256(
                 c.canonical_json(state).encode()).hexdigest():
             return False
-        if '<title>Composition runtime proof</title>' not in (output / 'index.html').read_text():
+        if f'<title>{PREVIEW_TITLE}</title>' not in (output / 'index.html').read_text():
             return False
         assets = set(c.media_paths(state, output).values())
         soundtrack = c.soundtrack_path(state, output)

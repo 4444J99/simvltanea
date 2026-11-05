@@ -18,6 +18,7 @@ const runtime = window.compositionRuntime = {
   events: [], maxEvents: 256, nodes: new Map(), sources: new Map(), plan: null, origin: 0,
   orientation: null, layoutIndex: 0, position: 0, generation: 0, starting: false,
   initEpoch: 0, initController: null, transitions: new Set(), pauseIntent: false, initializing: false, retryable: false, assetError: null, disposed: false,
+  restarting: null,
   audio: {mode:'none', context:null, enabled:false, buffer:null, source:null, gain:null, interrupted:false},
 };
 function record(type, id, details = {}) {
@@ -337,17 +338,23 @@ function renderSeams() {
  * moves as the score sweeps.
  *
  * The module is shared with time-moment-brief and injected by build_preview after
- * digest verification. This file holds no copy and re-derives no timeline math. An
- * absent module is reported in the status line rather than silently leaving every
- * panel centred, which would look like a working composition. */
+ * digest verification. This file holds no copy and re-derives no timeline math.
+ * Playback never depends on it: it only moves the panel framing. When the build
+ * declared the engine absent (`__sharedEngineUnavailable`, a path-free note), the
+ * page stays ready and shows that note on a secondary line. A staged engine that
+ * then fails to load is still reported as an error in the status line rather than
+ * silently leaving every panel centred, which would look like a working build. */
 let panelDriver = null;
 let renderedSharedEngine = {time:null, poses:[], loops:[]};
 function installPanelDriver(layout) {
   const adapter = window.SimvltaneaSharedEngineAdapter;
   if (!adapter) {
-    runtime.sharedEngineError = window.__sharedEngineUnavailable || 'shared-engine adapter did not load';
+    runtime.sharedEngineOptional = typeof window.__sharedEngineUnavailable === 'string';
+    runtime.sharedEngineError = runtime.sharedEngineOptional
+      ? window.__sharedEngineUnavailable.trim() : 'shared-engine adapter did not load';
     return false;
   }
+  runtime.sharedEngineOptional = false;
   try {
     panelDriver = adapter.createPanelDriver(window.SharedEngine, {
       panels: layout.cells.length,
@@ -365,6 +372,15 @@ function installPanelDriver(layout) {
     setStatus('error', 'Shared engine unavailable: ' + error.message);
     return false;
   }
+}
+function showEngineNote(message) {
+  let note = document.querySelector('#runtime-note');
+  if (!note) {
+    note = document.createElement('p');
+    note.id = 'runtime-note';
+    (document.body || document.documentElement).append(note);
+  }
+  note.textContent = message;
 }
 function applyPanelOrientation(seconds) {
   if (!panelDriver) return;
@@ -454,7 +470,7 @@ async function activate(node, span, frame, initial = false) {
     node.media?.remove();
     node.media = document.createElement(span.kind === 'video' ? 'video' : 'img');
     node.media.dataset.loopId = node.id;
-    node.media.setAttribute('aria-label', node.id);
+    node.media.setAttribute('aria-label', `Loop ${node.ordinal} of ${runtime.plan.tracks.length}`);
     node.box.append(node.media); node.kind = span.kind;
     if (span.kind === 'video') {
       node.media.muted = true; node.media.defaultMuted = true;
@@ -503,7 +519,8 @@ function tick(generation) {
     runtime.position=runtime.plan.frames/runtime.plan.fps;
     for (const node of runtime.nodes.values()) node.media?.pause?.();
     stopSoundtrack();
-    record('finished', null); setStatus('finished','Composition finished.'); return;
+    record('finished', null);
+    setStatus('finished','Composition finished. Click or press Space to play again.'); return;
   }
   try {
     const layouts = runtime.plan.layout_keyframes;
@@ -761,6 +778,7 @@ function releaseResources() {
     runtime.audio.interrupted = false;
   }
   runtime.transitions.clear();
+  runtime.restarting = null;
   panelDriver = null;
   [...stage.querySelectorAll('.seam')].forEach(el => el.remove());
   if (runtime.resizeObserver) {
@@ -1016,10 +1034,10 @@ async function initialize() {
         }
       });
     }
-    for (const track of runtime.plan.tracks) {
+    for (const [position, track] of runtime.plan.tracks.entries()) {
       if (runtime.nodes.has(track.id)) throw new Error('Duplicate loop');
       const box = document.createElement('div'); box.className = 'loop'; box.dataset.loopId = track.id; stage.append(box);
-      runtime.nodes.set(track.id, {id:track.id, box, media:null, kind:null, source:null,
+      runtime.nodes.set(track.id, {id:track.id, ordinal:position + 1, box, media:null, kind:null, source:null,
         spans:track.spans, index:0, span:null, callbacks:0, decoded:null, busy:false});
     }
     await Promise.all([...runtime.nodes.values()].map(n => activate(n, n.spans[0], 0, true)));
@@ -1029,7 +1047,11 @@ async function initialize() {
     setStatus('ready',runtime.audio.mode==='none' ? 'Click or press Space to play the silent field.' :
       'Click or press Space to play with sound.');
     applyLayout();
-    if (runtime.sharedEngineError) setStatus('error', 'Shared engine unavailable: ' + runtime.sharedEngineError);
+    if (runtime.sharedEngineError) {
+      // A build-declared absence is informational; playback is unaffected.
+      if (runtime.sharedEngineOptional) showEngineNote(runtime.sharedEngineError);
+      else setStatus('error', 'Shared engine unavailable: ' + runtime.sharedEngineError);
+    }
   } catch (error) {
     if (epoch !== runtime.initEpoch || runtime.disposed) return;
     fail(error);
@@ -1065,16 +1087,49 @@ if (typeof document.addEventListener === 'function') {
 
 // A local preview can be started directly without a developer console.
 stage.tabIndex = 0;
+/* After the composition finishes, the same gesture plays it again from frame 0.
+ * runtime.play() seeks every loop back to its first authored span before the
+ * shared clock restarts, so the loops restart together on their authored clocks. */
+function restartFinished() {
+  if ([...runtime.nodes.values()].some(node => node.busy)) {
+    record('transport-busy', null, {message: 'Restart waits for media transitions to settle'});
+    return;
+  }
+  const token = {}, epoch = runtime.initEpoch;
+  runtime.restarting = token;
+  record('restart', null);
+  runtime.play().catch(error => {
+    if (epoch !== runtime.initEpoch || runtime.disposed || runtime.error || runtime.audio.blocked) return;
+    fail(error);
+  }).finally(() => { if (runtime.restarting === token) runtime.restarting = null; });
+}
 stage.addEventListener('click', () => {
   if (runtime.audio.interrupted) {
     runtime.recoverAudio().catch(() => {});
     return;
   }
-  if (!runtime.ready || runtime.starting || runtime.finished || runtime.error) return;
+  if (!runtime.ready || runtime.starting || runtime.restarting || runtime.error) return;
+  if (runtime.finished) { restartFinished(); return; }
   if (runtime.running) { try { runtime.pause(); } catch (error) { record('transport-busy',null,{message:String(error)}); } }
   else runtime.start().catch(error=>{if(!runtime.audio.blocked)fail(error);});
 });
-stage.addEventListener('keydown', event => { if (event.code === 'Space') { event.preventDefault(); stage.click(); } });
+/* Space toggles playback wherever focus rests on non-interactive content (the
+ * stage or the page body), so a visitor need not click the stage first. Focused
+ * controls keep their own Space behaviour. */
+const INTERACTIVE_FOCUS = 'a[href],area[href],button,input,select,textarea,summary,iframe,' +
+  'audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),' +
+  '[role="button"],[role="link"],[role="checkbox"],[role="radio"],[role="switch"],[role="tab"],' +
+  '[role="menuitem"],[role="option"],[role="slider"],[role="spinbutton"],[role="textbox"],[role="combobox"]';
+function spaceTogglesPlayback(event) {
+  if (event.code !== 'Space' || event.defaultPrevented) return false;
+  const target = event.target;
+  return !(target && typeof target.closest === 'function' && target.closest(INTERACTIVE_FOCUS));
+}
+(typeof document.addEventListener === 'function' ? document : stage).addEventListener('keydown', event => {
+  if (!spaceTogglesPlayback(event)) return;
+  event.preventDefault();
+  stage.click();
+});
 
 // Deterministic seeding and bounded snapshot paging helper (Issue #27)
 function seededRng(seed) {

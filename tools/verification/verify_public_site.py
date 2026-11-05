@@ -34,6 +34,17 @@ FORBIDDEN_TEXT = (
     "source_src",
     "symlink_target",
 )
+# Absolute filesystem paths reveal the build machine's layout. "/Users/" above
+# keeps its historical substring check; these patterns add the other POSIX roots
+# and Windows drive paths. A POSIX root only counts where an absolute path can
+# begin (not inside a URL path or after "../"), so "https://host/home/" and
+# "../var/site" remain public. A drive letter must follow a delimiter, so
+# "https://" and minified "{a:/re/}" are not drive paths.
+PRIVATE_PATH_PATTERNS = (
+    re.compile(r"(?<![A-Za-z0-9._~%+-])/(?:Volumes|private|home|var|tmp)/"),
+    re.compile(r"(?:^|(?<=[\s\"'`(=<>\[|;]))[A-Za-z]:[\\/]"),
+    re.compile(r"file:///[A-Za-z]:"),
+)
 FORBIDDEN_PUBLIC_KEYS = {
     "absolute_path",
     "outside_incubator_source",
@@ -177,6 +188,18 @@ def scan_text_files(site_dir: Path, errors: list[str]) -> None:
         for needle in FORBIDDEN_TEXT:
             if needle in text:
                 errors.append(f"{path}: contains private token {needle!r}")
+        for fragment in private_path_fragments(text):
+            errors.append(f"{path}: contains private absolute path {fragment!r}")
+
+
+def private_path_fragments(text: str) -> list[str]:
+    """Return each distinct absolute-path prefix found in public text."""
+    found: list[str] = []
+    for pattern in PRIVATE_PATH_PATTERNS:
+        for match in pattern.finditer(text):
+            if match.group(0) not in found:
+                found.append(match.group(0))
+    return found
 
 
 def walk_forbidden_keys(value: Any, path: str, errors: list[str], receipt_path: Path) -> None:

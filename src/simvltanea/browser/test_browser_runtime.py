@@ -691,6 +691,155 @@ class BrowserTests(unittest.TestCase):
         }""")
         self.assertEqual(result,dict(running=False,pauseIntent=False,status='paused'))
 
+    def build_engine_absent_preview(self):
+        """Stage state-3 with a real resolver refusal that names absolute paths."""
+        import tempfile
+        from simvltanea.browser import browser_runtime as runtime
+        from simvltanea.browser.shared_engine import SharedEngineUnavailable, resolve_shared_engine
+        isolated=Path(self.enterContext(tempfile.TemporaryDirectory()))/'consumer'/'src'
+        isolated.mkdir(parents=True)
+        (isolated.parent/'pyproject.toml').write_text('[project]\nname="isolated"\n')
+        with self.assertRaises(SharedEngineUnavailable) as caught:resolve_shared_engine(isolated)
+        detail=str(caught.exception)
+        self.assertIn(str(isolated.parent.resolve()),detail)
+        target=ROOT/'preview-engine-absent'
+        with patch.object(runtime,'resolve_shared_engine',side_effect=caught.exception):
+            build_preview(ROOT/'state-3.json',target)
+        return target,detail
+
+    def test_absent_shared_engine_is_ready_with_path_free_note(self):
+        from simvltanea.browser import browser_runtime as runtime
+        from simvltanea.paths import REPO_ROOT
+        target,detail=self.build_engine_absent_preview()
+        note=runtime.SHARED_ENGINE_NOT_FOUND_NOTE
+        self.assertEqual((target/'shared-engine-unavailable.txt').read_text(),note+'\n')
+        for path in target.rglob('*'):
+            if path.suffix not in ('.html','.txt','.js','.json'):continue
+            text=path.read_text()
+            with self.subTest(staged=path.name):
+                for fragment in ('/Users/','/Volumes/','/private/','/home/','/var/','/tmp/',str(REPO_ROOT)):
+                    self.assertNotIn(fragment,text)
+                self.assertNotRegex(text,r'(?<![A-Za-z0-9])[A-Za-z]:[\\/]')
+                for line in detail.splitlines()[1:-1]:self.assertNotIn(line.strip(),text)
+        page=self.open_preview('engine-absent')
+        page.wait_for_function("stage.dataset.status === 'ready'")
+        view=page.evaluate("""() => ({status:stage.dataset.status,
+            label:document.querySelector('#runtime-status').textContent,
+            live:document.querySelector('#runtime-status').getAttribute('aria-live'),
+            note:document.querySelector('#runtime-note')?.textContent ?? null,
+            engine:compositionRuntime.snapshot().sharedEngine.error,
+            lang:document.documentElement.lang, title:document.title,
+            labels:[...document.querySelectorAll('#stage video')].map(v => v.getAttribute('aria-label'))})""")
+        self.assertEqual(view,dict(status='ready',label='Click or press Space to play the silent field.',
+                                   live='polite',note=note,engine=note,lang='en',title=runtime.PREVIEW_TITLE,
+                                   labels=['Loop 1 of 3','Loop 2 of 3','Loop 3 of 3']))
+        page.click('#stage')
+        page.wait_for_function("stage.dataset.status === 'playing'")
+        self.assertIsNone(page.evaluate('compositionRuntime.error'))
+        self.assertEqual(page.locator('#runtime-note').inner_text(),note)
+
+    def test_staged_engine_that_fails_to_load_still_reports_error(self):
+        """Only a build-declared absence is informational; a staged engine failing is not."""
+        target,_=self.build_engine_absent_preview()
+        html=(target/'index.html').read_text()
+        declared=html[html.index('<script>window.__sharedEngineUnavailable'):html.index('</script>\n',html.index('<script>window.__sharedEngineUnavailable'))+10]
+        staged=('<script src="shared-engine-adapter.js" defer></script>\n'
+                '<script type="module" src="shared-engine.js"></script>\n')
+        adapter=(HERE/'shared_engine_adapter.js').read_text()
+        for name,replacement,expected in (
+                ('module-blocked',staged,'Shared engine unavailable: simvltanea shared-engine adapter: shared engine not found.'),
+                ('adapter-missing','','Shared engine unavailable: shared-engine adapter did not load')):
+            with self.subTest(case=name):
+                page=self.browser.new_page(viewport={'width':390,'height':844});self.addCleanup(page.close)
+                body=html.replace(declared,replacement)
+                self.assertNotEqual(body,html)
+                page.route('**/preview-engine-absent/',functools.partial(
+                    lambda body,route:route.fulfill(status=200,content_type='text/html',body=body),body))
+                page.route('**/shared-engine-adapter.js',lambda route:route.fulfill(
+                    status=200,content_type='text/javascript',body=adapter))
+                page.route('**/shared-engine.js',lambda route:route.abort())
+                page.goto(f'{self.base}/{target.name}/')
+                page.wait_for_function('compositionRuntime.ready || compositionRuntime.error',timeout=20000)
+                page.wait_for_function("stage.dataset.status === 'error'")
+                self.assertTrue(page.locator('#runtime-status').inner_text().startswith(expected))
+                self.assertIsNone(page.evaluate('compositionRuntime.error'))
+                self.assertEqual(page.locator('#runtime-note').count(),0)
+
+    def test_seven_loop_videos_are_labelled_by_position(self):
+        page=self.open_preview(7)
+        self.assertEqual(page.locator('#stage video').evaluate_all('nodes => nodes.map(n => n.getAttribute("aria-label"))'),
+                         [f'Loop {index} of 7' for index in range(1,8)])
+
+    def finish(self,page):
+        page.evaluate("""async () => {
+            const r=compositionRuntime;
+            await r.seek(r.plan.frames/r.plan.fps - .05); await r.start();
+        }""")
+        page.wait_for_function('compositionRuntime.finished',timeout=5000)
+        self.assertEqual(page.evaluate('stage.dataset.status'),'finished')
+        self.assertEqual(page.locator('#runtime-status').inner_text(),
+                         'Composition finished. Click or press Space to play again.')
+        return page.evaluate('compositionRuntime.events.length')
+
+    def assert_restarted(self,page,state,before):
+        page.wait_for_function("compositionRuntime.running && stage.dataset.status === 'playing'",timeout=5000)
+        snapshot=self.settled_snapshot(page,12,'restart-after-finish')
+        self.assertFalse(snapshot['finished'])
+        self.assertLess(snapshot['compositionTime'],2)
+        # Every loop resumed from its authored clock at the restart frame.
+        self.check_model(snapshot,state)
+        events=page.evaluate('compositionRuntime.events')
+        tail=[event['type'] for event in events[before:]]
+        self.assertIn('restart',tail)
+        seeks=[event for event in events[before:] if event['type']=='transport-seek']
+        self.assertEqual([event['time'] for event in seeks],[0])
+        self.assertLess(tail.index('restart'),tail.index('transport-seek'))
+        self.assertNotIn('error',tail)
+        self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every((n,i) => n.media === initialMedia[i] && n.box === initialBoxes[i])'))
+
+    def test_click_and_space_after_finish_restart_from_the_beginning(self):
+        page=self.open_preview(3);state=c.load_state(ROOT/'state-3.json')
+        before=self.finish(page)
+        page.click('#stage')
+        self.assert_restarted(page,state,before)
+        page.evaluate('compositionRuntime.pause()')
+        before=self.finish(page)
+        page.evaluate('document.activeElement.blur()')
+        self.assertTrue(page.evaluate('document.activeElement === document.body'))
+        page.keyboard.press('Space')
+        self.assert_restarted(page,state,before)
+
+    def test_space_works_from_body_but_not_from_focused_controls(self):
+        page=self.open_preview(3)
+        page.evaluate("""() => { window.spaceSeen=[];
+            window.addEventListener('keydown', e => { if (e.code === 'Space') spaceSeen.push(e.defaultPrevented); }); }""")
+        self.assertTrue(page.evaluate('document.activeElement === document.body'))
+        page.keyboard.press('Space')
+        page.wait_for_function("stage.dataset.status === 'playing'")
+        page.keyboard.press('Space')
+        page.wait_for_function("stage.dataset.status === 'paused'")
+        self.assertEqual(page.evaluate('spaceSeen'),[True,True])
+        for markup in ('<button type="button">control</button>','<input type="text">','<a href="#x">link</a>',
+                       '<select><option>a</option></select>','<textarea></textarea>'):
+            with self.subTest(markup=markup):
+                page.evaluate("""markup => { const holder=document.createElement('div');
+                    holder.id='controls'; holder.innerHTML=markup; document.body.append(holder);
+                    holder.firstElementChild.focus(); spaceSeen.length=0; }""",markup)
+                page.keyboard.press('Space')
+                page.wait_for_timeout(150)
+                self.assertEqual(page.evaluate('[stage.dataset.status, compositionRuntime.running, spaceSeen]'),
+                                 ['paused',False,[False]])
+                page.evaluate("document.querySelector('#controls').remove()")
+        # Keyboard focus reaches the stage and shows a visible focus ring there.
+        page.evaluate('document.activeElement.blur()')
+        page.keyboard.press('Tab')
+        focus=page.evaluate("""() => ({stage:document.activeElement === stage, visible:stage.matches(':focus-visible'),
+            outline:getComputedStyle(stage).outlineStyle, ring:getComputedStyle(stage,'::after').boxShadow})""")
+        self.assertTrue(focus['stage']);self.assertTrue(focus['visible'])
+        self.assertEqual(focus['outline'],'solid');self.assertNotEqual(focus['ring'],'none')
+        page.keyboard.press('Space')
+        page.wait_for_function("stage.dataset.status === 'playing'")
+
 
 class SnapshotPagingAndViewportTests(unittest.TestCase):
     def test_page_snapshot_pure_helper_and_decoder_bounds(self):
