@@ -1,7 +1,7 @@
 # SIMVLTANEA documentation
 
 - [Architecture and audio](architecture/AUDIO_ARCHITECTURE.md), [canon](architecture/CANON.md), and [slice field](architecture/SEAMED_SLICE_FIELD.md)
-- [Edition authoring](authoring/EDITION_AUTHORING.md) and [configuration](authoring/CONFIG.md)
+- [Edition authoring](authoring/EDITION_AUTHORING.md), [configuration](authoring/CONFIG.md), and the [browser compiler](authoring/BROWSER_COMPILER.md)
 - [Configurable layout](governance/LAYOUT.md)
 - [Structure](governance/STRUCTURE.md), [naming](governance/NAMING.md), [branches](governance/BRANCHES.md), and [status](governance/STATUS.md)
 - [Provenance](provenance/PROVENANCE.md) and [recovery](provenance/RECOVERY.md)
