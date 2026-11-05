@@ -23,6 +23,7 @@ evidence; branch, PR and workflow state belong in the current status projection.
 | 2026-10-02 | [feature-encapsulation](2026-10-02-feature-encapsulation.md) | Feature encapsulation |
 | 2026-10-02 | [n7-authored-layouts](2026-10-02-n7-authored-layouts.md) | Plan — N=7 Authored Layouts (2026-10-02) |
 | 2026-10-02 | [python-imports-and-verification](2026-10-02-python-imports-and-verification.md) | Python imports and full verification |
+| 2026-11-05 | [full-bleed-layout-presets](2026-11-05-full-bleed-layout-presets.md) | Plan — Full-Bleed Layout Presets (2026-11-05) |
 
 ## Generated output roles
 
