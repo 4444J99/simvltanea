@@ -10,16 +10,23 @@
  * a real metadata load that must yield a decoded frame, a duration quantized
  * down to whole composition frames, and one crypto.subtle SHA-256 digest that
  * the runtime's integrity check reuses instead of hashing the bytes again.
- * Between 2 and 7 loops are accepted; other counts are refused, never padded
- * or duplicated.
+ *
+ * The layout is chosen, not inferred. The families (strips, authored) and the
+ * panel counts each offers are read from layouts.json (simvltanea.layout-bundle/2,
+ * or the legacy authored map); nothing here caps the count. The page opens on the
+ * bundle's default family (strips) at five panels. "Use my own layout file" reads
+ * a simvltanea.layout-preset/1 or simvltanea.layout-pair/1 file on the device and
+ * offers it as one more family. Play needs exactly one loop per panel; any other
+ * count is refused, never padded or duplicated.
  *
  * The pure helpers (quantizeDuration, admitSize, countVerdict, spanVerdict,
- * sniffContainer, playbackQueries, blobType, mediaSuffix) are exported for Node tests through
- * module.exports and published as globalThis.SimvltaneaStudio in the browser.
+ * nearestCount, familyLabel, oneLine, sniffContainer, playbackQueries, blobType,
+ * mediaSuffix) are exported for Node tests through module.exports and published as
+ * globalThis.SimvltaneaStudio in the browser.
  */
 (function (root) {
   'use strict';
-  const MIN_LOOPS = 2, MAX_LOOPS = 7, FPS = 24, DEFAULT_SECONDS = 120, MAX_FRAMES = 14400;
+  const FPS = 24, DEFAULT_SECONDS = 120, MAX_FRAMES = 14400, DEFAULT_PANELS = 5, OWN_FAMILY = 'file';
   const MIB = 1024 * 1024, MAX_TOTAL_BYTES = 512 * MIB;
   const MIN_FRAMES = 6; // a quarter second at 24 fps; spanVerdict checks the span guard for the piece length
   const MAX_SPANS_PER_TRACK = 1024; // browser.compiler.js MAX_SEGMENTS: at most this many spans per track on average
@@ -62,20 +69,44 @@
       `${formatMiB(cap)} limit for this page (the browser holds about twice that in memory).`;
   }
 
-  /* Live validation of the loop count: N independent loops, no filler, no duplication. */
-  function countVerdict(count) {
-    const rule = `The studio plays ${MIN_LOOPS} to ${MAX_LOOPS} loops; it never pads, repeats or duplicates one.`;
-    if (count === 0) return {ok: false, message: `No loops chosen yet. ${rule}`};
-    const chosen = `${count} loop${count === 1 ? '' : 's'} chosen.`;
-    if (count < MIN_LOOPS) {
-      const missing = MIN_LOOPS - count;
-      return {ok: false, message: `${chosen} Add at least ${missing} more. ${rule}`};
+  const plural = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+
+  /* Live validation of the loop count against the chosen panel count: one independent
+   * loop per panel, no filler, no duplication. `available` lists the counts the chosen
+   * layout offers, so the message only suggests a panel count that exists. */
+  function countVerdict(count, panels, available = []) {
+    const rule = 'Every panel plays one of your loops; nothing is padded, repeated or duplicated.';
+    if (!Number.isSafeInteger(panels) || panels < 1) {
+      return {ok: false, message: `Choose a layout and a panel count first. ${rule}`};
     }
-    if (count > MAX_LOOPS) {
-      const extra = count - MAX_LOOPS;
-      return {ok: false, message: `${chosen} Remove ${extra} to continue. ${rule}`};
+    if (count === 0) return {ok: false, message: `No loops chosen yet. Choose ${plural(panels, 'video')} for ${plural(panels, 'panel')}. ${rule}`};
+    if (count === panels) return {ok: true, message: `${plural(count, 'loop')} chosen. Ready to play.`};
+    const other = available.includes(count) ? `, or set Panels to ${count}` : '';
+    const chosen = `${plural(count, 'loop')} chosen for ${plural(panels, 'panel')}.`;
+    if (count < panels) return {ok: false, message: `${chosen} Add ${panels - count} more${other}. ${rule}`};
+    return {ok: false, message: `${chosen} Remove ${plural(count - panels, 'loop')}${other}. ${rule}`};
+  }
+
+  /* The offered count closest to `wanted` (the smaller one on a tie); null when none is offered. */
+  function nearestCount(counts, wanted) {
+    let best = null;
+    for (const count of counts) {
+      if (best === null || Math.abs(count - wanted) < Math.abs(best - wanted) ||
+        (Math.abs(count - wanted) === Math.abs(best - wanted) && count < best)) best = count;
     }
-    return {ok: true, message: `${chosen} Ready to play.`};
+    return best;
+  }
+
+  const FAMILY_LABELS = {strips: 'Strips', authored: 'Authored'};
+  function familyLabel(name, file = null) {
+    if (name === OWN_FAMILY && file) return `My file: ${file}`;
+    return FAMILY_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
+  }
+
+  // A visitor-facing error on one line, naming the file it is about.
+  function oneLine(message, file = null) {
+    const text = String(message).replace(/\s*[\r\n]+\s*/g, ' ').trim();
+    return file && !text.startsWith(file) ? `${file}: ${text}` : text;
   }
 
   const fourcc = (bytes, at) => String.fromCharCode(bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]);
@@ -216,9 +247,9 @@
   }
 
   const api = {
-    MIN_LOOPS, MAX_LOOPS, FPS, DEFAULT_SECONDS, MAX_TOTAL_BYTES, MIN_FRAMES, MAX_SPANS_PER_TRACK,
-    quantizeDuration, admitSize, countVerdict, spanVerdict, sniffContainer, playbackQueries, blobType, mediaSuffix,
-    compositionFrames, formatMiB,
+    FPS, DEFAULT_SECONDS, DEFAULT_PANELS, MAX_TOTAL_BYTES, MIN_FRAMES, MAX_SPANS_PER_TRACK, OWN_FAMILY,
+    quantizeDuration, admitSize, countVerdict, spanVerdict, nearestCount, familyLabel, oneLine, sniffContainer,
+    playbackQueries, blobType, mediaSuffix, compositionFrames, formatMiB,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.SimvltaneaStudio = api;
@@ -232,16 +263,33 @@
     files: $('#files'), drop: $('#drop'), progress: $('#progress'), refusals: $('#refusals'), count: $('#count'),
     loops: $('#loops'), start: $('#start'), setup: $('#setup'), player: $('#player'), toggle: $('#toggle'),
     restart: $('#restart'), repeat: $('#repeat'), change: $('#change'), status: $('#runtime-status'),
-    length: $('#length'),
+    length: $('#length'), families: $('#families'), panels: $('#panels'), layoutFile: $('#layout-file'),
+    layoutStatus: $('#layout-status'), layoutError: $('#layout-error'),
   };
   const frames = compositionFrames(root.location && root.location.search);
   const loops = [];
   const digests = new WeakMap();
   let nextId = 1, busy = 0, session = null, waiting = [], orientation = 'auto', repeating = false;
+  // The layout choice: a family from layouts.json (or the visitor's own file) and a panel count.
+  const layout = {bundle: null, families: {}, order: [], family: null, panels: null, own: null, loading: true};
+  const compiler = () => root.SimvltaneaCompiler;
   const layoutsReady = fetch('layouts.json').then(response => {
     if (!response.ok) throw new Error(`layouts.json: HTTP ${response.status}`);
     return response.json();
-  });
+  }).then(bundle => {
+    const described = compiler().layoutFamilies(bundle);
+    layout.bundle = bundle;
+    for (const [name, family] of Object.entries(described.families)) {
+      layout.families[name] = {counts: family.counts, label: familyLabel(name)};
+      layout.order.push(name);
+    }
+    if (layout.family === null) choose(described.default_family, DEFAULT_PANELS);
+    return bundle;
+  }).catch(error => {
+    say(ui.layoutError, oneLine(`The built-in layouts could not be loaded (${error.message || error}); ` +
+      'you can still use your own layout file.', 'layouts.json'));
+    throw error;
+  }).finally(() => { layout.loading = false; renderLayout(); render(); });
   layoutsReady.catch(() => {});
 
   const hex = buffer => Array.from(new Uint8Array(buffer), value => value.toString(16).padStart(2, '0')).join('');
@@ -291,6 +339,98 @@
     const item = document.createElement('li');
     item.textContent = message;
     ui.refusals.append(item);
+  }
+
+  // ---- Layout family, panel count and the visitor's own layout file -----------
+
+  const counts = () => (layout.families[layout.family] || {counts: []}).counts;
+
+  /* Select `family` and the offered panel count nearest to `panels`. Returns the note to
+   * show when the count had to change, so a switch never alters the panel count silently. */
+  function choose(family, panels) {
+    const offered = (layout.families[family] || {counts: []}).counts;
+    const chosen = nearestCount(offered, panels);
+    layout.family = family;
+    layout.panels = chosen;
+    return chosen !== null && chosen !== panels ?
+      `${layout.families[family].label} layouts cover ${describeCounts(offered)} panels; Panels is now ${chosen}.` : '';
+  }
+  function describeCounts(offered) {
+    const contiguous = offered.every((count, index) => index === 0 || count === offered[index - 1] + 1);
+    return offered.length === 1 ? String(offered[0]) : contiguous ? `${offered[0]} to ${offered[offered.length - 1]}`
+      : offered.join(', ');
+  }
+
+  function renderLayout() {
+    const names = layout.order.concat(layout.own ? [OWN_FAMILY] : []);
+    const current = Array.from(ui.families.querySelectorAll('input'), input => input.value).join(' ');
+    if (current !== names.join(' ')) {
+      ui.families.replaceChildren(...names.map(name => {
+        const label = document.createElement('label'), input = document.createElement('input');
+        input.type = 'radio'; input.name = 'family'; input.value = name;
+        label.append(input, layout.families[name].label);
+        return label;
+      }));
+    }
+    for (const input of ui.families.querySelectorAll('input')) {
+      input.checked = input.value === layout.family;
+      input.disabled = busy > 0;
+    }
+    const offered = counts();
+    const options = Array.from(ui.panels.options, option => Number(option.value)).join(' ');
+    if (options !== offered.join(' ')) {
+      ui.panels.replaceChildren(...offered.map(count => {
+        const option = document.createElement('option');
+        option.value = String(count); option.textContent = String(count);
+        return option;
+      }));
+    }
+    if (layout.panels !== null) ui.panels.value = String(layout.panels);
+    ui.panels.disabled = !offered.length || busy > 0;
+    studio.dataset.family = layout.family || '';
+    studio.dataset.panels = layout.panels === null ? '' : String(layout.panels);
+  }
+
+  ui.families.addEventListener('change', event => {
+    const input = event.target.closest('input[name="family"]');
+    if (!input || !input.checked) return;
+    say(ui.layoutStatus, choose(input.value, layout.panels ?? DEFAULT_PANELS));
+    renderLayout(); render();
+  });
+  ui.panels.addEventListener('change', () => {
+    layout.panels = Number(ui.panels.value);
+    say(ui.layoutStatus, '');
+    renderLayout(); render();
+  });
+
+  async function useLayoutFile(file) {
+    const name = file.name || 'layout file';
+    say(ui.layoutError, '');
+    try {
+      const C = compiler(), data = C.loadLayoutBytes(await file.arrayBuffer(), name);
+      const info = C.describeLayoutFile(data, name);
+      layout.own = {name, data, info};
+      layout.families[OWN_FAMILY] = {counts: info.counts, label: familyLabel(OWN_FAMILY, name)};
+      const note = choose(OWN_FAMILY, layout.panels ?? DEFAULT_PANELS);
+      say(ui.layoutStatus, `Using ${name}: ${info.kind === 'preset' ?
+        `the strips preset ${info.name} for ${describeCounts(info.counts)} panels` :
+        `a layout pair for ${plural(info.counts[0], 'panel')}`}. It stays on this device.${note ? ` ${note}` : ''}`);
+    } catch (error) {
+      say(ui.layoutError, oneLine(error.message || error, name));
+    }
+    renderLayout(); render();
+  }
+  ui.layoutFile.addEventListener('change', () => {
+    const [file] = Array.from(ui.layoutFile.files);
+    ui.layoutFile.value = '';
+    if (file) useLayoutFile(file);
+  });
+
+  // {layouts, slice} for `count` loops in the chosen family; refused if the family lacks it.
+  function arrangement(count) {
+    const C = compiler();
+    if (layout.family === OWN_FAMILY) return C.layoutFromFile(layout.own.data, count, layout.own.name);
+    return C.layoutEntry(layout.bundle, layout.family, count);
   }
 
   function metadata(file, type) {
@@ -394,8 +534,9 @@
     return element;
   }
 
+  // Ready only when the panel count matches and the loops are long enough for the piece length.
   function selectionVerdict() {
-    const verdict = countVerdict(loops.length);
+    const verdict = countVerdict(loops.length, layout.panels, counts());
     if (!verdict.ok) return verdict;
     const spans = spanVerdict(frames, loops.map(loop => loop.quantized.frames));
     return spans.ok ? verdict : spans;
@@ -403,9 +544,10 @@
 
   function render(focus) {
     const verdict = selectionVerdict();
-    say(ui.count, verdict.message);
+    say(ui.count, layout.loading ? 'Loading the layouts…' : verdict.message);
     studio.dataset.count = String(loops.length);
-    ui.start.disabled = !verdict.ok || busy > 0;
+    ui.start.disabled = !verdict.ok || busy > 0 || layout.loading;
+    renderLayout();
     ui.loops.replaceChildren(...loops.map((loop, index) => {
       const item = document.createElement('li');
       item.dataset.key = String(loop.key);
@@ -470,15 +612,23 @@
   // A file dropped beside the zone must not navigate away from the page.
   for (const type of ['dragover', 'drop']) document.addEventListener(type, event => event.preventDefault());
 
-  function compile(bundle) {
-    const C = root.SimvltaneaCompiler;
+  /* Loop k (the k-th listed file) plays in strip or cell loop-k. A pair whose cells use
+   * other loop names is relabelled in portrait cell order. A strips layout also carries
+   * the state-wide slice: its zoom for this panel count. */
+  function compile() {
+    const C = compiler();
     const ids = loops.map((_, index) => `loop-${index + 1}`);
     const sources = loops.map((loop, index) => ({id: `source-${index + 1}`,
       path: `media/${loop.sha256}.${loop.suffix}`, sha256: loop.sha256, kind: 'video',
       duration: loop.quantized.duration}));
-    const state = C.buildState({sources, frames, fps: FPS,
-      loops: sources.map((source, index) => ({id: ids[index], source: source.id})),
-      layouts: C.bindLayouts(bundle[String(loops.length)], ids)});
+    const entry = arrangement(loops.length);
+    const named = new Set(entry.layouts.portrait.cells.map(cell => cell.loop));
+    const layouts = named.size === ids.length && ids.every(id => named.has(id)) ? entry.layouts :
+      C.bindLayouts(entry.layouts, ids);
+    const input = {sources, frames, fps: FPS, layouts,
+      loops: sources.map((source, index) => ({id: ids[index], source: source.id}))};
+    if (entry.slice) input.slice = entry.slice;
+    const state = C.buildState(input);
     const plan = C.compilePlan(state);
     for (const [index, source] of plan.sources.entries()) source.bytes = loops[index].size;
     return plan;
@@ -498,15 +648,14 @@
 
   async function startSession() {
     const verdict = selectionVerdict();
-    if (!verdict.ok || busy > 0) { say(ui.count, verdict.message); return; }
+    if (!verdict.ok || busy > 0 || layout.loading) { say(ui.count, verdict.message); return; }
     const r = runtime();
     if (!r) { say(ui.count, 'The player did not load. Reload the page and try again.'); return; }
-    let bundle, plan;
+    let plan;
     try {
-      bundle = await layoutsReady;
-      plan = compile(bundle);
+      plan = compile();
     } catch (error) {
-      say(ui.count, `These loops cannot be arranged: ${error.message || error}`);
+      say(ui.count, oneLine(`These loops cannot be arranged: ${error.message || error}`));
       return;
     }
     session = {plan, bySha: new Map(loops.map(loop => [loop.sha256, loop]))};
@@ -606,6 +755,11 @@
     snapshot: () => ({
       view: studio.dataset.view, busy: busy > 0, frames, orientation, repeat: ui.repeat.checked,
       count: ui.count.textContent, refusals: Array.from(ui.refusals.children, item => item.textContent),
+      family: layout.family, panels: layout.panels, counts: counts().slice(), loading: layout.loading,
+      families: layout.order.concat(layout.own ? [OWN_FAMILY] : []).map(name => ({name,
+        label: layout.families[name].label, counts: layout.families[name].counts.slice()})),
+      layoutFile: layout.own ? {name: layout.own.name, kind: layout.own.info.kind, layout: layout.own.info.name} : null,
+      layoutStatus: ui.layoutStatus.textContent, layoutError: ui.layoutError.textContent,
       loops: loops.map(loop => ({name: loop.name, type: loop.type, suffix: loop.suffix, size: loop.size,
         sha256: loop.sha256, codec: loop.codec, container: loop.container, width: loop.width,
         height: loop.height, duration: loop.duration, declared: loop.quantized.duration,

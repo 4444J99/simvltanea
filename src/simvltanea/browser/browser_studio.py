@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Stage the SIMVLTANEA web studio: a static page that plays a visitor's own loops.
 
-The studio is client-only. A visitor drops 2 to 7 video loops; the page checks,
-hashes and compiles them in the browser and plays them at once on independent
-clocks in the authored portrait or landscape layouts. Files never leave the
-device. ``stage_studio(output)`` writes the flat, relative-URL site::
+The studio is client-only. A visitor picks a layout family (strips by default,
+authored, or their own layout file) and a panel count, then drops one video loop
+per panel; the page checks, hashes and compiles them in the browser and plays them
+at once on independent clocks in the family's portrait or landscape layout. The
+families and the counts each offers come from ``layouts.json``, the
+``simvltanea.layout-bundle/2`` that ``layout_bundle_v2()`` builds. Files never leave
+the device. ``stage_studio(output)`` writes the flat, relative-URL site::
 
     index.html  runtime.js  compiler.js  studio.js  layouts.json
 
@@ -22,7 +25,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from simvltanea.browser.layout_bundle import authored_layout_bundle
+from simvltanea.browser.layout_bundle import layout_bundle_v2
 
 HERE = Path(__file__).resolve().parent
 STUDIO_TITLE = 'SIMVLTANEA studio: your loops, playing at once'
@@ -74,6 +77,18 @@ padding:.4rem .6rem calc(.4rem + env(safe-area-inset-bottom))}
 #bar label{display:inline-flex;align-items:center;gap:.3rem;min-height:40px}
 #bar input{width:1.1rem;height:1.1rem;margin:0;accent-color:var(--accent)}
 #runtime-status{flex:1 1 14rem;margin:0;font-size:.85rem;color:var(--muted)}
+#layout{border:1px solid var(--line);border-radius:.75rem;margin:1.25rem 0 0;padding:.5rem 1rem 1rem}
+#layout legend{padding:0 .35rem;font-weight:600}
+#families{display:flex;flex-wrap:wrap;gap:.25rem 1.25rem}
+#families label,.panels{display:inline-flex;align-items:center;gap:.45rem;min-height:44px}
+#families input{width:1.15rem;height:1.15rem;margin:0;accent-color:var(--accent)}
+#panels{font:inherit;min-height:44px;min-width:4.5rem;padding:.25rem .5rem;color:var(--fg);background:var(--panel);
+border:2px solid var(--line);border-radius:.4rem}
+.layout-file{margin-top:.5rem}
+#layout-file:focus-visible+label{outline:3px solid var(--accent);outline-offset:3px}
+.layout-file label.button{color:var(--fg);background:transparent;border-color:var(--line)}
+#layout-error{color:#ffb8ab}
+#layout-error:empty,#layout-status:empty{display:none}
 @media (max-width:30rem){#setup{padding-top:.75rem}h1{font-size:1.4rem}#bar{gap:.25rem .45rem}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;
 scroll-behavior:auto!important}}
@@ -90,7 +105,7 @@ INDEX_HTML = '''<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="''' + CONTENT_SECURITY_POLICY + '''">
 <meta name="referrer" content="no-referrer">
-<meta name="description" content="Play two to seven of your own video loops at once, on this device.">
+<meta name="description" content="Play your own video loops at once, one per panel, on this device.">
 <title>''' + STUDIO_TITLE + '''</title>
 <style>''' + STYLE + '''</style>
 </head>
@@ -98,10 +113,24 @@ INDEX_HTML = '''<!doctype html>
 <main id="studio" data-view="setup">
 <section id="setup" aria-labelledby="studio-title">
 <h1 id="studio-title">SIMVLTANEA studio</h1>
-<p>Choose two to seven short video loops and watch them play at the same time, each repeating on its own clock.
-They are arranged in an authored portrait or landscape layout, and every panel is one of your loops, never filler or a copy.</p>
+<p>Pick a layout and a number of panels, then choose one short video loop per panel and watch them play at the
+same time, each repeating on its own clock. Every panel is one of your loops, never filler or a copy.</p>
 <p class="privacy"><strong>Your videos never leave this device.</strong> Nothing is uploaded: this page reads, checks and
 plays the files inside your browser.</p>
+<fieldset id="layout">
+<legend>Layout</legend>
+<div id="families" role="radiogroup" aria-label="Layout family"></div>
+<label class="panels" for="panels">Panels <select id="panels"></select></label>
+<p class="hint">Strips fill the screen edge to edge with one band per loop, zoomed in more the fewer
+panels there are. Authored layouts are the hand-placed engineering pairs.</p>
+<div class="layout-file">
+<input id="layout-file" class="visually-hidden" type="file" accept=".json,application/json">
+<label for="layout-file" class="button">Use my own layout file</label>
+<p class="hint">A layout preset or layout pair JSON file. It is read on this device and never uploaded.</p>
+</div>
+<p id="layout-status" role="status" aria-live="polite"></p>
+<p id="layout-error" role="alert"></p>
+</fieldset>
 <div id="drop" class="drop">
 <p>Drop video files here, or</p>
 <input id="files" class="visually-hidden" type="file" multiple accept="video/*,.mov,.mp4,.m4v,.webm">
@@ -148,7 +177,7 @@ class StudioStagingError(ValueError):
 
 def studio_files() -> dict[str, bytes]:
     """Return the exact bytes of every staged file, keyed by its flat name."""
-    layouts = json.dumps(authored_layout_bundle(), indent=2, ensure_ascii=False) + '\n'
+    layouts = json.dumps(layout_bundle_v2(), indent=2, ensure_ascii=False) + '\n'
     return {
         'index.html': INDEX_HTML.encode(),
         'runtime.js': (HERE / 'browser.runtime.js').read_bytes(),

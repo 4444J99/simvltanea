@@ -12,6 +12,7 @@ from .browser_studio import (
 from .layout_bundle import (
     authored_layout_bundle,
     authored_layouts,
+    layout_bundle_v2,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     'StudioStagingError',
     'authored_layout_bundle',
     'authored_layouts',
+    'layout_bundle_v2',
 ]
