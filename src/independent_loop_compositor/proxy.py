@@ -479,7 +479,7 @@ def input_matrix(source: Source) -> str:
 
 
 def filter_graph(source: Source, size: tuple[int, int], fps: Fraction) -> str:
-    """Rotation is applied by FFmpeg's autorotate before this graph runs."""
+    """Rotation is applied by FFmpeg's autorotate (on by default in every version) before this graph runs."""
     width, height = size
     return ",".join((
         f"fps={fraction_text(fps)}",
@@ -496,7 +496,7 @@ def encode_command(path: Path, destination: Path, source: Source, size: tuple[in
                    settings: Settings) -> list[str]:
     return [
         "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-        "-autorotate", "-i", str(path),
+        "-i", str(path),
         "-map", f"0:{source.stream_index}", "-an", "-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1",
         "-vf", filter_graph(source, size, settings.fps),
         "-t", f"{source.duration:.6f}", "-fps_mode", "cfr",
