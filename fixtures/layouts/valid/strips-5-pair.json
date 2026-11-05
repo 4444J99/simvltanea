@@ -1,0 +1,166 @@
+{
+  "format": "simvltanea.layout-pair/1",
+  "count": 5,
+  "portrait": {
+    "name": "strips-5-portrait",
+    "full_bleed": true,
+    "presentation": {
+      "overlap_px": 2,
+      "corner_radius": "0",
+      "lateral_jitter": "0"
+    },
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "0",
+          "0",
+          "1",
+          "1/5"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-2",
+        "rect": [
+          "0",
+          "1/5",
+          "1",
+          "1/5"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-3",
+        "rect": [
+          "0",
+          "2/5",
+          "1",
+          "1/5"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-4",
+        "rect": [
+          "0",
+          "3/5",
+          "1",
+          "1/5"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-5",
+        "rect": [
+          "0",
+          "4/5",
+          "1",
+          "1/5"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  },
+  "landscape": {
+    "name": "strips-5-landscape",
+    "full_bleed": true,
+    "presentation": {
+      "overlap_px": 2,
+      "corner_radius": "0",
+      "lateral_jitter": "0"
+    },
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "0",
+          "0",
+          "1/5",
+          "1"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-2",
+        "rect": [
+          "1/5",
+          "0",
+          "1/5",
+          "1"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-3",
+        "rect": [
+          "2/5",
+          "0",
+          "1/5",
+          "1"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-4",
+        "rect": [
+          "3/5",
+          "0",
+          "1/5",
+          "1"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-5",
+        "rect": [
+          "4/5",
+          "0",
+          "1/5",
+          "1"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  }
+}

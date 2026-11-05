@@ -5,6 +5,8 @@ These are synthetic design demonstrations, not artist-approved compositions.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from simvltanea.authoring.composition_model import Composition, Layout, LoopState, Placement
 
 
@@ -14,7 +16,7 @@ def p(loop_id: str, x: float, y: float, w: float, h: float, z: int = 0, fit: str
 
 # Geometry is intentionally authored per count/orientation rather than generated
 # by a generic grid. Negative space and hierarchy vary across the matrix.
-# All entries are configurable via ``src/simvltanea/layouts.json``.
+# Other geometry comes from explicit files by path (``load_layout_file``), never from the package.
 _AUTHORED_DEFAULT = {
     2: {
         "portrait": ((0.04, 0.03, 0.92, 0.44), (0.04, 0.52, 0.92, 0.44)),
@@ -42,30 +44,25 @@ _AUTHORED_DEFAULT = {
     },
 }
 
-def _load_authored():
-    import json
-    from pathlib import Path
-    base = _AUTHORED_DEFAULT.copy()
-    cfg = Path(__file__).resolve().parents[1] / "layouts.json"
-    if cfg.is_file():
-        try:
-            data = json.loads(cfg.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    try:
-                        count = int(k)
-                        if isinstance(v, dict) and "portrait" in v and "landscape" in v:
-                            base[count] = {
-                                "portrait": tuple(tuple(x) for x in v["portrait"]),
-                                "landscape": tuple(tuple(x) for x in v["landscape"]),
-                            }
-                    except Exception:
-                        continue
-        except Exception:
-            pass
-    return base
+AMBIENT_OVERRIDE = Path(__file__).resolve().parents[1] / "layouts.json"
 
-AUTHORED = _load_authored()
+
+class AmbientLayoutOverrideError(RuntimeError):
+    """The removed in-package override file is present."""
+
+
+def refuse_ambient_override(path: Path = AMBIENT_OVERRIDE) -> None:
+    """Fail loudly instead of silently reading layout geometry from inside the package."""
+    if path.exists():
+        raise AmbientLayoutOverrideError(
+            f"{path}: the in-package layout override was removed and is never read. Delete this file and "
+            "supply layouts as explicit files by path: load_layout_file(path) for a "
+            "simvltanea.layout-preset/1 or simvltanea.layout-pair/1 file (check it with "
+            "python -m tools.verification.verify_layouts --layouts FILE).")
+
+
+refuse_ambient_override()
+AUTHORED = dict(_AUTHORED_DEFAULT)
 
 
 def build_artifact001(count: int) -> Composition:
@@ -86,7 +83,6 @@ def build_artifact001(count: int) -> Composition:
 
 if __name__ == "__main__":
     import argparse
-    from pathlib import Path
     parser = argparse.ArgumentParser()
     parser.add_argument("count", type=int, choices=sorted(AUTHORED))
     parser.add_argument("--output", type=Path)

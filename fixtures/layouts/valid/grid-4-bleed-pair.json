@@ -1,0 +1,138 @@
+{
+  "format": "simvltanea.layout-pair/1",
+  "count": 4,
+  "portrait": {
+    "name": "grid-4-portrait",
+    "full_bleed": true,
+    "presentation": {
+      "overlap_px": 8,
+      "corner_radius": "1/20",
+      "lateral_jitter": "0"
+    },
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "0",
+          "0",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-2",
+        "rect": [
+          "1/2",
+          "0",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-3",
+        "rect": [
+          "0",
+          "1/2",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-4",
+        "rect": [
+          "1/2",
+          "1/2",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  },
+  "landscape": {
+    "name": "grid-4-landscape",
+    "full_bleed": true,
+    "presentation": {
+      "overlap_px": 8,
+      "corner_radius": "1/20",
+      "lateral_jitter": "0"
+    },
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "0",
+          "0",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-2",
+        "rect": [
+          "1/2",
+          "0",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-3",
+        "rect": [
+          "0",
+          "1/2",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-4",
+        "rect": [
+          "1/2",
+          "1/2",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  }
+}
