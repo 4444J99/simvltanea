@@ -726,15 +726,17 @@ def render_from_args(args: Any) -> int:
             seam_over["sigma"] = str(Fraction(str(args.seam_sigma)).limit_denominator(1000))
         if getattr(args, "config", None) is not None:
             cfg = Path(args.config).expanduser()
-            if cfg.is_file():
-                try:
-                    data = resolve_references(json.loads(cfg.read_text(encoding="utf-8")))
-                    if isinstance(data.get("slice"), dict):
-                        slice_over.update(data["slice"])
-                    if isinstance(data.get("seam"), dict):
-                        seam_over.update(data["seam"])
-                except Exception:
-                    pass
+            try:
+                data = resolve_references(json.loads(cfg.read_text(encoding="utf-8")))
+            except OSError as exc:
+                raise StateError(f"config {cfg}: {exc.strerror or exc}") from exc
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise StateError(f"config {cfg}: invalid JSON or reference: {exc}") from exc
+            require(isinstance(data, dict), f"config {cfg}: top level must be a JSON object")
+            if isinstance(data.get("slice"), dict):
+                slice_over.update(data["slice"])
+            if isinstance(data.get("seam"), dict):
+                seam_over.update(data["seam"])
         def _coerce_rational(val):
             if isinstance(val, (int, float)):
                 return str(Fraction(str(val)).limit_denominator(1000))
