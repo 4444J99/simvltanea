@@ -18,7 +18,7 @@
   "capabilities": [
     {
       "id": "independent-loop-authoring",
-      "description": "Validate independent loop identities, clocks, events, and paired authored layouts."
+      "description": "Validate independent loop identities, clocks, events, paired authored layouts (2 to 7 loops), and computed full-bleed strips layouts (1 to 12 loops)."
     },
     {
       "id": "independent-loop-preview",

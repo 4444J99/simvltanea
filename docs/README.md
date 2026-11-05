@@ -3,6 +3,7 @@
 - [Architecture and audio](architecture/AUDIO_ARCHITECTURE.md), [canon](architecture/CANON.md), and [slice field](architecture/SEAMED_SLICE_FIELD.md)
 - [Edition authoring](authoring/EDITION_AUTHORING.md), [configuration](authoring/CONFIG.md), and the [browser compiler](authoring/BROWSER_COMPILER.md)
 - [Proxy clips](authoring/PROXY_CLIPS.md): small, browser-playable copies of phone clips
+- [Layout presets](authoring/LAYOUT_PRESETS.md): full-bleed strips for 1 to 12 loops, zoom tied to the count, and authored pairs for 2 to 7
 - [Browser studio](authoring/BROWSER_STUDIO.md): play your own 2 to 7 loops at once in a static, client-only page
 - [Configurable layout](governance/LAYOUT.md)
 - [Structure](governance/STRUCTURE.md), [naming](governance/NAMING.md), [branches](governance/BRANCHES.md), and [status](governance/STATUS.md)

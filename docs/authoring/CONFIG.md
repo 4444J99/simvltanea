@@ -24,11 +24,52 @@ Deterministic random `slice_rect()` `src/simvltanea/authoring/composition.py:297
 - **Renderer**: `src/simvltanea/rendering/render_triptych.py:1028` adjacency detection + `crop+boxblur+overlay` strip, `seam_width` → pixel gutter (even), `seam_sigma*min(W,H)` → `boxblur` radius, mode `morph` vs `feather` vs `blur`. Configurable per segment via `Segment.seam`.
 - **Browser**: `src/simvltanea/browser/browser.runtime.js:53` `renderSeams()` — `backdrop-filter: blur(sigma)`, mode-aware opacity/mixBlendMode, seam width → CSS strip. All driven by `plan.seam`.
 
-## N and geometry — minimum 2
+## N and geometry — strips 1 to 12, authored 2 to 7
 
-- **Authored pairs** `src/simvltanea/authoring/artifact001_layouts.py:12` `AUTHORED` 2..6 (now 5 pairs). **Configurable**: copy `examples/layouts.json` → `src/simvltanea/layouts.json` (`_load_authored()` merges). Add any `N` with `portrait`/`landscape` rect arrays `[[x,y,w,h], ...]` in 0..1 (see `docs/architecture/SEAMED_SLICE_FIELD.md`).
-- **Count CLI**: `PYTHONPATH=src python3 -m simvltanea.artifact001_layouts 2 --output ...`, `src/simvltanea/generators/make_artifact_001.py` loop `2..6` (override via `build_artifact001(count)` call), `src/simvltanea/generators/make_runtime_fixture.py` loop `2..7` (SEVEN stays experimental).
+- **Strips (default family)** `src/simvltanea/authoring/layout_presets.py`: full-bleed rows
+  (portrait) and columns (landscape) for N=1..12, zoom tied to N through the state-wide `slice`.
+  Choose them with `build_strips(count)`, `strips_layouts(count)` and `strips_slice(count)`; the
+  preset is data (`examples/layout-presets/strips.json`). See [Layout presets](LAYOUT_PRESETS.md).
+- **Authored pairs** `src/simvltanea/authoring/artifact001_layouts.py` `AUTHORED`: reviewed
+  engineering pairs for N=2..7 through `build_artifact001(count)`. Other counts raise.
+- **Your own layouts** are explicit files given by path: `load_layout_file(path)` reads a
+  `simvltanea.layout-preset/1` or `simvltanea.layout-pair/1` file and validates it strictly.
+  Nothing is read from inside the package; a `src/simvltanea/layouts.json` makes importing
+  `simvltanea.authoring` fail.
+- **Fixture generators**: `src/simvltanea/generators/make_artifact_001.py` and
+  `src/simvltanea/generators/make_runtime_fixture.py` build the authored pairs for `2..7` and
+  strips states for N=1, 5, 8 and 12, both orientations.
 - **Canvas**: `width/height/fps` per manifest `canvas`, CLI `--width/--height`, edition `source.width/height/fps` and `settings.canvas`.
+
+## Export length — the 1,024-segment cap
+
+`render_triptych --state` (and `independent-loop-compositor render --state`) exports through FFmpeg
+in segments. `compile_segments()` in `src/simvltanea/authoring/composition.py` starts a new segment
+at every frame where, in the exported orientation, any loop wraps, changes source, re-rolls its
+slice, is held or released, or where a move event changes the layout. Coinciding changes share one
+segment. The renderer refuses more than `MAX_SEGMENTS = 1024` segments in one export. The cap is a
+resource guard and stays fixed.
+
+The cap counts every loop together. The browser's guard allows 1,024 spans times the loop count,
+so a long piece that plays in the studio can still be refused on export. Many short loops make this more
+likely. With the default selection period (the loop's length) a slice re-roll falls on the wrap and
+adds no segment. An export needs at most roughly `1 + Σ seconds × rate / loop length` segments. For
+example, the `make_artifact_001` strips state for twelve 3-second loops (rates 1 to 1.77) needs
+3,058 segments for 600 seconds, and its first 4,808 frames (about 200 seconds) fit.
+
+The refusal names the cap and the remedy. That state at 600 seconds prints:
+
+```text
+composition: composition needs 3058 render segments, over the renderer's cap of 1024 segments
+(MAX_SEGMENTS); a new segment starts at every loop wrap, source change, slice re-roll and event.
+Remedy: shorten the export to at most 4808 frames (200.333 s at 24 fps), use longer loops or fewer
+loops. No panels were removed
+```
+
+(The message is one line; it is wrapped here.)
+
+To export, shorten the piece to the frame count the message gives (the studio's `seconds`, or the
+state's `frames`), use longer loops, or use fewer loops. No loop is dropped to make it fit.
 
 ## Canvas, FPS, CRF, presets, audio — unchanged configurability
 
@@ -51,9 +92,9 @@ cat examples/slice-seam-config.json | PYTHONPATH=src python3 -m simvltanea.make_
 python3 -m tools.verification.verify_editions  # validates 7 editions
 python3 -m tools.editions.build_edition simvltanea-slice --render --draft
 
-# 4) Layout override
-cp examples/layouts.json src/simvltanea/layouts.json  # edit rects, then
-PYTHONPATH=src python3 -m simvltanea.make_artifact_001 --prepare-only && PYTHONPATH=src python3 -m simvltanea.make_runtime_fixture
+# 4) Your own layouts, validated by path (never copied into the package)
+python3 -m tools.verification.verify_layouts --layouts my-layouts.json
+python3 -m tools.verification.verify_layouts --presets examples/layout-presets/strips.json
 ```
 
-See `docs/architecture/SEAMED_SLICE_FIELD.md` for invariant, `examples/slice-seam-config.json` for annotated knob file, `examples/layouts.json` for geometry.
+See `docs/architecture/SEAMED_SLICE_FIELD.md` for invariant, `examples/slice-seam-config.json` for annotated knob file, `examples/layout-presets/strips.json` and `examples/layouts.json` for geometry.

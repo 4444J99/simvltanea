@@ -89,7 +89,9 @@ Every edition entry in `editions/registry.json` must satisfy `tools.verification
 
 ## Invariant
 
-`N` independent loops + authored portrait/landscape layouts + independent rational clocks + simultaneous coexistence + presentation-only orientation changes + no filler (`README.md` Invariant). Authored engineering pairs currently cover N=2 through N=7; unsupported counts fail explicitly. See `docs/architecture/CANON.md`.
+`N` independent loops + authored portrait/landscape layouts + independent rational clocks + simultaneous coexistence + presentation-only orientation changes + no filler (`README.md` Invariant). See `docs/architecture/CANON.md`.
+
+Two layout families exist. **Strips** (default) are computed full-bleed partitions for any count from 1 through 12. **Authored** engineering pairs exist for 2 through 7. Each family places exactly one cell per independent loop. A count outside the selected family's range fails explicitly and is never filled, duplicated or moved to the other family: `build_artifact001(8)` still raises, and strips at 13 raise. Strips and their zoom curve are engineering presets, not artist-approved designs (`docs/authoring/LAYOUT_PRESETS.md`).
 
 ## Secrets
 

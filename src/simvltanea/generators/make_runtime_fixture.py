@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Generate labeled original synthetic media and paired data for N=2 through N=7."""
+"""Generate labeled original synthetic media and paired data.
+
+Authored pairs cover N=2 through N=7 (unchanged). Strips fixtures cover N=1, 5, 8
+and 12 in both orientations with ramp media whose rows are distinguishable: red is a
+vertical ramp over the source rows, green a horizontal ramp over the source columns,
+and blue a per-clip tint. No ramp pixel is near black, so an empty (background)
+pixel in an export or a screenshot is unambiguous.
+"""
 from __future__ import annotations
 
 import sys
@@ -16,11 +23,90 @@ from fractions import Fraction
 
 from PIL import Image, ImageDraw, ImageFont
 from simvltanea.authoring import composition as c
-from simvltanea.authoring import build_artifact001
+from simvltanea.authoring import build_artifact001, build_strips
 from simvltanea.browser import HERE, build_preview
 from simvltanea.paths import PROOFS_DIR, REPO_ROOT, require_in_var
 
 ROOT = PROOFS_DIR
+# Strips fixtures: counts, ramp media geometry and the styled preset at the style maxima.
+STRIPS_COUNTS = (1, 5, 8, 12)
+RAMP_SIZE = (540, 720)  # 3:4, the clip shape measured in the layout presets spec
+RAMP_LOW, RAMP_SPAN = 32, 192  # red/green ramps run 32..223; blue tints run 80..234
+STYLED_STRIPS_PRESET = {"format": "simvltanea.layout-preset/1", "name": "strips-styled", "family": "strips",
+                        "style": {"corner_radius": "1/20", "lateral_jitter": "1/20"}}
+
+
+def ramp_tint(index: int) -> int:
+    """Blue tint of strip clip ``index`` (0-based); distinct per clip and never near black."""
+    return 80 + 14 * index
+
+
+def ramp_level(position: int, extent: int) -> int:
+    """Ramp value of row (or column) ``position`` out of ``extent``, rounded half up."""
+    return RAMP_LOW + (2 * (RAMP_SPAN - 1) * position + extent - 1) // (2 * (extent - 1))
+
+
+def ramp_row(value: float, extent: int = RAMP_SIZE[1]) -> float:
+    """Inverse ramp: the source row (red) or column (green, ``extent=540``) carrying ``value``."""
+    return (value - RAMP_LOW) * (extent - 1) / (RAMP_SPAN - 1)
+
+
+def ramp_frame(index: int) -> Image.Image:
+    width, height = RAMP_SIZE
+    red = Image.new('L', (width, height))
+    red.putdata([ramp_level(y, height) for y in range(height) for _ in range(width)])
+    green = Image.new('L', (width, height))
+    green.putdata([ramp_level(x, width) for _ in range(height) for x in range(width)])
+    return Image.merge('RGB', (red, green, Image.new('L', (width, height), ramp_tint(index))))
+
+
+def ramp_sources(root: Path, commands_out: list[list[str]] | None = None) -> list[dict]:
+    """Write (or reuse) the twelve ramp clips under ``root/media``; return hashed sources."""
+    root = root.resolve()
+    c.require(require_in_var(root, 'fixture output') == root, 'fixture output must remain inside var')
+    (root / 'media').mkdir(parents=True, exist_ok=True)
+    ramps = []
+    width, height = RAMP_SIZE
+    for index in range(max(STRIPS_COUNTS)):
+        target = root / 'media' / f'strip-{index + 1}.mp4'
+        command = ['ffmpeg','-v','error','-y','-f','rawvideo','-pix_fmt','rgb24',
+                   '-s',f'{width}x{height}','-r','24','-i','-','-an','-c:v','libx264',
+                   '-preset','ultrafast','-crf','12','-threads','1','-pix_fmt','yuv420p',
+                   # Tag the BT.601 matrix FFmpeg converts with, so browsers decode the ramps alike.
+                   '-colorspace','smpte170m','-color_primaries','smpte170m','-color_trc','smpte170m',
+                   '-color_range','tv',str(target)]
+        if not target.exists():
+            frame = ramp_frame(index).tobytes()
+            process = subprocess.Popen(command, stdin=subprocess.PIPE)
+            try:
+                for _ in range(192):
+                    process.stdin.write(frame)
+            finally:
+                process.stdin.close()
+            if process.wait() != 0:
+                raise RuntimeError('Synthetic ramp encoding failed')
+        ramps.append(dict(id=f'strip-{index + 1}', path=f'media/strip-{index + 1}.mp4',
+                          sha256=c.sha256_file(target), kind='video', duration='8'))
+        if commands_out is not None:
+            commands_out.append(command[:-1] + [str(target.relative_to(root))])
+    return ramps
+
+
+def prepare_strips(root: Path, sources_out: list[dict], commands_out: list[list[str]]) -> list[Path]:
+    """Write ramp media and strips states (default and styled) for STRIPS_COUNTS."""
+    ramps = ramp_sources(root, commands_out)
+    sources_out.extend(ramps)
+    paths = []
+    for count in STRIPS_COUNTS:
+        for suffix, preset in (('', 'strips'), ('-styled', STYLED_STRIPS_PRESET)):
+            state = build_strips(count, preset, sources=ramps[:count])
+            path = root / f'state-strips-{count}{suffix}.json'
+            c.save_state(state, path)
+            build_preview(path, root / f'preview-strips-{count}{suffix}')
+            paths.append(path)
+    return paths
+
+
 def _get_font(name: str, size: int):
     candidates = [name, 'DejaVuSans-Bold.ttf', 'DejaVuSans.ttf', '/System/Library/Fonts/Supplemental/Arial.ttf', '/System/Library/Fonts/Helvetica.ttc', 'Arial.ttf']
     for cand in candidates:
@@ -109,6 +195,7 @@ def prepare(root: Path = ROOT, slice_width: float = 0.5, slice_height: float = 0
     build_preview(control_path,root/'preview-controls')
     wrap=copy.deepcopy(c.load_state(root / 'state-3.json'));wrap['loops'][0]['trim']=['1','2']
     c.save_state(wrap,root/'state-trim.json');build_preview(root/'state-trim.json',root/'preview-trim')
+    states += prepare_strips(root, sources, commands)
     (root/'sources.json').write_text(json.dumps(dict(kind='original-synthetic',sources=sources,commands=commands),indent=2)+'\n')
     return states
 
