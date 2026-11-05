@@ -20,6 +20,9 @@ Layout under --root (private; never committed; may live outside the checkout):
   analysis/ledger.jsonl                 one line per collected batch with the cost estimate
 
 Commands: prepare | submit | collect | run | report
+`collect --pending` collects every batch that has no line in the ledger yet. `submit` and `run` never
+send a clip that sits in such a batch, so re-running after an interrupted `run` cannot upload twice;
+`run` also collects those pending batches. Exit codes: 0 ok, 5 a local file error (type only, no path).
 
 Run:  python3 -m tools.media.tag_clips run --root /path/to/live-photos --dry-run
 The model-facing pieces need the optional extra: python3 -m pip install -e ".[analysis]"
@@ -41,8 +44,11 @@ from typing import Literal
 from tools.media.private_root import resolve_private_root
 
 SCHEMA_ID = "clip-analysis/v2"  # v2: privacy.sharing_sensitivity is separate from the safety verdict
-UUID_RE = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$")
-BATCH_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
+UUID_RE = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")  # fullmatch only
+BATCH_ID_RE = re.compile(r"[A-Za-z0-9_]+")  # fullmatch only
+MAX_FRAME_PX = 1024  # frames are thumbnails; the cap keeps full-resolution images from being uploaded
+DEFAULT_BATCH_SIZE = 200  # a smaller batch is a smaller upload that can be lost without being recorded
+EXIT_IO_ERROR = 5
 # $ per 1M tokens (input, output); batch pricing is 50% of these.
 PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-sonnet-5-5": (2.00, 10.00), "claude-opus-5-5": (4.00, 20.00)}
 FRAME_FRACTIONS = (0.1, 0.5, 0.9)
@@ -174,11 +180,46 @@ def write_json(path: pathlib.Path, value: dict, **kwargs) -> None:
     temporary.replace(path)
 
 
+def ledger_batches(root: pathlib.Path) -> set[str]:
+    """Batch ids that have a line in ``analysis/ledger.jsonl`` (collected). Unreadable lines are skipped."""
+    ledger = root / "analysis" / "ledger.jsonl"
+    done: set[str] = set()
+    if ledger.exists():
+        for line in ledger.read_text(encoding="utf-8").splitlines():
+            try:
+                done.add(json.loads(line)["batch"])
+            except (ValueError, KeyError, TypeError):
+                continue
+    return done
+
+
+def pending_batches(root: pathlib.Path) -> list[str]:
+    """Batch ids recorded under ``analysis/batches/`` that have no ledger line yet, in name order."""
+    collected = ledger_batches(root)
+    return [path.stem for path in sorted((root / "analysis" / "batches").glob("*.json"))
+            if BATCH_ID_RE.fullmatch(path.stem) and path.stem not in collected]
+
+
+def pending_uuids(root: pathlib.Path) -> set[str]:
+    """Clips already uploaded in a batch that has not been collected."""
+    uuids: set[str] = set()
+    for batch_id in pending_batches(root):
+        try:
+            meta = json.loads((root / "analysis" / "batches" / f"{batch_id}.json").read_text(encoding="utf-8"))
+            uuids.update(u for u in meta["uuids"] if isinstance(u, str))
+        except (ValueError, KeyError, TypeError):
+            raise SystemExit(f"Batch record {batch_id} is unreadable; fix or remove it before submitting "
+                             "(its clips may already have been uploaded).") from None
+    return uuids
+
+
 def ready_clips(root: pathlib.Path) -> list[str]:
-    """UUIDs with an export receipt and no final tag record yet."""
+    """UUIDs with an export receipt, no final tag record and no upload waiting to be collected."""
     tags = root / "analysis" / "tags"
+    waiting = pending_uuids(root)
     return [receipt.parent.name for receipt in sorted((root / "originals").glob("*/.done"))
-            if UUID_RE.match(receipt.parent.name) and not (tags / f"{receipt.parent.name}.json").exists()]
+            if UUID_RE.fullmatch(receipt.parent.name) and receipt.parent.name not in waiting
+            and not (tags / f"{receipt.parent.name}.json").exists()]
 
 
 def read_receipt(root: pathlib.Path, uuid: str) -> dict:
@@ -192,18 +233,19 @@ def extract(root: pathlib.Path, uuid: str, px: int) -> list[pathlib.Path]:
     mov = root / "originals" / uuid / pathlib.Path(receipt["video"]["name"]).name
     duration = max(float(receipt["video"].get("duration") or 1.0), 0.2)
     out_dir = d["frames"] / uuid
-    out_dir.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(out_dir, ignore_errors=True)  # never reuse frames of another size or a partial earlier file
+    out_dir.mkdir(parents=True)
     frames = []
     for index, fraction in enumerate(FRAME_FRACTIONS):
         out = out_dir / f"f{index}.jpg"
-        if not out.exists():
-            proc = subprocess.run(
-                ["ffmpeg", "-v", "error", "-y", "-ss", f"{duration * fraction:.3f}", "-i", str(mov), "-frames:v", "1",
-                 "-vf", f"scale='if(gt(iw,ih),{px},-2)':'if(gt(iw,ih),-2,{px})'", "-q:v", "4", str(out)],
-                capture_output=True, text=True,
-            )
-            if proc.returncode != 0 or not out.exists():
-                raise SystemExit(f"ffmpeg could not extract frame {index} for clip {uuid}.")
+        proc = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-ss", f"{duration * fraction:.3f}", "-i", str(mov), "-frames:v", "1",
+             "-vf", f"scale='if(gt(iw,ih),{px},-2)':'if(gt(iw,ih),-2,{px})'", "-q:v", "4", str(out)],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0 or not out.exists():
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise SystemExit(f"ffmpeg could not extract frame {index} for clip {uuid}.")
         frames.append(out)
     return frames
 
@@ -250,7 +292,15 @@ def local_features(frames: list[pathlib.Path], receipt: dict) -> dict:
     }
 
 
+def require_pillow() -> None:
+    try:
+        from PIL import Image  # noqa: F401 - only the import is checked
+    except ImportError:
+        raise SystemExit(f"Pillow is not installed. {INSTALL_HINT}") from None
+
+
 def cmd_prepare(args) -> list[str]:
+    require_pillow()  # before any frame is extracted: local features need it
     if shutil.which("ffmpeg") is None:
         raise SystemExit("ffmpeg is required to extract frames; install FFmpeg first.")
     d = dirs(args.root)
@@ -309,10 +359,14 @@ def cmd_submit(args, uuids: list[str]) -> list[str]:
     anthropic = import_anthropic()
     schema = anthropic.transform_schema(clip_analysis_model())
     api = make_client(args.keychain_service)
+    # No SDK retries for the upload: a retried multi-megabyte POST could create a billed batch that this
+    # tool never records. A batch whose reply was lost shows up as pending in the Console instead.
+    uploader = api.with_options(max_retries=0)
     batch_ids = []
     for start in range(0, len(uuids), args.batch_size):
         chunk = uuids[start: start + args.batch_size]
-        batch = api.messages.batches.create(requests=[build_request(args.root, u, args.model, schema) for u in chunk])
+        batch = uploader.messages.batches.create(
+            requests=[build_request(args.root, u, args.model, schema) for u in chunk])
         write_json(dirs(args.root)["batches"] / f"{batch.id}.json",
                    {"batch": batch.id, "model": args.model, "uuids": chunk, "schema": SCHEMA_ID, "frame_px": args.frame_px})
         print(f"submitted {batch.id} ({len(chunk)} clips)")
@@ -329,48 +383,56 @@ def result_cost(usage, model: str) -> float:
 
 
 def build_record(entry, meta: dict, batch_id: str, features: dict | None) -> dict:
-    """Turn one batch result entry into the per-clip record (success, refusal, invalid, errored)."""
+    """Turn one *succeeded* batch result into the per-clip record (analysis, refusal or invalid output).
+
+    Results that did not succeed (errored, expired, canceled) are transient and get no record.
+    """
     record = {"uuid": entry.custom_id, "schema": SCHEMA_ID, "model": meta["model"], "batch": batch_id,
               "analysis": None, "error": None, "usd": 0.0, "features": features}
-    if entry.result.type == "succeeded":
-        message = entry.result.message
-        record["usd"] = result_cost(message.usage, meta["model"])
-        text = next((block.text for block in message.content if block.type == "text"), "")
-        if message.stop_reason == "refusal":
-            record["error"] = "refusal"
-        else:
-            try:
-                analysis = clip_analysis_model().model_validate_json(text).model_dump()
-                analysis["subjects"] = list(dict.fromkeys(analysis["subjects"]))
-                record["analysis"] = analysis
-            except Exception as exc:  # noqa: BLE001 - the type is enough; never echo model text
-                record["error"] = f"invalid_output: {type(exc).__name__}"
+    message = entry.result.message
+    record["usd"] = result_cost(message.usage, meta["model"])
+    text = next((block.text for block in message.content if block.type == "text"), "")
+    if message.stop_reason == "refusal":
+        record["error"] = "refusal"
     else:
-        record["error"] = entry.result.type
+        try:
+            analysis = clip_analysis_model().model_validate_json(text).model_dump()
+            analysis["subjects"] = list(dict.fromkeys(analysis["subjects"]))
+            record["analysis"] = analysis
+        except Exception as exc:  # noqa: BLE001 - the type is enough; never echo model text
+            record["error"] = f"invalid_output: {type(exc).__name__}"
     record["needs_review"] = bool(record["error"] or record["analysis"]["safety"]["verdict"] != "clear")
     return record
 
 
 def collect_batch(api, args, batch_id: str) -> None:
-    if not BATCH_ID_RE.match(batch_id):
+    if not BATCH_ID_RE.fullmatch(batch_id):
         raise SystemExit("Batch ids may contain only letters, digits and underscores.")
     d = dirs(args.root)
     meta_path = d["batches"] / f"{batch_id}.json"
     if not meta_path.exists():
         raise SystemExit(f"Unknown batch {batch_id}: no record under analysis/batches/.")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    expected = set(meta["uuids"])
     while True:
         batch = api.messages.batches.retrieve(batch_id)
         if batch.processing_status == "ended":
             break
         print(f"{batch_id}: {batch.processing_status} {batch.request_counts}", flush=True)
         time.sleep(args.poll)
-    ok = failed = 0
+    ok = failed = ignored = 0
+    transient: dict[str, int] = {}
     usd = 0.0
     for entry in api.messages.batches.results(batch_id):
         uuid = entry.custom_id
-        if not UUID_RE.match(uuid):
-            continue  # never build a path from an unexpected id
+        if not UUID_RE.fullmatch(uuid) or uuid not in expected:
+            ignored += 1  # never build a path from an id this batch did not contain
+            continue
+        if entry.result.type != "succeeded":
+            # errored / expired / canceled: transient. No record, frames stay, the clip stays eligible
+            # (this batch gets its ledger line below, so it no longer counts as pending).
+            transient[entry.result.type] = transient.get(entry.result.type, 0) + 1
+            continue
         features_path = d["features"] / f"{uuid}.json"
         features = json.loads(features_path.read_text(encoding="utf-8")) if features_path.exists() else None
         record = build_record(entry, meta, batch_id, features)
@@ -383,13 +445,20 @@ def collect_batch(api, args, batch_id: str) -> None:
         shutil.rmtree(d["frames"] / uuid, ignore_errors=True)  # derivative personal images: do not keep
     with (d["base"] / "ledger.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"batch": batch_id, "model": meta["model"], "ok": ok, "failed": failed,
+                                 "transient": dict(sorted(transient.items())), "ignored": ignored,
                                  "usd": round(usd, 4)}) + "\n")
-    print(f"{batch_id}: ok={ok} failed={failed} cost~${usd:.4f}")
+    print(f"{batch_id}: ok={ok} failed={failed} retry={sum(transient.values())} ignored={ignored} "
+          f"cost~${usd:.4f}")
 
 
 def cmd_collect(args, batch_ids: list[str]) -> None:
+    if args.pending:
+        batch_ids = list(dict.fromkeys([*batch_ids, *pending_batches(args.root)]))
+        if not batch_ids:
+            print("no pending batches")
+            return
     if not batch_ids:
-        raise SystemExit("collect needs at least one --batch id.")
+        raise SystemExit("collect needs at least one --batch id or --pending.")
     api = make_client(args.keychain_service)
     for batch_id in batch_ids:
         collect_batch(api, args, batch_id)
@@ -427,10 +496,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help="private storage root (outside the checkout, or under var/)")
     parser.add_argument("--model", default="claude-haiku-5-5", choices=sorted(PRICES))
     parser.add_argument("--limit", type=int, default=0)
-    parser.add_argument("--frame-px", type=int, default=640)
-    parser.add_argument("--batch-size", type=int, default=400)
+    parser.add_argument("--frame-px", type=int, default=640, help=f"long side of each frame, at most {MAX_FRAME_PX}")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
+                        help="clips per batch; kept small so a lost upload is cheap (uploads are not retried)")
     parser.add_argument("--poll", type=int, default=30)
     parser.add_argument("--batch", action="append", default=[], help="batch id(s) for collect")
+    parser.add_argument("--pending", action="store_true",
+                        help="collect: also collect every batch that has no ledger line yet")
     parser.add_argument("--keychain-service", default=None,
                         help="macOS Keychain item holding the API key (default: ANTHROPIC_API_KEY via the SDK)")
     parser.add_argument("--dry-run", action="store_true", help="prepare locally and print the projected cost; upload nothing")
@@ -439,10 +511,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    if min(args.limit, args.poll) < 0 or min(args.frame_px, args.batch_size) < 1:
-        raise SystemExit("--limit and --poll must be >= 0; --frame-px and --batch-size must be positive.")
+def run_command(args) -> int:
     args.root = resolve_private_root(args.root)
     uploads = args.command in ("submit", "run") and not args.dry_run
     if uploads:
@@ -455,13 +524,28 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "collect":
         cmd_collect(args, args.batch)
     elif args.command == "run":
-        batch_ids = cmd_submit(args, cmd_prepare(args))
-        if batch_ids:
-            cmd_collect(args, batch_ids)
+        cmd_submit(args, cmd_prepare(args))
+        if not args.dry_run and pending_batches(args.root):  # new batches and any left by an earlier run
+            args.pending = True
+            cmd_collect(args, [])
             cmd_report(args)
     else:
         cmd_report(args)
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if min(args.limit, args.poll) < 0 or min(args.frame_px, args.batch_size) < 1:
+        raise SystemExit("--limit and --poll must be >= 0; --frame-px and --batch-size must be positive.")
+    if args.frame_px > MAX_FRAME_PX:
+        raise SystemExit(f"--frame-px is capped at {MAX_FRAME_PX}: frames are thumbnails, not full-resolution images.")
+    try:
+        return run_command(args)
+    except OSError as exc:  # the message and filename can hold private paths: print the type only
+        print(f"local file error ({type(exc).__name__}); check permissions and free space under --root.",
+              file=sys.stderr, flush=True)
+        return EXIT_IO_ERROR
 
 
 if __name__ == "__main__":

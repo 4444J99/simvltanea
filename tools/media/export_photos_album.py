@@ -18,8 +18,12 @@ Create <root>/STOP to finish in-flight items and exit; remove it and re-run to r
 
 Only UUIDs are logged or recorded: never names, captions or paths of personal media.
 
-Exit codes: 0 all in-scope items exported, 1 failures remain after the retry rounds,
-2 stopped by STOP, 3 refused or deferred by the metered-link rule.
+Only one export may run per root: a second run exits at once while <root>/.export.lock is held.
+
+Exit codes: 0 all in-scope items exported, 1 failures remain after the retry rounds (even when STOP
+also ended the run), 2 stopped by STOP with no failures left, 3 refused or deferred by the
+metered-link rule, 4 another export holds the lock, 5 a local file error (type only, no path),
+130 interrupted by Ctrl-C (queued items are cancelled, in-flight items finish).
 
 Run:  python3 -m tools.media.export_photos_album --root /path/to/live-photos
 """
@@ -27,6 +31,7 @@ Run:  python3 -m tools.media.export_photos_album --root /path/to/live-photos
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -45,10 +50,11 @@ from typing import Callable
 from tools.media.private_root import resolve_private_root
 
 VIDEO_EXT = {".mov", ".mp4", ".m4v"}
-ID_RE = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/L0/\d+$")
+IMAGE_EXT = {".heic", ".jpg", ".jpeg", ".png"}  # candidates for the primary still; sidecars (.aae) are not
+ID_RE = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/L0/\d+")  # use fullmatch
 APPLESCRIPT_ERROR_RE = re.compile(r"\((-\d+)\)")
 RECEIPT_SCHEMA = "live-photo-export/v1"
-EXIT_FAILURES, EXIT_STOPPED, EXIT_METERED = 1, 2, 3
+EXIT_FAILURES, EXIT_STOPPED, EXIT_METERED, EXIT_LOCKED, EXIT_IO_ERROR, EXIT_INTERRUPTED = 1, 2, 3, 4, 5, 130
 
 # AppleScript lives in Python strings (tools/ may only hold .py and .md) and is passed to
 # `osascript -e`, one -e per line. The id and output folder arrive as argv, never interpolated.
@@ -129,29 +135,70 @@ def probe(path: pathlib.Path) -> dict:
 
 # --- network awareness -------------------------------------------------------------------
 # A first export pulls the original from iCloud (~4 MB per Live Photo, ~27 GB for 6,500 items).
-# On an iPhone Personal Hotspot (gateway 172.20.10.x, interface flagged "constrained") that is
-# slow, uses the owner's data plan, and starves every other job, so bulk export is refused there
-# unless an explicit byte budget is given; --wait resumes once a real network is back.
+# On an iPhone Personal Hotspot (gateway 172.20.10.x; the interface carries the EXPENSIVE and often
+# CONSTRAINED flags) that is slow, uses the owner's data plan, and starves every other job, so bulk
+# export is refused there unless an explicit byte budget is given; --wait resumes once a real
+# network is back. Only `ifconfig -v` prints the eflags/xflags lines that hold those flags.
 HOTSPOT_GATEWAY_PREFIX = "172.20.10."
+METERED_FLAGS = {"EXPENSIVE", "CONSTRAINED"}
+TUNNEL_PREFIXES = ("utun", "ppp", "ipsec")
+FLAG_LINE_RE = re.compile(r"^\s*[ex]flags=[0-9A-Fa-f]+<([^>]*)>", re.MULTILINE)
+INET_RE = re.compile(r"^\s*inet (\d+\.\d+\.\d+\.\d+)\b", re.MULTILINE)
+ACTIVE_RE = re.compile(r"^\s*status:\s*active\b", re.MULTILINE)
+
+
+def _command_output(command: list[str]) -> str:
+    return subprocess.run(command, capture_output=True, text=True, timeout=10).stdout
+
+
+def interface_flagged_metered(report: str) -> bool:
+    """True when ``ifconfig -v`` output marks the interface EXPENSIVE or CONSTRAINED.
+
+    The upper-case names live in the ``eflags=`` / ``xflags=`` lines; the header line also carries a
+    lowercase `` constrained`` marker, which is honoured too.
+    """
+    if " constrained" in report:
+        return True
+    return any(METERED_FLAGS & set(names.split(",")) for names in FLAG_LINE_RE.findall(report))
+
+
+def physical_link_is_metered(interface_names: str) -> bool:
+    """Inspect every active, addressed ``en*`` interface (used when a VPN owns the default route)."""
+    for name in interface_names.split():
+        if not re.fullmatch(r"en\d+", name):
+            continue
+        report = _command_output(["ifconfig", "-v", name])
+        addresses = [a for a in INET_RE.findall(report) if not a.startswith("169.254.")]
+        if not ACTIVE_RE.search(report) or not addresses:
+            continue  # down, or no usable address: it carries no traffic
+        if interface_flagged_metered(report) or any(a.startswith(HOTSPOT_GATEWAY_PREFIX) for a in addresses):
+            return True
+    return False
 
 
 def on_metered_link() -> bool:
     """True on an iPhone hotspot or an interface macOS flags constrained/expensive.
 
-    macOS only: on any other platform, or if route/ifconfig cannot be run, this is a safe
-    no-op that reports an unmetered link.
+    The default route's interface is read with ``ifconfig -v``. When that interface is a tunnel
+    (``utun*``, ``ppp*``, ``ipsec*``) the physical ``en*`` interfaces are inspected as well, so a VPN
+    does not hide a hotspot. macOS only: on any other platform, or if route/ifconfig cannot be run,
+    this is a safe no-op that reports an unmetered link.
     """
     if sys.platform != "darwin":
         return False
     try:
-        route = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True, timeout=10).stdout
+        route = _command_output(["route", "-n", "get", "default"])
         gateway = re.search(r"gateway:\s*(\S+)", route)
         iface = re.search(r"interface:\s*(\S+)", route)
         if gateway and gateway.group(1).startswith(HOTSPOT_GATEWAY_PREFIX):
             return True
-        if iface:
-            flags = subprocess.run(["ifconfig", iface.group(1)], capture_output=True, text=True, timeout=10).stdout
-            return " constrained" in flags or " expensive" in flags
+        if not iface:
+            return False
+        name = iface.group(1)
+        if interface_flagged_metered(_command_output(["ifconfig", "-v", name])):
+            return True
+        if name.startswith(TUNNEL_PREFIXES):
+            return physical_link_is_metered(_command_output(["ifconfig", "-l"]))
     except (OSError, subprocess.SubprocessError):
         return False
     return False
@@ -230,7 +277,7 @@ def rename_exported(folder: pathlib.Path, uuid: str,
     Returns the renamed files and the primary video.
     """
     videos = [p for p in files if p.suffix.lower() in VIDEO_EXT]
-    primary_still = next((p for p in files if p.suffix.lower() not in VIDEO_EXT), None)
+    primary_still = next((p for p in files if p.suffix.lower() in IMAGE_EXT), None)
     staged: list[tuple[pathlib.Path, str, bool]] = []
     for index, path in enumerate(files):
         is_primary = path == videos[0] or path == primary_still
@@ -256,15 +303,17 @@ def export_one(settings: ExportSettings, photos_id: str) -> tuple[str, str, str]
     anything beyond UUIDs and error codes.
     """
     uuid = uuid_of(photos_id)
-    if not ID_RE.match(photos_id):
+    if not ID_RE.fullmatch(photos_id):
         return "fail", uuid[:8], "malformed Photos media item id"
     root = settings.root
     folder = root / "originals" / uuid
     if (folder / ".done").exists():
         return "skip", uuid, ""
-    gate = settings.guard.gate(root)  # honours STOP and the metered-link rule per item
+    gate = settings.guard.gate(root)  # honours STOP and the metered-link rule per item; may wait for hours
     if gate != "go":
         return gate, uuid, ""
+    if (folder / ".done").exists():  # another run finished this item while this one waited: never delete it
+        return "skip", uuid, ""
     if folder.exists():
         shutil.rmtree(folder)
     folder.mkdir(parents=True)
@@ -306,9 +355,9 @@ def load_ids(settings: ExportSettings, album: str, refresh: bool) -> list[str]:
     cache = root / "album-ids.json"
     if cache.exists() and not refresh:
         ids = json.loads(cache.read_text(encoding="utf-8"))
-        if not isinstance(ids, list) or not all(isinstance(i, str) and ID_RE.match(i) for i in ids):
+        if not isinstance(ids, list) or not all(isinstance(i, str) and ID_RE.fullmatch(i) for i in ids):
             raise SystemExit("album-ids.json is not a list of Photos media item ids; re-run with --refresh-ids.")
-        return ids
+        return list(dict.fromkeys(ids))
     command = osascript_command(IDS_SCRIPT_LINES, album, launcher=settings.launcher)
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=IDS_TIMEOUT_SECONDS + 300)
@@ -316,7 +365,7 @@ def load_ids(settings: ExportSettings, album: str, refresh: bool) -> list[str]:
         raise SystemExit("could not read album ids: timed out") from None
     if proc.returncode != 0:
         raise SystemExit(f"could not read album ids ({failure_detail(proc)})")
-    ids = [line.strip() for line in proc.stdout.splitlines() if ID_RE.match(line.strip())]
+    ids = list(dict.fromkeys(line.strip() for line in proc.stdout.splitlines() if ID_RE.fullmatch(line.strip())))
     if not ids:
         raise SystemExit("album returned no ids (check the exact album name and Photos automation permission)")
     root.mkdir(parents=True, exist_ok=True)
@@ -325,15 +374,21 @@ def load_ids(settings: ExportSettings, album: str, refresh: bool) -> list[str]:
 
 
 def run_round(settings: ExportSettings, pending: list[str], workers: int, round_no: int) -> dict:
-    """Export ``pending`` once. Returns counts plus the ids to retry and the ids deferred."""
+    """Export ``pending`` once. Returns counts plus the ids to retry and the ids deferred.
+
+    On Ctrl-C (or any other ``BaseException``) the queued items are cancelled so they never start,
+    in-flight items are left to finish, one line says how many were cancelled, and the exception
+    propagates.
+    """
     root = settings.root
     counts = {"ok": 0, "skip": 0, "fail": 0}
     failures: list[str] = []
     deferred: list[str] = []
     stopped = False
     started = time.monotonic()
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {}
+    pool = ThreadPoolExecutor(max_workers=workers)
+    futures: dict = {}
+    try:
         for photos_id in pending:
             if (root / "STOP").exists():
                 stopped = True
@@ -362,6 +417,13 @@ def run_round(settings: ExportSettings, pending: list[str], workers: int, round_
                 eta = ((len(pending) - total) / rate / 3600) if rate else float("inf")
                 print(f"round {round_no}: ok={counts['ok']} skipped={counts['skip']} failed={counts['fail']} "
                       f"of {len(pending)} | {rate * 60:.1f}/min | ETA {eta:.1f} h", flush=True)
+    except BaseException:
+        pool.shutdown(wait=True, cancel_futures=True)
+        cancelled = sum(1 for future in futures if future.cancelled())
+        print(f"interrupted: {cancelled} queued item(s) cancelled; in-flight items were left to finish", flush=True)
+        raise
+    finally:
+        pool.shutdown(wait=True)
     return {**counts, "failures": failures, "deferred": deferred, "stopped": stopped}
 
 
@@ -393,14 +455,22 @@ def preflight(launcher: tuple[str, ...]) -> None:
         raise SystemExit("ffprobe is required to verify exported clips; install FFmpeg first.")
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    for name in ("workers", "rounds"):
-        if getattr(args, name) < 1:
-            raise SystemExit(f"--{name} must be at least 1")
-    if min(args.offset, args.limit, args.timeout) < 0 or args.timeout == 0:
-        raise SystemExit("--offset and --limit must be >= 0 and --timeout must be positive")
-    launcher = tuple(shlex.split(args.launcher))
+def acquire_lock(root: pathlib.Path):
+    """Exclusive, non-blocking lock on ``<root>/.export.lock``; ``None`` when another run holds it.
+
+    The returned handle must stay open for the whole run: closing it (or exiting) releases the lock.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    handle = (root / ".export.lock").open("a+")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle
+
+
+def export(args, launcher: tuple[str, ...]) -> int:
     root = resolve_private_root(args.root)
     preflight(launcher)
 
@@ -411,28 +481,53 @@ def main(argv: list[str] | None = None) -> int:
         print("This Mac is on a metered link (iPhone hotspot). A bulk export pulls ~4 MB per Live Photo "
               "from iCloud. Re-run with --wait (resume on a real network) or --hotspot-budget-gb N.", flush=True)
         return EXIT_METERED
-    settings = ExportSettings(root=root, timeout=args.timeout, launcher=launcher, guard=guard)
-    ids = load_ids(settings, args.album, args.refresh_ids)[args.offset:]
-    if args.limit:
-        ids = ids[: args.limit]
-    print(f"{len(ids)} items in scope, workers={args.workers}", flush=True)
+    lock = acquire_lock(root)
+    if lock is None:
+        print("another export is already running for this root (it holds .export.lock); not starting a second.",
+              flush=True)
+        return EXIT_LOCKED
+    with lock:
+        settings = ExportSettings(root=root, timeout=args.timeout, launcher=launcher, guard=guard)
+        ids = load_ids(settings, args.album, args.refresh_ids)[args.offset:]
+        if args.limit:
+            ids = ids[: args.limit]
+        print(f"{len(ids)} items in scope, workers={args.workers}", flush=True)
 
-    pending, deferred, stopped = ids, [], False
-    for round_no in range(1, args.rounds + 1):
-        if not pending:
-            break
-        result = run_round(settings, pending, args.workers, round_no)
-        pending, stopped = result["failures"], result["stopped"]
-        deferred.extend(result["deferred"])
+        pending, deferred, stopped = ids, [], False
+        for round_no in range(1, args.rounds + 1):
+            if not pending:
+                break
+            result = run_round(settings, pending, args.workers, round_no)
+            pending, stopped = result["failures"], result["stopped"]
+            deferred.extend(result["deferred"])
+            if stopped:
+                print("STOP file present: exiting", flush=True)
+                break
+        print(f"finished. still failing: {len(pending)}, deferred by metered link: {len(deferred)}", flush=True)
+        if pending:
+            return EXIT_FAILURES
         if stopped:
-            print("STOP file present: exiting", flush=True)
-            break
-    print(f"finished. still failing: {len(pending)}, deferred by metered link: {len(deferred)}", flush=True)
-    if pending:
-        return EXIT_FAILURES
-    if stopped:
-        return EXIT_STOPPED
-    return EXIT_METERED if deferred else 0
+            return EXIT_STOPPED
+        return EXIT_METERED if deferred else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    for name in ("workers", "rounds"):
+        if getattr(args, name) < 1:
+            raise SystemExit(f"--{name} must be at least 1")
+    if min(args.offset, args.limit, args.timeout) < 0 or args.timeout == 0:
+        raise SystemExit("--offset and --limit must be >= 0 and --timeout must be positive")
+    launcher = tuple(shlex.split(args.launcher))
+    try:
+        return export(args, launcher)
+    except KeyboardInterrupt:
+        print("interrupted: re-run the same command to resume; finished items are kept.", flush=True)
+        return EXIT_INTERRUPTED
+    except OSError as exc:  # the message and filename can hold private paths: print the type only
+        print(f"local file error ({type(exc).__name__}); check permissions and free space under --root.",
+              file=sys.stderr, flush=True)
+        return EXIT_IO_ERROR
 
 
 if __name__ == "__main__":

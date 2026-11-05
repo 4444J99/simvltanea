@@ -26,6 +26,9 @@ needs_sdk = unittest.skipUnless(HAS_SDK, "anthropic SDK not installed (python3 -
 needs_pillow = unittest.skipUnless(HAS_PIL, "Pillow not installed (python3 -m pip install -e '.[analysis]')")
 needs_ffmpeg = unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed (system prerequisite)")
 
+REAL_RUN = subprocess.run  # the private-root guard runs the real git even while ffmpeg is faked
+REAL_WHICH = shutil.which
+
 FAKE_KEY = "sk-ant-test-0123456789-not-a-real-key"
 UUID_A = "aaaaaaaa-0000-4000-8000-000000000001"
 UUID_B = "bbbbbbbb-0000-4000-8000-000000000002"
@@ -69,10 +72,13 @@ class StubBatches:
     def __init__(self, entries=()):
         self.entries = list(entries)
         self.created: list[list] = []
+        self.create_options: list[dict] = []  # client options in force for each create() call
+        self.scope: dict = {}
         self.polls = 0
 
     def create(self, requests):
         self.created.append(list(requests))
+        self.create_options.append(dict(self.scope))
         return SimpleNamespace(id=f"msgbatch_test{len(self.created)}")
 
     def retrieve(self, batch_id):
@@ -84,9 +90,31 @@ class StubBatches:
         return iter(self.entries)
 
 
+class ScopedBatches:
+    """What ``client.with_options(...).messages.batches`` looks like: the same batches, other options."""
+
+    def __init__(self, batches: StubBatches, options: dict):
+        self.batches, self.options = batches, options
+
+    def create(self, requests):
+        self.batches.scope = self.options
+        try:
+            return self.batches.create(requests)
+        finally:
+            self.batches.scope = {}
+
+    def __getattr__(self, name):
+        return getattr(self.batches, name)
+
+
 class StubClient:
     def __init__(self, entries=()):
         self.messages = SimpleNamespace(batches=StubBatches(entries))
+
+    def with_options(self, **options):
+        view = StubClient.__new__(StubClient)
+        view.messages = SimpleNamespace(batches=ScopedBatches(self.messages.batches, options))
+        return view
 
 
 class TaggerTestCase(unittest.TestCase):
@@ -326,7 +354,7 @@ class CollectTests(TaggerTestCase):
             self.run_main("collect", "--batch", batch_id, client=client)
         return client
 
-    def test_success_refusal_invalid_json_and_errored_results_are_all_recorded(self):
+    def test_success_refusal_and_invalid_json_are_recorded_and_errored_is_left_for_a_retry(self):
         for uuid in (UUID_A, UUID_B, UUID_C, UUID_D):
             self.add_frames(uuid)
             self.add_features(uuid)
@@ -349,32 +377,90 @@ class CollectTests(TaggerTestCase):
         self.assertEqual((invalid["analysis"], invalid["needs_review"]), (None, True))
         self.assertTrue(invalid["error"].startswith("invalid_output: "))
         self.assertNotIn("not json", json.dumps(invalid))
-        failed = self.tag(UUID_D)
-        self.assertEqual((failed["analysis"], failed["error"], failed["usd"], failed["needs_review"]),
-                         (None, "errored", 0.0, True))
+        self.assertFalse((self.root / "analysis" / "tags" / f"{UUID_D}.json").exists())  # transient: not final
         self.assertGreater(client.messages.batches.polls, 1)  # waited for the batch to end
         lines = [json.loads(line) for line in (self.root / "analysis" / "tags.jsonl").read_text().splitlines()]
-        self.assertEqual([line["uuid"] for line in lines], [UUID_A, UUID_B, UUID_C, UUID_D])
+        self.assertEqual([line["uuid"] for line in lines], [UUID_A, UUID_B, UUID_C])
         review_entry = succeeded(UUID_A, json.dumps(review))
         record = tag_clips.build_record(review_entry, {"model": "claude-haiku-5-5"}, "b", None)
         self.assertTrue(record["needs_review"])
         self.assertEqual(record["analysis"]["safety"]["verdict"], "review")
 
-    def test_frames_are_deleted_for_every_result_and_the_ledger_records_cost(self):
+    def test_frames_of_tagged_clips_are_deleted_and_the_ledger_records_cost_and_transient_counts(self):
         for uuid in (UUID_A, UUID_B):
             self.add_frames(uuid)
         self.collect([succeeded(UUID_A, json.dumps(GOOD_ANALYSIS)), errored(UUID_B, "expired")])
-        for uuid in (UUID_A, UUID_B):
-            self.assertFalse((self.root / "analysis" / "frames" / uuid).exists())
+        self.assertFalse((self.root / "analysis" / "frames" / UUID_A).exists())
+        self.assertTrue((self.root / "analysis" / "frames" / UUID_B).exists())  # still needed for the retry
         (line,) = (self.root / "analysis" / "ledger.jsonl").read_text().splitlines()
         self.assertEqual(json.loads(line), {"batch": "msgbatch_test1", "model": "claude-haiku-5-5", "ok": 1,
-                                            "failed": 1, "usd": 0.0001})
-        self.assertIn("ok=1 failed=1", self.output)
+                                            "failed": 0, "transient": {"expired": 1}, "ignored": 0, "usd": 0.0001})
+        self.assertIn("ok=1 failed=0 retry=1 ignored=0", self.output)
+
+    def test_errored_expired_and_canceled_results_write_no_record_and_keep_the_clip_eligible(self):
+        uuids = (UUID_A, UUID_B, UUID_C)
+        for uuid in uuids:
+            self.add_clip(uuid)
+            self.add_frames(uuid)
+            self.add_features(uuid)
+        self.collect([errored(UUID_A, "errored"), errored(UUID_B, "expired"), errored(UUID_C, "canceled")])
+        self.assertEqual(list((self.root / "analysis" / "tags").iterdir()), [])
+        self.assertFalse((self.root / "analysis" / "tags.jsonl").exists())
+        for uuid in uuids:
+            self.assertEqual(len(list((self.root / "analysis" / "frames" / uuid).glob("f*.jpg"))), 3)
+        ledger = json.loads((self.root / "analysis" / "ledger.jsonl").read_text())
+        self.assertEqual((ledger["ok"], ledger["failed"], ledger["transient"]),
+                         (0, 0, {"canceled": 1, "errored": 1, "expired": 1}))
+        self.assertEqual(tag_clips.ready_clips(self.root), [UUID_A, UUID_B, UUID_C])  # next run picks them up
+
+    def test_refusals_and_invalid_output_still_produce_needs_review_records(self):
+        for uuid in (UUID_A, UUID_B):
+            self.add_frames(uuid)
+        self.collect([succeeded(UUID_A, "no", stop_reason="refusal"), succeeded(UUID_B, "{broken")])
+        for uuid in (UUID_A, UUID_B):
+            self.assertTrue(self.tag(uuid)["needs_review"])
+            self.assertFalse((self.root / "analysis" / "frames" / uuid).exists())
+        ledger = json.loads((self.root / "analysis" / "ledger.jsonl").read_text())
+        self.assertEqual((ledger["ok"], ledger["failed"], ledger["transient"]), (0, 2, {}))
+
+    def test_results_for_clips_that_are_not_in_the_batch_are_ignored_and_counted(self):
+        self.add_features(UUID_A)
+        self.write_batch("msgbatch_test1", uuids=[UUID_A])
+        client = StubClient([succeeded(UUID_A, json.dumps(GOOD_ANALYSIS)),
+                             succeeded(UUID_B, json.dumps(GOOD_ANALYSIS)),  # well-formed but not ours
+                             succeeded(UUID_C, json.dumps(GOOD_ANALYSIS))])
+        with mock.patch.object(tag_clips.time, "sleep"):
+            self.run_main("collect", "--batch", "msgbatch_test1", client=client)
+        self.assertEqual(sorted(p.name for p in (self.root / "analysis" / "tags").iterdir()), [f"{UUID_A}.json"])
+        ledger = json.loads((self.root / "analysis" / "ledger.jsonl").read_text())
+        self.assertEqual((ledger["ok"], ledger["ignored"]), (1, 2))
+        self.assertIn("ignored=2", self.output)
+
+    def test_batch_ids_with_a_trailing_newline_are_refused(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_main("collect", "--batch", "msgbatch_x\n", client=StubClient())
+        self.assertIn("letters, digits and underscores", str(caught.exception))
+        self.assertIsNone(tag_clips.UUID_RE.fullmatch(UUID_A + "\n"))
+
+    def files_under(self, base: pathlib.Path) -> set[pathlib.Path]:
+        return {p for p in base.rglob("*") if p.is_file()}
 
     def test_results_with_unexpected_ids_never_become_paths(self):
-        self.collect([succeeded("../../escape", json.dumps(GOOD_ANALYSIS))])
+        # The batch record itself lists the hostile id, so only the id-format check stands in the way.
+        base = self.root.parent
+        before = self.files_under(base)
+        self.collect([succeeded("../../escape", json.dumps(GOOD_ANALYSIS)),
+                      succeeded("../escape", json.dumps(GOOD_ANALYSIS)),
+                      succeeded("a/b", json.dumps(GOOD_ANALYSIS))])
+        created = self.files_under(base) - before
         self.assertEqual(list((self.root / "analysis" / "tags").iterdir()), [])
-        self.assertFalse((self.root.parent / "escape.json").exists())
+        self.assertFalse((self.root / "escape.json").exists())  # `tags/../../escape.json` lands here
+        self.assertFalse((self.root / "analysis" / "escape.json").exists())
+        self.assertEqual([p for p in base.rglob("*escape*")], [])
+        analysis = self.root / "analysis"
+        self.assertEqual({p for p in created if analysis not in p.parents}, set())  # nothing outside analysis/
+        self.assertEqual({p.name for p in created}, {"msgbatch_test1.json", "ledger.jsonl"})  # batch record, ledger
+        self.assertFalse((analysis / "tags.jsonl").exists())
 
     def test_batch_ids_are_validated_and_must_be_known(self):
         with self.assertRaises(SystemExit):
@@ -394,21 +480,32 @@ class CollectTests(TaggerTestCase):
 
 @needs_sdk
 @needs_pillow
-class SubmitAndConsentTests(TaggerTestCase):
+class FakeFfmpegTestCase(TaggerTestCase):
+    """Two exported clips and a fake ffmpeg that writes small JPEG frames; git still runs for real."""
+
+    def ffmpeg_calls(self) -> list:
+        return [call for call in self.run_mock.call_args_list if call.args[0][0] == "ffmpeg"]
+
     def fake_ffmpeg(self, command, **kwargs):
+        if pathlib.Path(command[0]).name == "git":
+            return REAL_RUN(command, **kwargs)
         assert command[0] == "ffmpeg", command
         save_frame(pathlib.Path(command[-1]), (len(command[-1]) * 7 % 255, 90, 160))
         return subprocess.CompletedProcess(command, 0, "", "")
 
     def setUp(self):
         super().setUp()
-        for patcher in (mock.patch.object(subprocess, "run", side_effect=self.fake_ffmpeg),
-                        mock.patch.object(tag_clips.shutil, "which", return_value="/usr/bin/ffmpeg")):
-            self.ffmpeg = patcher.start()
-            self.addCleanup(patcher.stop)
+        self.run_mock = mock.patch.object(subprocess, "run", side_effect=self.fake_ffmpeg).start()
+        mock.patch.object(tag_clips.shutil, "which",
+                          side_effect=lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else REAL_WHICH(name)).start()
+        self.addCleanup(mock.patch.stopall)
         self.add_clip(UUID_A)
         self.add_clip(UUID_B)
 
+
+@needs_sdk
+@needs_pillow
+class SubmitAndConsentTests(FakeFfmpegTestCase):
     def test_submit_and_run_refuse_without_confirm_upload_before_doing_any_work(self):
         for command in ("submit", "run"):
             with mock.patch.object(tag_clips, "make_client") as make_client:
@@ -416,7 +513,7 @@ class SubmitAndConsentTests(TaggerTestCase):
                     self.run_main(command)
             self.assertIn("--confirm-upload", str(caught.exception))
             make_client.assert_not_called()
-        self.ffmpeg.assert_not_called()  # not even frames were extracted
+        self.assertEqual(self.ffmpeg_calls(), [])  # not even frames were extracted
         self.assertFalse((self.root / "analysis").exists())
 
     def test_dry_run_prepares_locally_prints_the_projection_and_uploads_nothing(self):
@@ -461,6 +558,176 @@ class SubmitAndConsentTests(TaggerTestCase):
         self.assertEqual(self.run_main("submit", "--confirm-upload", client=client), 0)
         self.assertEqual(client.messages.batches.created, [])
         self.assertIn("nothing to submit", self.output)
+
+
+@needs_sdk
+@needs_pillow
+class PendingBatchTests(FakeFfmpegTestCase):
+    """Clips already uploaded in a batch that has not been collected must not be uploaded again."""
+
+    def submit(self, client, *extra):
+        with mock.patch.object(tag_clips.time, "sleep"):
+            return self.run_main("submit", "--confirm-upload", *extra, client=client)
+
+    def test_two_submits_before_collect_create_one_batch_not_two(self):
+        client = StubClient()
+        self.assertEqual(self.submit(client), 0)
+        first_extractions = len(self.ffmpeg_calls())
+        self.assertEqual(self.submit(client), 0)
+        batches = client.messages.batches
+        self.assertEqual(len(batches.created), 1)
+        self.assertEqual(sorted(r["custom_id"] for r in batches.created[0]), [UUID_A, UUID_B])
+        self.assertIn("nothing to submit", self.output)
+        self.assertEqual(len(self.ffmpeg_calls()), first_extractions)  # nothing was re-extracted either
+
+    def test_ready_clips_excludes_uuids_in_batches_without_a_ledger_line(self):
+        self.write_batch("msgbatch_open", uuids=[UUID_A])
+        self.assertEqual(tag_clips.ready_clips(self.root), [UUID_B])
+        ledger = self.root / "analysis" / "ledger.jsonl"
+        ledger.write_text(json.dumps({"batch": "msgbatch_other", "ok": 1}) + "\n")
+        self.assertEqual(tag_clips.ready_clips(self.root), [UUID_B])  # another batch's line does not count
+        ledger.write_text(json.dumps({"batch": "msgbatch_open", "ok": 1}) + "\n")
+        self.assertEqual(tag_clips.ready_clips(self.root), [UUID_A, UUID_B])  # collected: eligible again
+
+    def test_a_corrupt_batch_record_stops_instead_of_risking_a_second_upload(self):
+        (self.root / "analysis" / "batches").mkdir(parents=True)
+        (self.root / "analysis" / "batches" / "msgbatch_bad.json").write_text("{not json")
+        with self.assertRaises(SystemExit) as caught:
+            tag_clips.ready_clips(self.root)
+        self.assertIn("msgbatch_bad", str(caught.exception))
+        self.assertNotIn(str(self.root), str(caught.exception))
+
+    def test_collect_pending_collects_every_batch_without_a_ledger_line(self):
+        self.write_batch("msgbatch_test1", uuids=[UUID_A])
+        self.write_batch("msgbatch_test2", uuids=[UUID_B])
+        self.write_batch("msgbatch_done", uuids=[UUID_C])
+        (self.root / "analysis" / "ledger.jsonl").write_text(json.dumps({"batch": "msgbatch_done"}) + "\n")
+        client = StubClient([succeeded(UUID_A, json.dumps(GOOD_ANALYSIS)), succeeded(UUID_B, json.dumps(GOOD_ANALYSIS))])
+        retrieved = []
+        real_retrieve = client.messages.batches.retrieve
+        client.messages.batches.retrieve = lambda batch_id: (retrieved.append(batch_id), real_retrieve(batch_id))[1]
+        with mock.patch.object(tag_clips.time, "sleep"):
+            self.assertEqual(self.run_main("collect", "--pending", client=client), 0)
+        self.assertEqual(sorted(set(retrieved)), ["msgbatch_test1", "msgbatch_test2"])
+        ledger = [json.loads(line)["batch"] for line in (self.root / "analysis" / "ledger.jsonl").read_text().splitlines()]
+        self.assertEqual(ledger, ["msgbatch_done", "msgbatch_test1", "msgbatch_test2"])
+        self.assertEqual(tag_clips.pending_batches(self.root), [])
+
+    def test_collect_pending_with_nothing_pending_is_not_an_error(self):
+        client = StubClient()
+        self.assertEqual(self.run_main("collect", "--pending", client=client), 0)
+        self.assertIn("no pending batches", self.output)
+        with self.assertRaises(SystemExit):
+            self.run_main("collect", client=client)  # neither --batch nor --pending
+
+    def test_run_collects_batches_left_pending_by_an_interrupted_earlier_run(self):
+        client = StubClient([succeeded(UUID_A, json.dumps(GOOD_ANALYSIS)), succeeded(UUID_B, json.dumps(GOOD_ANALYSIS))])
+        self.assertEqual(self.submit(client), 0)  # uploaded, then "Ctrl-C" before collecting
+        with mock.patch.object(tag_clips.time, "sleep"):
+            self.assertEqual(self.run_main("run", "--confirm-upload", client=client), 0)
+        self.assertEqual(len(client.messages.batches.created), 1)  # no second upload
+        self.assertEqual(self.tag(UUID_A)["analysis"]["setting"], "outdoor")
+        self.assertIn("clips tagged: 2", self.output)
+
+    def test_dry_run_never_collects_pending_batches(self):
+        self.write_batch("msgbatch_test1", uuids=[UUID_A])
+        with mock.patch.object(tag_clips, "make_client") as make_client:
+            self.assertEqual(self.run_main("run", "--dry-run"), 0)
+        make_client.assert_not_called()
+
+
+@needs_sdk
+@needs_pillow
+class UploadSafetyTests(FakeFfmpegTestCase):
+    def test_dry_run_with_confirm_upload_still_never_constructs_a_client(self):
+        import anthropic
+
+        for command in ("submit", "run"):
+            with mock.patch.object(tag_clips, "make_client") as make_client, \
+                    mock.patch.object(anthropic, "Anthropic") as sdk_client:
+                self.assertEqual(self.run_main(command, "--dry-run", "--confirm-upload"), 0)
+            make_client.assert_not_called()
+            sdk_client.assert_not_called()
+        self.assertIn("projected $", self.output)
+        self.assertEqual(list((self.root / "analysis" / "batches").iterdir()), [])
+
+    def test_batches_are_created_without_sdk_retries(self):
+        client = StubClient()
+        self.assertEqual(self.run_main("submit", "--confirm-upload", "--batch-size", "1", client=client), 0)
+        self.assertEqual(len(client.messages.batches.created), 2)
+        self.assertEqual(client.messages.batches.create_options, [{"max_retries": 0}, {"max_retries": 0}])
+
+    def test_default_batch_size_is_small_enough_that_a_lost_upload_is_cheap(self):
+        self.assertEqual(tag_clips.build_parser().parse_args(["submit", "--root", "x"]).batch_size, 200)
+        self.assertEqual(tag_clips.DEFAULT_BATCH_SIZE, 200)
+
+    def test_frame_size_is_capped(self):
+        self.assertEqual(tag_clips.MAX_FRAME_PX, 1024)
+        for value in ("1025", "4096"):
+            with self.assertRaises(SystemExit) as caught:
+                self.run_main("prepare", "--frame-px", value)
+            self.assertIn("1024", str(caught.exception))
+        self.assertEqual(self.ffmpeg_calls(), [])
+        self.assertEqual(self.run_main("prepare", "--frame-px", "1024", "--limit", "1"), 0)
+
+
+@needs_sdk
+@needs_pillow
+class PrepareGuardTests(FakeFfmpegTestCase):
+    def test_stale_frames_are_never_reused(self):
+        stale = self.root / "analysis" / "frames" / UUID_A
+        for index in range(3):
+            save_frame(stale / f"f{index}.jpg", (1, 2, 3), size=(500, 500))
+        (stale / "leftover-partial.jpg").write_bytes(b"half a file")
+        before = {path.name: path.read_bytes() for path in stale.glob("f*.jpg")}
+        self.assertEqual(self.run_main("prepare", "--frame-px", "128", "--limit", "1"), 0)
+        self.assertEqual(len(self.ffmpeg_calls()), 3)  # all three frames were extracted again
+        self.assertFalse((stale / "leftover-partial.jpg").exists())
+        for path in stale.glob("f*.jpg"):
+            self.assertNotEqual(path.read_bytes(), before[path.name])
+
+    def test_a_failed_extraction_does_not_leave_old_frames_behind(self):
+        stale = self.root / "analysis" / "frames" / UUID_A
+        save_frame(stale / "f2.jpg", (9, 9, 9))
+        self.run_mock.side_effect = lambda command, **kwargs: (
+            REAL_RUN(command, **kwargs) if pathlib.Path(command[0]).name == "git"
+            else subprocess.CompletedProcess(command, 1, "", "boom"))
+        with self.assertRaises(SystemExit):
+            self.run_main("prepare", "--limit", "1")
+        self.assertEqual(list(stale.glob("f*.jpg")), [])
+
+    def test_prepare_without_pillow_fails_with_the_install_hint_before_extracting_anything(self):
+        with mock.patch.dict(sys.modules, {"PIL": None, "PIL.Image": None}):
+            with self.assertRaises(SystemExit) as caught:
+                self.run_main("prepare")
+        self.assertIn('pip install -e ".[analysis]"', str(caught.exception))
+        self.assertIn("Pillow", str(caught.exception))
+        self.assertEqual(self.ffmpeg_calls(), [])
+        self.assertFalse((self.root / "analysis" / "frames").exists() and any((self.root / "analysis" / "frames").iterdir()))
+        for command in ("submit", "run"):
+            with mock.patch.dict(sys.modules, {"PIL": None, "PIL.Image": None}):
+                with self.assertRaises(SystemExit):
+                    self.run_main(command, "--confirm-upload", "--dry-run")
+        self.assertEqual(self.ffmpeg_calls(), [])
+
+
+class OsErrorTests(TaggerTestCase):
+    def test_a_local_file_error_prints_the_type_and_no_path(self):
+        self.add_clip(UUID_A)
+        secret = str(self.root / "originals" / UUID_A / ".done")
+        with mock.patch.object(tag_clips, "ready_clips", side_effect=PermissionError(13, "Permission denied", secret)):
+            code = self.run_main("prepare")
+        self.assertEqual(code, tag_clips.EXIT_IO_ERROR)
+        self.assertIn("PermissionError", self.output)
+        self.assertNotIn(self._tmp.name, self.output)
+        self.assertNotIn("Traceback", self.output)
+
+    def test_an_unreadable_receipt_is_reported_without_its_path(self):
+        self.add_clip(UUID_A)
+        with mock.patch.object(pathlib.Path, "read_text", side_effect=OSError(5, "Input/output error")):
+            code = self.run_main("prepare")
+        self.assertEqual(code, tag_clips.EXIT_IO_ERROR)
+        self.assertNotIn(self._tmp.name, self.output)
 
 
 @needs_sdk

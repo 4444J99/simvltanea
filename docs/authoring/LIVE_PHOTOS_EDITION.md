@@ -61,7 +61,17 @@ build depends on them.
 
 Choose a root outside the checkout; 6,500 Live Photos are roughly 27 GB. A
 root inside the checkout must be under `var/`, which Git ignores. The tools
-refuse any other path inside the checkout.
+refuse any other path inside the checkout, comparing paths case-insensitively
+because the default macOS volume ignores case.
+
+The check does not depend on which worktree runs the code. If the root lies
+inside any Git working tree (another checkout or a sibling worktree of this
+repository), the tools ask Git (`git check-ignore`) and accept it only when
+that repository ignores the path. A root outside every repository is
+accepted. Without `git` on the `PATH`, only the case-insensitive checkout
+comparison applies, and the tool says so on stderr. Use a subdirectory of
+`var/`, not `var/` itself, because Git ignores the contents of `var/` but not
+the folder.
 
 ```text
 <root>/
@@ -69,10 +79,11 @@ refuse any other path inside the checkout.
 ├── export-manifest.jsonl          one receipt per completed item
 ├── export-failures.jsonl          one line per failed attempt
 ├── STOP                           optional; created by you to stop the export
+├── .export.lock                   held while an export runs (one run per root)
 ├── originals/
 │   └── <uuid>/
 │       ├── <uuid>.mov             primary paired video
-│       ├── <uuid>.<jpg|heic>      primary still
+│       ├── <uuid>.<heic|jpg|jpeg|png>  primary still (first image file)
 │       ├── <uuid>.extraN.<ext>    any additional exported file
 │       └── .done                  JSON receipt: sizes, sha256, ffprobe facts
 └── analysis/                      written by tag_clips.py
@@ -85,7 +96,17 @@ refuse any other path inside the checkout.
 ```
 
 A `.done` receipt marks an item as finished. Items without one are exported
-again from scratch, so an interrupted run resumes safely.
+again from scratch, so an interrupted run resumes safely. The receipt is
+checked again right before an unfinished folder is deleted, so a run that
+waited on the metered-link rule never removes an item another run finished
+meanwhile. A sidecar such as `.aae` is never the primary still: it is kept as
+`<uuid>.extraN.aae`.
+
+Only one export can run per root. The exporter takes an exclusive lock on
+`.export.lock`; a second run exits immediately with code 4. Duplicate ids in
+`album-ids.json` are exported once, in first-seen order. Ctrl-C cancels the
+items still queued (one line says how many), lets in-flight items finish, and
+exits with code 130; re-run to resume.
 
 ### Private material
 
@@ -121,8 +142,17 @@ rm "$LIVE_ROOT/STOP"                                                         # t
 
 Useful options: `--album NAME` (exact name, default `simvl-live`), `--workers`,
 `--offset`, `--limit`, `--rounds` (retry rounds for failures, default 3),
-`--refresh-ids`, and `--timeout`. Exit codes are 0 (all exported), 1 (failures
-remain), 2 (stopped), and 3 (refused or deferred by the metered-link rule).
+`--refresh-ids`, and `--timeout`. Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | all in-scope items exported |
+| 1 | failures remain after the retry rounds, even if `STOP` also ended the run |
+| 2 | stopped by `STOP` with no failures left |
+| 3 | refused or deferred by the metered-link rule |
+| 4 | another export holds the lock for this root |
+| 5 | a local file error; the message shows the error type and no path |
+| 130 | interrupted by Ctrl-C |
 
 Tag the clips. Start with `--dry-run`, which extracts frames and computes local
 features on this machine, prints the projected cost, and uploads nothing:
@@ -134,9 +164,17 @@ python3 -m tools.media.tag_clips report --root "$LIVE_ROOT"
 ```
 
 The commands are `prepare` (frames and local features), `submit`, `collect
---batch ID` (poll, store results, delete frames), `run` (prepare, submit,
-collect and report), and `report`. Options are `--model`, `--frame-px`
-(default 640), `--batch-size`, `--poll`, and `--limit`.
+--batch ID` (poll, store results, delete frames), `collect --pending` (collect
+every batch that has no line in `ledger.jsonl` yet), `run` (prepare, submit,
+collect every pending batch, and report), and `report`. Options are `--model`,
+`--frame-px` (default 640, at most 1024), `--batch-size` (default 200),
+`--poll`, and `--limit`. A local file error exits with code 5 and prints only
+the error type.
+
+`prepare` extracts the three frames of a clip afresh each time (it deletes the
+clip's frame folder first), so a frame never comes from an earlier run with a
+different `--frame-px`. It stops with the install hint before extracting
+anything if Pillow is missing.
 
 Credentials use the SDK's standard resolution: set `ANTHROPIC_API_KEY`. On
 macOS you can instead pass `--keychain-service NAME` to read the key from a
@@ -150,7 +188,7 @@ hint.
 For each clip, `submit` sends the Anthropic Batch API:
 
 - three downscaled JPEG frames (start, middle, end; long side `--frame-px`,
-  default 640 px),
+  default 640 px, capped at 1024 px),
 - one fixed instruction (`PROMPT` in `tag_clips.py`) that asks for a
   controlled-vocabulary description and a safety verdict, and forbids
   identifying or naming anyone, and
@@ -158,7 +196,8 @@ For each clip, `submit` sends the Anthropic Batch API:
   match results to clips locally.
 
 It sends no file names, captions, album names, paths, locations or metadata,
-and no full-resolution frames or video. Local features are never uploaded.
+and no video. Frames are thumbnails: `--frame-px` is capped at 1024, so a
+full-resolution image cannot be uploaded. Local features are never uploaded.
 Nothing is sent unless you pass `--confirm-upload`; `submit` and `run` stop
 before any work without it, and `prepare`, `report` and `--dry-run` never
 contact the API. Frames are deleted once a clip's result is collected. Frames
@@ -175,17 +214,35 @@ people sleeping is `clear`. How private the moment is goes in
 the verdict. In a 38-clip pilot, a prompt that mixed the two sent 42% of clips
 to review; separating them cleared all 38 and recorded 15 `low` and 23
 `moderate`. Anything whose verdict is not `clear`, and any refusal or invalid
-result, is marked `needs_review` for a human decision. A clip's result is
-final once collected;
-`submit` skips clips that already have a tag record. Submitting before
-collecting a pending batch would send the same clips again.
+result, is marked `needs_review` for a human decision. A refusal, an invalid
+result or a tag is final once collected, and `submit` skips clips that have a
+tag record.
+
+Transient results (`errored`, `expired`, `canceled`) are not final. They write
+no tag record and keep the clip's frames; the batch's ledger line counts them
+(`transient`), and the clip is selected again by the next `submit` or `run`.
+Results whose `custom_id` is not a clip of that batch are ignored and counted
+(`ignored`).
+
+`submit` and `run` never send a clip that sits in a batch without a ledger
+line, so pressing Ctrl-C while `run` polls and then running it again does not
+upload the same clips twice. Collect those batches with `collect --pending`
+(`run` does it too). A batch record that cannot be read stops `submit` rather
+than risk a second upload.
+
+Batches are created with the SDK's retries turned off (`max_retries=0` for
+`batches.create` only) and hold at most 200 clips by default. A retried
+multi-megabyte upload could create a billed batch that the tool never
+recorded. Without retries a lost reply fails the command instead; a batch that
+did get created then shows up as a pending batch in the Anthropic Console,
+where you can see it. The smaller default keeps each upload small.
 
 ### Network guidance
 
 A first export downloads about 27 GB for 6,500 items. On an iPhone Personal
-Hotspot (gateway `172.20.10.x`, interface flagged `constrained`) that is slow,
-uses the owner's data plan, and starves other jobs, so the exporter refuses to
-start there:
+Hotspot (gateway `172.20.10.x`, interface flagged `EXPENSIVE` or
+`CONSTRAINED`) that is slow, uses the owner's data plan, and starves other
+jobs, so the exporter refuses to start there:
 
 ```sh
 python3 -m tools.media.export_photos_album --root "$LIVE_ROOT" --wait
@@ -194,11 +251,18 @@ python3 -m tools.media.export_photos_album --root "$LIVE_ROOT" --hotspot-budget-
 
 - `--wait` sleeps while the link is metered and resumes on a real network.
 - `--hotspot-budget-gb N` allows about N GB over a metered link, then defers
-  the remaining items (exit 3). With several workers it can overshoot by a few
-  items.
-- Metered-link detection uses `route` and `ifconfig` and works on macOS only.
-  On other platforms, or if those tools are missing, it reports an unmetered
-  link.
+  the remaining items (exit 3). The budget counts completed exports only. The
+  real transfer can exceed it by the items in flight (up to `--workers`) and by
+  downloads of attempts that failed, timed out or are retried, none of which
+  are counted. A killed `osascript` does not stop Photos from finishing its
+  download.
+- Metered-link detection uses `route` and `ifconfig -v` and works on macOS
+  only. It checks the default route's gateway and the `EXPENSIVE` and
+  `CONSTRAINED` flags in the `eflags=` and `xflags=` lines of `ifconfig -v`
+  (plain `ifconfig` does not print them). When the default route goes through
+  a tunnel (`utun*`, `ppp*`, `ipsec*`), it also inspects the active `en*`
+  interfaces, so a VPN does not hide a hotspot. On other platforms, or if
+  those tools are missing, it reports an unmetered link.
 
 Prefer Wi-Fi or Ethernet for the first export. A rerun costs nothing for
 finished items. The tagger uploads about 3 small JPEGs per clip, so a hotspot

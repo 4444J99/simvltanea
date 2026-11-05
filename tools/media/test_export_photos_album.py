@@ -3,15 +3,19 @@
 No Photos.app, no network and no real media: ``subprocess.run`` is replaced by FakeHost.
 """
 import contextlib
+import errno
+import fcntl
 import hashlib
 import io
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -21,6 +25,171 @@ from tools.paths import REPO_ROOT
 HOTSPOT_ROUTE = "   route to: default\n    gateway: 172.20.10.1\n  interface: en0\n"
 LAN_ROUTE = "   route to: default\n    gateway: 192.168.1.1\n  interface: en0\n"
 PRIVATE_NAME = "FullSizeRender"
+REAL_RUN = subprocess.run  # the private-root guard runs the real git while osascript and friends are faked
+
+
+def _sample(text: str) -> str:
+    """Real ``ifconfig -v`` output is tab-indented; the constants below use four spaces for readability."""
+    return re.sub(r"(?m)^    ", "\t", text)
+
+
+def _with_address(sample: str, name: str, address: str) -> str:
+    """A derived sample: the same real output under another interface name, plus one IPv4 address."""
+    first, rest = sample.split("\n", 1)
+    renamed = name + first[first.index(":"):]
+    return f"{renamed}\n\tinet {address} netmask 0xffffff00 broadcast 192.0.2.255\n{rest}"
+
+
+# Redacted output of `ifconfig -v <interface>` captured on macOS 26 (MAC addresses, IPv4 and IPv6
+# addresses and Skywalk GUIDs replaced). Plain `ifconfig` (no -v) never prints the eflags/xflags lines.
+# en8 is a phone's USB tether (EXPENSIVE); en0 is Wi-Fi on a hotspot (constrained, EXPENSIVE+CONSTRAINED);
+# en10 is an active USB Ethernet adapter without an address; en4 is an inactive one; utun2 is a tunnel.
+
+EN8_USB_TETHER = _sample("""\
+en8: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500 index 22
+    eflags=400048c0<ACCEPT_RTADV,TXSTART,ARPLL,EXPENSIVE,FASTLN_ON>
+    xflags=4000000<INBAND_WAKE_PKT>
+    options=400<CHANNEL_IO>
+    ether 02:00:00:00:00:00
+    inet6 fe80::1%IFACE prefixlen 64 secured scopeid 0x16
+    inet 192.0.2.7 netmask 0xfffffff0 broadcast 192.0.2.255
+    inet6 2001:db8::1 prefixlen 64 autoconf secured
+    inet6 2001:db8::1 prefixlen 64 autoconf temporary
+    netif: 00000000-0000-0000-0000-000000000000
+    flowswitch: 00000000-0000-0000-0000-000000000000
+    nd6 options=201<PERFORMNUD,DAD>
+    media: autoselect <full-duplex>
+    status: active
+    max mtu: 1500
+    generation id: 48
+    type: USB Ethernet
+    agent domain:Skywalk type:NetIf flags:0xa443 desc:"Userspace Networking"
+    agent domain:Skywalk type:FlowSwitch flags:0x4483 desc:"Userspace Networking"
+    link quality: 100 (good)
+    state availability: 0 (true)
+    scheduler: UNKNOWN
+    link rate: 100.00 Mbps
+    qosmarking enabled: yes mode: none
+    low power mode: disabled
+    multi layer packet logging (mpklog): disabled
+    routermode4: disabled
+    routermode6: disabled
+""")
+
+EN0_WIFI_CONSTRAINED = _sample("""\
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500 index 14 constrained
+    eflags=442048d0<ADV_REPORT,ACCEPT_RTADV,TXSTART,ARPLL,EXPENSIVE,NOACKPRI,CHANNEL_DRV,FASTLN_ON>
+    xflags=4000201<WOL,CONSTRAINED,INBAND_WAKE_PKT>
+    options=6460<TSO4,TSO6,CHANNEL_IO,PARTIAL_CSUM,ZEROINVERT_CSUM>
+    hwassist=703000<CSUM_PARTIAL,CSUM_ZERO_INVERT,MULTIPAGES,TSO_V4,TSO_V6>
+    ether 02:00:00:00:00:00
+    inet6 fe80::1%IFACE prefixlen 64 secured scopeid 0xe
+    inet 192.0.2.7 netmask 0xfffffff0 broadcast 192.0.2.255
+    inet6 2001:db8::1 prefixlen 64 autoconf secured
+    inet6 2001:db8::1 prefixlen 64 autoconf temporary
+    netif: 00000000-0000-0000-0000-000000000000
+    flowswitch: 00000000-0000-0000-0000-000000000000
+    nd6 options=201<PERFORMNUD,DAD>
+    media: autoselect
+    status: active
+    max mtu: 1500
+    generation id: 25
+    type: Wi-Fi
+    agent domain:Skywalk type:NetIf flags:0xa443 desc:"Userspace Networking"
+    agent domain:WiFiManager type:CallInProgress flags:0x3d desc:"WiFi"
+    agent domain:Skywalk type:FlowSwitch flags:0x4483 desc:"Userspace Networking"
+    link quality: 100 (good)
+    state availability: 0 (true)
+    scheduler: FQ_CODEL (driver managed)
+    uplink rate: 72.25 Mbps [eff] / 97.11 Mbps
+    downlink rate: 72.25 Mbps [eff] / 97.11 Mbps [max]
+    qosmarking enabled: yes mode: none
+    low power mode: disabled
+    multi layer packet logging (mpklog): disabled
+    routermode4: disabled
+    routermode6: disabled
+""")
+
+EN10_USB_ETHERNET = _sample("""\
+en10: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500 index 23
+    eflags=60000080<TXSTART,DIRECTLINK,FASTLN_ON>
+    xflags=4002000<NOSHAPING,INBAND_WAKE_PKT>
+    options=404<VLAN_MTU,CHANNEL_IO>
+    hwassist=20000<VLAN_MTU>
+    ether 02:00:00:00:00:00
+    inet6 fe80::1%IFACE prefixlen 64 scopeid 0x17
+    netif: 00000000-0000-0000-0000-000000000000
+    flowswitch: 00000000-0000-0000-0000-000000000000
+    nd6 options=201<PERFORMNUD,DAD>
+    media: autoselect
+    status: active
+    max mtu: 16000
+    generation id: 49
+    type: USB Ethernet
+    agent domain:Skywalk type:NetIf flags:0xa443 desc:"Userspace Networking"
+    agent domain:Skywalk type:FlowSwitch flags:0x4483 desc:"Userspace Networking"
+    link quality: 100 (good)
+    state availability: 0 (true)
+    scheduler: UNKNOWN
+    qosmarking enabled: yes mode: none
+    low power mode: disabled
+    multi layer packet logging (mpklog): disabled
+    routermode4: disabled
+    routermode6: disabled
+""")
+
+EN4_INACTIVE = _sample("""\
+en4: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500 index 7
+    eflags=40000080<TXSTART,FASTLN_ON>
+    xflags=4000000<INBAND_WAKE_PKT>
+    options=400<CHANNEL_IO>
+    ether 02:00:00:00:00:00
+    netif: 00000000-0000-0000-0000-000000000000
+    flowswitch: 00000000-0000-0000-0000-000000000000
+    nd6 options=201<PERFORMNUD,DAD>
+    media: none
+    status: inactive
+    max mtu: 16000
+    generation id: 7
+    type: USB Ethernet
+    agent domain:Skywalk type:NetIf flags:0xa443 desc:"Userspace Networking"
+    agent domain:Skywalk type:FlowSwitch flags:0x4483 desc:"Userspace Networking"
+    link quality: -2 (off)
+    state availability: 0 (true)
+    scheduler: UNKNOWN
+    qosmarking enabled: yes mode: none
+    low power mode: disabled
+    multi layer packet logging (mpklog): disabled
+    routermode4: disabled
+    routermode6: disabled
+""")
+
+UTUN2_TUNNEL = _sample("""\
+utun2: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 2000 index 20
+    eflags=2080<TXSTART,NOAUTOIPV6LL>
+    xflags=4000004<NOAUTONX,INBAND_WAKE_PKT>
+    inet6 fe80::1%IFACE prefixlen 64 scopeid 0x14
+    nd6 options=201<PERFORMNUD,DAD>
+    generation id: 28
+    agent domain:ids501 type:clientchannel flags:0xc3 desc:"IDSNexusAgent ids501 : clientchannel"
+    link quality: -1 (unknown)
+    state availability: 0 (true)
+    scheduler: FQ_CODEL
+    qosmarking enabled: no mode: none
+    low power mode: disabled
+    multi layer packet logging (mpklog): disabled
+    routermode4: disabled
+    routermode6: disabled
+""")
+
+# Derived (not captured): an unmetered wired interface with an address, and the hotspot Wi-Fi with its
+# flags removed, i.e. the same card on a normal network.
+ETHERNET_UNMETERED = _with_address(EN10_USB_ETHERNET, "en5", "192.0.2.20")
+WIFI_UNMETERED = (EN0_WIFI_CONSTRAINED.replace(" constrained", "").replace(",EXPENSIVE", "")
+                  .replace(",CONSTRAINED", ""))
+TUNNEL_ROUTE = "   route to: default\n    gateway: 192.0.2.99\n  interface: utun2\n"
+EN8_ROUTE = "   route to: default\n    gateway: 192.0.2.1\n  interface: en8\n"
+ETHERNET_ROUTE = "   route to: default\n    gateway: 192.0.2.1\n  interface: en5\n"
 
 
 def uid(n: int) -> str:
@@ -46,7 +215,8 @@ class FakeHost:
         self.fail_stderr = f"execution error: /Users/someone/Pictures/{PRIVATE_NAME}.MOV can't be exported. (-1712)"
         self.on_export = None
         self.route = LAN_ROUTE
-        self.ifconfig = "en0: flags=8863<UP>\n\toptions=400\n"
+        self.interfaces = {"en0": WIFI_UNMETERED, "en5": ETHERNET_UNMETERED}  # name -> `ifconfig -v NAME`
+        self.interface_list = "lo0 en0 en5 utun2"
         self.route_error: Exception | None = None
         self.calls: list[list[str]] = []
         self.exports: list[str] = []
@@ -56,6 +226,8 @@ class FakeHost:
         with self._lock:
             self.calls.append(list(command))
         name = pathlib.Path(command[0]).name
+        if name == "git":
+            return REAL_RUN(command, **kwargs)
         if "osascript" in command:
             return self.osascript(command)
         if name == "ffprobe":
@@ -65,8 +237,19 @@ class FakeHost:
                 raise self.route_error
             return subprocess.CompletedProcess(command, 0, self.route, "")
         if name == "ifconfig":
-            return subprocess.CompletedProcess(command, 0, self.ifconfig, "")
+            return self.ifconfig_output(command)
         raise AssertionError(f"unexpected command {command[:2]}")
+
+    def ifconfig_output(self, command):
+        arguments = command[1:]
+        if arguments == ["-l"]:
+            return subprocess.CompletedProcess(command, 0, self.interface_list + "\n", "")
+        text = self.interfaces.get(arguments[-1])
+        if text is None:
+            return subprocess.CompletedProcess(command, 1, "", f"ifconfig: interface {arguments[-1]} does not exist")
+        if "-v" not in arguments:  # plain ifconfig never prints the eflags/xflags lines
+            text = "\n".join(line for line in text.splitlines() if not re.match(r"\s+[ex]flags=", line)) + "\n"
+        return subprocess.CompletedProcess(command, 0, text, "")
 
     def osascript(self, command):
         if "export {m}" not in " ".join(command):
@@ -108,7 +291,8 @@ class ExporterTestCase(unittest.TestCase):
 
     def run_main(self, *extra, platform="linux"):
         out = io.StringIO()
-        with mock.patch.object(sys, "platform", platform), contextlib.redirect_stdout(out):
+        with mock.patch.object(sys, "platform", platform), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
             code = exporter.main(["--root", str(self.root), "--workers", "1", *extra])
         self.output = out.getvalue()
         return code
@@ -163,10 +347,19 @@ class ExportLayoutTests(ExporterTestCase):
         self.seed({1: [("IMG_0001.HEIC", b"still"), ("IMG_0001.MOV", b"movie-1"), ("IMG_0002.JPG", b"other-still"),
                        ("IMG_0002.MOV", b"movie-2"), ("IMG_0001.AAE", b"sidecar")]})
         self.assertEqual(self.run_main(), 0)
-        # sorted order: IMG_0001.AAE(0) .HEIC(1) .MOV(2) IMG_0002.JPG(3) .MOV(4); first non-video is the AAE sidecar
-        self.assertEqual(self.names(1), {f"{uid(1)}.aae", f"{uid(1)}.mov", f"{uid(1)}.extra1.heic",
+        # sorted order: IMG_0001.AAE(0) .HEIC(1) .MOV(2) IMG_0002.JPG(3) .MOV(4). The primary still is the
+        # first *image*, so the AAE sidecar that sorts before it never becomes <uuid>.aae.
+        self.assertEqual(self.names(1), {f"{uid(1)}.heic", f"{uid(1)}.mov", f"{uid(1)}.extra0.aae",
                                          f"{uid(1)}.extra3.jpg", f"{uid(1)}.extra4.mov", ".done"})
         self.assertEqual((self.folder(1) / f"{uid(1)}.mov").read_bytes(), b"movie-1")
+        self.assertEqual((self.folder(1) / f"{uid(1)}.heic").read_bytes(), b"still")
+
+    def test_every_image_extension_can_be_the_primary_still_and_a_sidecar_alone_is_not(self):
+        for extension in ("HEIC", "JPG", "JPEG", "PNG"):
+            self.assertIn(f".{extension.lower()}", exporter.IMAGE_EXT)
+        self.seed({1: [("A.AAE", b"sidecar"), ("A.MOV", b"movie")]})
+        self.assertEqual(self.run_main(), 0)
+        self.assertEqual(self.names(1), {f"{uid(1)}.extra0.aae", f"{uid(1)}.mov", ".done"})
 
     def test_renaming_never_overwrites_a_file_whose_name_equals_another_final_name(self):
         lower = "ffffffff-0000-4000-8000-000000000000"
@@ -325,12 +518,60 @@ class MeteredLinkTests(ExporterTestCase):
             self.assertFalse(exporter.on_metered_link())
             self.assertEqual(self.host.calls, [])  # a true no-op elsewhere: nothing is executed
 
-    def test_constrained_or_expensive_interface_flags_count_as_metered(self):
+    def metered(self, route, **interfaces):
+        self.host.route = route
+        self.host.interfaces.update(interfaces)
         with mock.patch.object(sys, "platform", "darwin"):
-            self.assertFalse(exporter.on_metered_link())
-            for flag in (" constrained", " expensive"):
-                self.host.ifconfig = f"en0: flags=8863<UP>\n\toptions=400\n\tstatus: active{flag}\n"
-                self.assertTrue(exporter.on_metered_link())
+            return exporter.on_metered_link()
+
+    def test_real_ifconfig_v_expensive_flag_is_detected_without_the_hotspot_gateway(self):
+        self.assertTrue(self.metered(EN8_ROUTE, en8=EN8_USB_TETHER))  # eflags=<...EXPENSIVE...> only
+        self.assertNotIn("constrained", EN8_USB_TETHER)  # nothing lowercase to fall back on
+        self.assertIn(["ifconfig", "-v", "en8"], self.host.calls)  # plain ifconfig never prints the flag
+
+    def test_real_wifi_constrained_sample_is_detected(self):
+        self.assertTrue(self.metered(LAN_ROUTE, en0=EN0_WIFI_CONSTRAINED))
+        only_xflags = EN0_WIFI_CONSTRAINED.replace(" constrained", "").replace(",EXPENSIVE", "")
+        self.assertIn("xflags=4000201<WOL,CONSTRAINED", only_xflags)
+        self.assertTrue(self.metered(LAN_ROUTE, en0=only_xflags))
+
+    def test_lowercase_constrained_header_is_still_honoured(self):
+        header_only = WIFI_UNMETERED.replace("mtu 1500 index 14", "mtu 1500 index 14 constrained")
+        self.assertTrue(self.metered(LAN_ROUTE, en0=header_only))
+
+    def test_unmetered_interfaces_are_not_flagged(self):
+        self.assertFalse(self.metered(LAN_ROUTE, en0=WIFI_UNMETERED))
+        self.assertFalse(self.metered(ETHERNET_ROUTE))
+        self.assertNotIn("EXPENSIVE", WIFI_UNMETERED + ETHERNET_UNMETERED)
+
+    def test_a_vpn_does_not_hide_a_hotspot_on_the_physical_interface(self):
+        self.host.interface_list = "lo0 en4 en8 utun2"
+        self.assertTrue(self.metered(TUNNEL_ROUTE, en8=EN8_USB_TETHER, en4=EN4_INACTIVE, utun2=UTUN2_TUNNEL))
+        self.assertIn(["ifconfig", "-l"], self.host.calls)
+
+    def test_a_vpn_over_a_normal_network_is_not_metered(self):
+        self.host.interface_list = "lo0 en0 en4 en5 utun2"
+        self.assertFalse(self.metered(TUNNEL_ROUTE, en0=WIFI_UNMETERED, en4=EN4_INACTIVE, utun2=UTUN2_TUNNEL))
+
+    def test_inactive_or_unaddressed_interfaces_are_ignored_behind_a_tunnel(self):
+        flagged_but_down = EN8_USB_TETHER.replace("status: active", "status: inactive")
+        self.host.interface_list = "lo0 en8 utun2"
+        self.assertFalse(self.metered(TUNNEL_ROUTE, en8=flagged_but_down, utun2=UTUN2_TUNNEL))
+
+    def test_hotspot_subnet_address_behind_a_tunnel_is_metered(self):
+        subnet = _with_address(EN10_USB_ETHERNET, "en8", "172.20.10.4")
+        self.host.interface_list = "lo0 en8 utun2"
+        self.assertTrue(self.metered(TUNNEL_ROUTE, en8=subnet, utun2=UTUN2_TUNNEL))
+
+    def test_other_interfaces_are_not_inspected_when_the_default_route_is_not_a_tunnel(self):
+        self.host.interface_list = "lo0 en5 en8"
+        self.assertFalse(self.metered(ETHERNET_ROUTE, en8=EN8_USB_TETHER))  # the tether is up but not the route
+
+    def test_tunnel_name_families_are_all_recognised(self):
+        for tunnel in ("utun4", "ppp0", "ipsec1"):
+            route = TUNNEL_ROUTE.replace("utun2", tunnel)
+            self.host.interface_list = f"lo0 en8 {tunnel}"
+            self.assertTrue(self.metered(route, en8=EN8_USB_TETHER, **{tunnel: UTUN2_TUNNEL}), tunnel)
 
     def test_missing_route_tool_is_a_safe_no_op(self):
         self.host.route_error = FileNotFoundError("route")
@@ -390,6 +631,28 @@ class MeteredLinkTests(ExporterTestCase):
         self.assertEqual(calls, [60, 60])
 
 
+class MeterGuardRecordTests(unittest.TestCase):
+    def test_bytes_are_counted_only_while_the_detector_reports_a_metered_link(self):
+        link = {"metered": False}
+        guard = exporter.MeterGuard(budget_bytes=1000, detector=lambda: link["metered"])
+        guard.record(400)
+        self.assertEqual(guard.spent_bytes, 0)  # unmetered exports never spend the hotspot budget
+        link["metered"] = True
+        guard.record(300)
+        self.assertEqual(guard.spent_bytes, 300)
+        link["metered"] = False
+        guard.record(200)
+        self.assertEqual(guard.spent_bytes, 300)
+        self.assertTrue(guard.allowed())
+
+    def test_bytes_exported_on_a_real_network_do_not_block_a_later_hotspot_session(self):
+        link = {"metered": False}
+        guard = exporter.MeterGuard(budget_bytes=500, detector=lambda: link["metered"])
+        guard.record(10_000)
+        link["metered"] = True
+        self.assertTrue(guard.allowed())  # the whole budget is still available
+
+
 class PrivateRootTests(ExporterTestCase):
     def test_root_inside_a_photos_library_package_is_refused_and_nothing_is_written(self):
         library = pathlib.Path(self._tmp.name) / "Photos Library.photoslibrary"
@@ -425,6 +688,192 @@ class PrivateRootTests(ExporterTestCase):
         inside_var = exporter.resolve_private_root(REPO_ROOT / "var" / "live-photos-test-root")
         self.assertEqual(inside_var, (REPO_ROOT / "var" / "live-photos-test-root").resolve())
         self.assertFalse(inside_var.exists())
+
+
+class FinishedItemRaceTests(ExporterTestCase):
+    def test_an_item_finished_by_another_run_while_this_one_waited_is_not_deleted(self):
+        self.seed({1: live_photo(b"a")})
+        finished_by_a = exporter.ExportSettings(root=self.root)
+
+        def other_run_finishes_the_item_during_the_wait(_seconds):
+            self.assertEqual(exporter.export_one(finished_by_a, pid(1))[0], "ok")
+            link["metered"] = False
+
+        link = {"metered": True}
+        waiting = exporter.MeterGuard(budget_bytes=0, wait=True, detector=lambda: link["metered"],
+                                      sleep=other_run_finishes_the_item_during_the_wait)
+        settings = exporter.ExportSettings(root=self.root, guard=waiting)
+        with contextlib.redirect_stdout(io.StringIO()):
+            status, _uuid, _detail = exporter.export_one(settings, pid(1))
+        self.assertEqual(status, "skip")
+        self.assertEqual(self.host.exports, [pid(1)])  # exported once, by the other run
+        self.assertTrue((self.folder(1) / ".done").exists())
+        self.assertEqual(len(self.log_lines("export-manifest.jsonl")), 1)
+
+    def test_two_sequential_runs_do_not_touch_finished_output(self):
+        self.seed({1: live_photo(b"a")})
+        self.assertEqual(self.run_main(), 0)
+        before = {p.name: p.read_bytes() for p in self.folder(1).iterdir()}
+        manifest = (self.root / "export-manifest.jsonl").read_text()
+        self.assertEqual(self.run_main(), 0)
+        self.assertEqual({p.name: p.read_bytes() for p in self.folder(1).iterdir()}, before)
+        self.assertEqual((self.root / "export-manifest.jsonl").read_text(), manifest)
+        self.assertEqual(self.host.exports, [pid(1)])
+
+
+class ExportLockTests(ExporterTestCase):
+    def test_a_held_lock_makes_a_second_run_refuse_with_a_distinct_exit_code(self):
+        self.seed({1: live_photo(b"a")})
+        self.root.mkdir(parents=True)
+        with (self.root / ".export.lock").open("a+") as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            code = self.run_main()
+        self.assertEqual(code, exporter.EXIT_LOCKED)
+        self.assertNotIn(code, (0, 1, 2, 3))
+        self.assertIn("another export is already running", self.output)
+        self.assertEqual(self.host.exports, [])
+        self.assertFalse((self.root / "originals").exists())
+        self.assertFalse((self.root / "album-ids.json").exists())
+
+    def test_the_lock_is_released_when_the_run_ends(self):
+        self.seed({1: live_photo(b"a")})
+        self.assertEqual(self.run_main(), 0)
+        with (self.root / ".export.lock").open("a+") as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)  # would raise if the first run still held it
+        self.assertEqual(self.run_main(), 0)
+
+    def test_a_lock_held_by_another_process_is_respected(self):
+        self.seed({1: live_photo(b"a")})
+        self.root.mkdir(parents=True)
+        code = (
+            "import fcntl, sys\n"
+            "handle = open(sys.argv[1], 'a+')\n"
+            "fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+            "print('held', flush=True)\n"
+            "sys.stdin.readline()\n"
+        )
+        # Popen is not faked (only subprocess.run is), so this really is a second process.
+        holder = subprocess.Popen([sys.executable, "-c", code, str(self.root / ".export.lock")],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.stdin.close)
+        self.assertEqual(holder.stdout.readline().strip(), "held")
+        self.assertEqual(self.run_main(), exporter.EXIT_LOCKED)
+        self.assertEqual(self.host.exports, [])
+
+
+class DuplicateIdTests(ExporterTestCase):
+    def test_duplicate_ids_are_dropped_keeping_first_occurrence_order(self):
+        self.root.mkdir(parents=True)
+        (self.root / "album-ids.json").write_text(json.dumps([pid(2), pid(1), pid(2), pid(3), pid(1)]))
+        settings = exporter.ExportSettings(root=self.root)
+        self.assertEqual(exporter.load_ids(settings, "Any", False), [pid(2), pid(1), pid(3)])
+
+    def test_duplicates_from_photos_are_dropped_before_the_cache_is_written(self):
+        self.host.album_ids = [pid(1), pid(2), pid(1)]
+        settings = exporter.ExportSettings(root=self.root)
+        self.assertEqual(exporter.load_ids(settings, "Any", False), [pid(1), pid(2)])
+        self.assertEqual(json.loads((self.root / "album-ids.json").read_text()), [pid(1), pid(2)])
+
+    def test_a_duplicated_id_is_exported_once(self):
+        self.seed({1: live_photo(b"a")})
+        self.host.album_ids = [pid(1), pid(1)]
+        self.assertEqual(self.run_main(), 0)
+        self.assertEqual(self.host.exports, [pid(1)])
+
+
+class InterruptTests(ExporterTestCase):
+    def run_interrupted(self, *extra):
+        try:
+            return self.run_main(*extra)
+        except KeyboardInterrupt:
+            self.fail("KeyboardInterrupt escaped main(); it must be handled and turned into an exit code")
+
+    def fake_export(self, ran, delay=0.05):
+        def export(settings, photos_id):
+            ran.append(photos_id)
+            if len(ran) == 1:
+                raise KeyboardInterrupt  # what the main thread sees when the user presses Ctrl-C
+            time.sleep(delay)
+            return "ok", exporter.uuid_of(photos_id), ""
+        return export
+
+    def test_ctrl_c_cancels_queued_items_logs_one_line_and_exits_nonzero(self):
+        total = 40
+        self.host.album_ids = [pid(n) for n in range(1, total + 1)]
+        ran: list[str] = []
+        with mock.patch.object(exporter, "export_one", self.fake_export(ran)):
+            code = self.run_interrupted()
+        self.assertEqual(code, exporter.EXIT_INTERRUPTED)
+        self.assertNotEqual(code, 0)
+        self.assertLess(len(ran), total)  # queued items never started
+        lines = [line for line in self.output.splitlines() if "cancelled" in line]
+        self.assertEqual(len(lines), 1)
+        cancelled = int(re.search(r"(\d+) queued item", lines[0]).group(1))
+        self.assertEqual(cancelled + len(ran), total)  # every item either ran or was cancelled
+        self.assertNotIn(str(self.root), self.output)
+
+    def test_ctrl_c_stops_the_retry_rounds_and_a_rerun_resumes(self):
+        self.seed({1: live_photo(b"a"), 2: live_photo(b"b")})
+        ran: list[str] = []
+        with mock.patch.object(exporter, "export_one", self.fake_export(ran, delay=0)):
+            self.assertEqual(self.run_interrupted("--rounds", "3"), exporter.EXIT_INTERRUPTED)
+        self.assertEqual(self.run_main(), 0)
+        self.assertTrue((self.folder(1) / ".done").exists() and (self.folder(2) / ".done").exists())
+
+
+class StrictnessTests(ExporterTestCase):
+    def test_an_id_with_a_trailing_newline_is_malformed(self):
+        settings = exporter.ExportSettings(root=self.root)
+        status, _uuid, detail = exporter.export_one(settings, pid(1) + "\n")
+        self.assertEqual((status, detail), ("fail", "malformed Photos media item id"))
+        self.assertEqual(self.host.exports, [])
+        self.assertIsNone(exporter.ID_RE.fullmatch(pid(1) + "\n"))
+
+    def test_a_cached_id_with_a_trailing_newline_is_rejected(self):
+        self.root.mkdir(parents=True)
+        (self.root / "album-ids.json").write_text(json.dumps([pid(1) + "\n"]))
+        with self.assertRaises(SystemExit):
+            exporter.load_ids(exporter.ExportSettings(root=self.root), "Any", False)
+
+
+class OsErrorTests(ExporterTestCase):
+    def test_a_local_file_error_prints_the_type_and_no_path(self):
+        secret = self._tmp.name + "/very-private-folder/receipt"
+        failure = PermissionError(errno.EACCES, "Permission denied", secret)
+        with mock.patch.object(exporter, "load_ids", side_effect=failure):
+            code = self.run_main()
+        self.assertEqual(code, exporter.EXIT_IO_ERROR)
+        self.assertIn("PermissionError", self.output)
+        self.assertNotIn("very-private-folder", self.output)
+        self.assertNotIn(self._tmp.name, self.output)
+        self.assertNotIn("Traceback", self.output)
+
+
+class ExitCodeTests(ExporterTestCase):
+    def test_stop_plus_remaining_failures_returns_one_not_two(self):
+        self.seed({1: live_photo(b"a"), 2: live_photo(b"b")})
+        self.host.fail_times[pid(1)] = 5
+        self.host.on_export = lambda photos_id: (self.root / "STOP").write_text("") if photos_id == pid(1) else None
+        self.assertEqual(self.run_main(), exporter.EXIT_FAILURES)
+        self.assertIn("STOP file present", self.output)
+        self.assertEqual(self.host.exports, [pid(1)])
+
+    def test_exit_codes_are_distinct_and_documented(self):
+        codes = (exporter.EXIT_FAILURES, exporter.EXIT_STOPPED, exporter.EXIT_METERED, exporter.EXIT_LOCKED,
+                 exporter.EXIT_IO_ERROR, exporter.EXIT_INTERRUPTED)
+        self.assertEqual(len(set(codes)), len(codes))
+        for code in codes:
+            self.assertIn(f"{code} ", exporter.__doc__)
+
+    def test_a_case_variant_of_this_checkout_is_refused_when_it_reaches_the_checkout(self):
+        variant = REPO_ROOT.parent / REPO_ROOT.name.upper() / "docs" / "live-photos"
+        if not variant.parent.exists():
+            self.skipTest("case-sensitive volume: the upper-case path is a different, nonexistent directory")
+        for tool_root in (variant, REPO_ROOT.parent / REPO_ROOT.name.upper() / "tools" / "media" / "dump"):
+            with self.assertRaises(SystemExit):
+                exporter.resolve_private_root(tool_root)
+        self.assertFalse((REPO_ROOT / "docs" / "live-photos").exists())
 
 
 class AlbumIdTests(ExporterTestCase):
