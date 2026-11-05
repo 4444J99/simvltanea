@@ -98,3 +98,34 @@ The exit code is 1 if any clip failed and 0 otherwise.
 
 If `ffmpeg` or `ffprobe` is missing, the command says so in one line and points
 to `independent-loop-compositor doctor`.
+
+## Checking levels yourself
+
+Do not judge a proxy by comparing its luma with the source's luma plane. A
+full-range phone clip is converted to limited range and also from the SD matrix
+(`smpte170m`) to BT.709, and that matrix change legitimately shifts luma on dark,
+saturated scenes, so a correct proxy can sit ten levels or more away from the
+source. Compare against an independent reference conversion measured before
+compression:
+
+```bash
+# Reference: what the colour pipeline should produce, before encoding
+ffmpeg -hide_banner -loglevel error -i clip.mov \
+  -vf "scale=in_range=pc:out_range=tv:in_color_matrix=smpte170m:out_color_matrix=bt709,format=yuv420p,signalstats,metadata=print:file=-" \
+  -frames:v 1 -f null - | grep -E 'YLOW|YAVG|YHIGH'
+
+# The proxy itself
+ffmpeg -hide_banner -loglevel error -i proxies/clip.mp4 \
+  -vf "signalstats,metadata=print:file=-" \
+  -frames:v 1 -f null - | grep -E 'YLOW|YAVG|YHIGH'
+```
+
+The two sets of numbers should agree within about one level. On eight real phone
+clips the proxy differed from this reference by at most 0.9 levels over Y, U and
+V, while a range-only conversion that ignores the matrix differs by about 10.
+
+- Keep `format=yuv420p` in the reference chain. Without it FFmpeg keeps the
+  full-range pixel format and silently ignores `out_range=tv`, so the reference
+  would report 0 to 255 and look like a washed-out proxy.
+- Use `in_color_matrix=bt709` for clips tagged BT.709 and `in_range=tv` for clips
+  that are already limited range.
