@@ -45,6 +45,7 @@ AUDIO_MODES = {"none", "panel", "mix"}
 VIDEO_DIRECTIONS = {"forward", "reverse", "pingpong"}
 TONE_MODES = {"none", "normalize", "histeq"}
 SCRIPT_DIR = Path(__file__).resolve().parent
+FFMPEG_ERROR_LINES = 12
 
 
 @dataclass(frozen=True)
@@ -153,12 +154,18 @@ class Segment:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Render a left-to-right triptych video canon from exported videos."
+        description="Render a composition to MP4 with FFmpeg: an independent-loop state "
+        "(--state with --orientation) or a legacy left-to-right three-panel canon "
+        "built from exported videos.",
+        epilog="examples:\n"
+        "  independent-loop-compositor render --state composition.json --orientation landscape --output var/renders/out.mp4\n"
+        "  independent-loop-compositor render var/samples --dry-run",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "input_dir",
         nargs="?",
-        help="Directory containing manually exported videos. Defaults to samples/.",
+        help="Directory containing manually exported videos. Defaults to var/samples/ in the workspace.",
     )
     parser.add_argument(
         "--manifest",
@@ -235,7 +242,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--keep-work",
         action="store_true",
-        help="Keep temporary segment files under work/ after rendering.",
+        help="Keep temporary segment files under var/work/ after rendering.",
     )
     # Seamed slice field — all configurable
     parser.add_argument("--slice-enabled", choices=("true", "false"), help="Enable slice field (never full-frame).")
@@ -343,13 +350,15 @@ def build_settings(args: argparse.Namespace) -> Settings:
     # Optional external JSON config (all knobs configurable)
     if getattr(args, "config", None):
         cfg_path = Path(args.config).expanduser()
-        if cfg_path.is_file():
-            try:
-                cfg_data = resolve_references(json.loads(cfg_path.read_text(encoding="utf-8")))
-                if isinstance(cfg_data, dict):
-                    manifest = {**manifest, **cfg_data}
-            except Exception as exc:
-                raise SystemExit(f"config {cfg_path}: {exc}") from exc
+        try:
+            cfg_data = resolve_references(json.loads(cfg_path.read_text(encoding="utf-8")))
+        except OSError as exc:
+            raise SystemExit(f"config {cfg_path}: {exc.strerror or exc}") from exc
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise SystemExit(f"config {cfg_path}: invalid JSON or reference: {exc}") from exc
+        if not isinstance(cfg_data, dict):
+            raise SystemExit(f"config {cfg_path}: top level must be a JSON object")
+        manifest = {**manifest, **cfg_data}
     canvas = manifest.get("canvas", {})
     render = manifest.get("render", {})
     audio = manifest.get("audio", {})
@@ -497,11 +506,29 @@ def validate_settings(settings: Settings) -> None:
 
 def require_tool(name: str) -> None:
     if shutil.which(name) is None:
-        raise SystemExit(f"Required tool not found on PATH: {name}")
+        raise SystemExit(
+            f"Required tool not found on PATH: {name}. "
+            "Run `independent-loop-compositor doctor` to check prerequisites."
+        )
+
+
+class FFmpegError(subprocess.CalledProcessError):
+    """A failed FFmpeg run that reports FFmpeg's own diagnostics, not the command line."""
+
+    def __str__(self) -> str:
+        tool = Path(str(self.cmd[0])).name if self.cmd else "ffmpeg"
+        lines = [line for line in (self.stderr or "").strip().splitlines() if line.strip()]
+        tail = "\n".join(lines[-FFMPEG_ERROR_LINES:])
+        message = f"{tool} failed with exit status {self.returncode}"
+        return f"{message}:\n{tail}" if tail else message
 
 
 def run(command: list[str]) -> None:
-    subprocess.run(command, check=True)
+    completed = subprocess.run(command, stderr=subprocess.PIPE, text=True, errors="replace")
+    if completed.returncode:
+        raise FFmpegError(completed.returncode, command, stderr=completed.stderr)
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
 
 
 def seconds(value: float) -> str:
@@ -567,7 +594,7 @@ def collect_video_paths(settings: Settings) -> list[Path]:
         if not settings.input_dir.exists():
             raise SystemExit(
                 f"No input directory found: {settings.input_dir}\n"
-                "Export videos manually and place them in samples/, or pass another input_dir."
+                "Export videos manually and place them in var/samples/, or pass another input_dir."
             )
         if not settings.input_dir.is_dir():
             raise SystemExit(f"Input path is not a directory: {settings.input_dir}")
@@ -1514,4 +1541,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except subprocess.CalledProcessError as error:
+        if isinstance(error, FFmpegError):
+            print(error, file=sys.stderr)
         raise SystemExit(error.returncode) from error
