@@ -454,9 +454,6 @@ def estimate(model: str, n: int, px: int) -> float:
 
 def build_request(root: pathlib.Path, uuid: str, model: str, schema: dict):
     """One Batch API request: three frame images, then the fixed instruction, JSON-schema output."""
-    from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
-    from anthropic.types.messages.batch_create_params import Request
-
     d = dirs(root, create=False)
     content = []
     for index in range(len(FRAME_FRACTIONS)):
@@ -466,6 +463,11 @@ def build_request(root: pathlib.Path, uuid: str, model: str, schema: dict):
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                                     "data": base64.standard_b64encode(frame.read_bytes()).decode()}})
     content.append({"type": "text", "text": PROMPT})
+    # The optional SDK is needed only to build the typed request, so a missing frame is reported first and
+    # does not depend on the ``analysis`` extra being installed.
+    from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+    from anthropic.types.messages.batch_create_params import Request
+
     return Request(custom_id=uuid, params=MessageCreateParamsNonStreaming(
         model=model, max_tokens=2000,
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},

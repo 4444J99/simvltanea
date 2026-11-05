@@ -524,6 +524,8 @@ class ShortAndBrokenClipTests(TaggerTestCase):
 
 
 class RequestBuildingTests(TaggerTestCase):
+    @needs_sdk
+    @needs_pillow
     def test_request_has_three_images_then_the_fixed_instruction_and_json_schema_output(self):
         import anthropic
 
@@ -547,6 +549,8 @@ class RequestBuildingTests(TaggerTestCase):
 
             self.assertEqual(base64.standard_b64decode(block["source"]["data"]), expected)
 
+    @needs_sdk
+    @needs_pillow
     def test_request_contains_no_file_names_or_paths_of_the_clip(self):
         import anthropic
 
@@ -934,6 +938,7 @@ class PrepareGuardTests(FakeFfmpegTestCase):
         self.assertEqual(self.ffmpeg_calls(), [])
 
 
+@needs_pillow
 class OsErrorTests(TaggerTestCase):
     def test_a_local_file_error_prints_the_type_and_no_path(self):
         self.add_clip(UUID_A)
