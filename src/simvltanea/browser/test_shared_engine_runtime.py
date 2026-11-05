@@ -274,17 +274,24 @@ class SharedEngineRuntimeTest(unittest.TestCase):
             with self.subTest(width=width,height=height):
                 self.page.set_viewport_size({'width':width,'height':height})
                 self.page.wait_for_timeout(150)
+                # Crop then contain (full-bleed spec, decision 8): the panned slice window,
+                # not the whole element, lies inside the box; the element keeps the source aspect.
                 geometry=self.page.evaluate("""() => [...window.compositionRuntime.nodes.values()]
                   .filter(n=>n.span.slice_rect).map(n=>{
                     const box=n.box.getBoundingClientRect(), media=n.media.getBoundingClientRect();
+                    const [, , sw, sh]=n.box.dataset.sliceRect.split(',').map(Number);
+                    const sy=Number(n.media.style.getPropertyValue('--slice-y'));
                     return {delta:media.top-box.top, expected:parseFloat(n.media.style.top)*box.height/100,
-                            top:media.top, bottom:media.bottom, boxTop:box.top, boxBottom:box.bottom};
+                            top:media.top+sy*media.height, bottom:media.top+(sy+sh)*media.height,
+                            boxTop:box.top, boxBottom:box.bottom,
+                            stretch:(media.width/media.height)/(n.media.videoWidth/n.media.videoHeight)};
                   })""")
                 self.assertTrue(geometry)
                 for item in geometry:
                     self.assertAlmostEqual(item['delta'],item['expected'],delta=1)
-                    self.assertLessEqual(item['top'],item['boxTop']+1)
-                    self.assertGreaterEqual(item['bottom'],item['boxBottom']-1)
+                    self.assertGreaterEqual(item['top'],item['boxTop']-1)
+                    self.assertLessEqual(item['bottom'],item['boxBottom']+1)
+                    self.assertAlmostEqual(item['stretch'],1,delta=0.005)
         self.assertEqual(self.errors, [])
 
     def test_no_page_errors_during_playback(self):

@@ -214,74 +214,207 @@ function isPartialSlice(raw) {
   const [x,y,w,h] = sliceValues(raw);
   return !(Math.abs(x)<1e-5 && Math.abs(y)<1e-5 && Math.abs(w-1)<1e-5 && Math.abs(h-1)<1e-5);
 }
+/* Full-bleed raster (docs/plans/2026-11-05-full-bleed-layout-presets.md).
+ * Exact rationals decide coverage and name shared edges; floats only place pixels. */
+const EDGE_EPSILON = 1e-12;
+const OPPOSITE_SIDE = {top:'bottom', bottom:'top', left:'right', right:'left'};
+const SIDE_CORNERS = {top:['TopLeft','TopRight'], bottom:['BottomLeft','BottomRight'],
+  left:['TopLeft','BottomLeft'], right:['TopRight','BottomRight']};
+const CORNERS = ['TopLeft','TopRight','BottomRight','BottomLeft'];
+const OVERLAP_PX_MAX = 8, STRIPS_MAX_CELLS = 12;
+/* A cropped media element is sized to cover its target box plus this margin (CSS px)
+ * on every side, so independent 1/64 px LayoutUnit rounding of its percentage
+ * position and size can never leave a sliver of the box uncovered. */
+const COVER_GUARD = 1/8;
+function exactReduce(n, d) {
+  if (d === 0n) throw new Error('Invalid compiled rational');
+  if (d < 0n) { n = -n; d = -d; }
+  let a = n < 0n ? -n : n, b = d;
+  while (b) [a, b] = [b, a % b];
+  return a ? [n / a, d / a] : [0n, 1n];
+}
+function exact(value) {
+  const text = String(value);
+  if ((typeof value !== 'string' && typeof value !== 'number') || !/^-?\d+(?:\/\d+)?$/.test(text))
+    throw new Error('Invalid compiled rational');
+  const [p, q = '1'] = text.split('/');
+  return exactReduce(BigInt(p), BigInt(q));
+}
+const exactAdd = ([a, b], [c, d]) => exactReduce(a*d + c*b, b*d);
+const exactMul = ([a, b], [c, d]) => exactReduce(a*c, b*d);
+const exactCmp = ([a, b], [c, d]) => { const l = a*d, r = c*b; return l < r ? -1 : l > r ? 1 : 0; };
+const exactText = ([n, d]) => d === 1n ? String(n) : `${n}/${d}`;
+const exactFloat = ([n, d]) => Number(n) / Number(d);
+/* Shared edges in draw order, the same output as Python
+ * simvltanea.authoring.adjacency: side `edge` of cell `a` lies on the opposite side
+ * of the later cell `b` (equal within 1e-12) over the positive-length `span`. */
+function adjacency(cells) {
+  if (!Array.isArray(cells)) throw new Error('cells must be an array');
+  const boxes = cells.map((cell, index) => {
+    if (!cell || !Array.isArray(cell.rect) || cell.rect.length !== 4)
+      throw new Error(`cell ${index}: rect must be [x,y,width,height]`);
+    const [x, y, w, h] = cell.rect.map(exact), x2 = exactAdd(x, w), y2 = exactAdd(y, h);
+    return {x, y, x2, y2, f:[x, y, x2, y2].map(exactFloat)};
+  });
+  const near = (p, q) => Math.abs(p - q) <= EDGE_EPSILON;
+  const larger = (p, q) => exactCmp(p, q) >= 0 ? p : q, smaller = (p, q) => exactCmp(p, q) <= 0 ? p : q;
+  const result = [];
+  boxes.forEach((A, i) => {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const B = boxes[j];
+      const horizontal = [larger(A.x, B.x), smaller(A.x2, B.x2)], vertical = [larger(A.y, B.y), smaller(A.y2, B.y2)];
+      for (const [edge, touches, span] of [['bottom', near(A.f[3], B.f[1]), horizontal],
+        ['top', near(A.f[1], B.f[3]), horizontal], ['right', near(A.f[2], B.f[0]), vertical],
+        ['left', near(A.f[0], B.f[2]), vertical]]) {
+        if (touches && exactFloat(span[1]) - exactFloat(span[0]) > EDGE_EPSILON)
+          result.push({a:i, b:j, edge, span:span.map(exactText)});
+      }
+    }
+  });
+  return result;
+}
+/* Per-cell raster decisions for one layout at one stage size and pixel ratio.
+ * Bleed: a side shared with a later neighbour grows `overlap_px` device px (plus
+ * ceil(radius) when corners are rounded) underneath it, clamped to half of that
+ * neighbour's pixel extent. A side that also touches an earlier cell does not
+ * grow: it would paint over that cell. Corners on a side shared with an earlier
+ * neighbour are rounded; all others stay square. Layouts without `presentation`
+ * get no bleed and no rounding, exactly as before. */
+function rasterLayout(layout, width, height, ratio) {
+  const cells = layout.cells.map(() => ({grow:{top:0, right:0, bottom:0, left:0}, rounded:new Set()}));
+  const presentation = layout.presentation;
+  if (!presentation) return {cells, radius:0};
+  const radiusFraction = number(presentation.corner_radius);
+  const radius = radiusFraction * Math.min(width, height);
+  const bleed = presentation.overlap_px + (radiusFraction > 0 ? Math.ceil(radius * ratio - 1e-9) : 0);
+  const edges = adjacency(layout.cells);
+  const touchesEarlier = new Set(edges.map(edge => `${edge.b}:${OPPOSITE_SIDE[edge.edge]}`));
+  const rects = layout.cells.map(cell => cell.rect.map(number));
+  const limits = new Map();
+  for (const {a, b, edge} of edges) {
+    if (radius > 0) cells[b].rounded.add(OPPOSITE_SIDE[edge]);
+    const key = `${a}:${edge}`;
+    if (!bleed || touchesEarlier.has(key)) continue;
+    const extent = (edge === 'top' || edge === 'bottom' ? rects[b][3] * height : rects[b][2] * width) * ratio;
+    const device = Math.min(bleed, extent / 2);
+    limits.set(key, limits.has(key) ? Math.min(limits.get(key), device) : device);
+  }
+  for (const [key, device] of limits) {
+    const [index, side] = key.split(':');
+    cells[Number(index)].grow[side] = device / ratio;
+  }
+  return {cells, radius};
+}
+/* Lateral jitter as overscan: the media target is the unchanged cell stretched by
+ * 1+2J along the strip and shifted by the resolved offset, so it always contains
+ * the cell. A cell spanning the full canvas width runs along x, one spanning the
+ * full height along y; otherwise (one cell, or a non-strip cell) the orientation
+ * decides: portrait x, landscape y. J and the offset are fractions of the drawn
+ * cell box along that axis; a strip bleeds only across, so that is the canvas extent. */
+function overscanFor(cell, layout, orientation) {
+  const jitter = layout.presentation ? number(layout.presentation.lateral_jitter) : 0;
+  if (!(jitter > 0) || cell.lateral_offset === undefined) return null;
+  const [, , w, h] = cell.rect.map(number);
+  const fullWidth = Math.abs(w - 1) <= EDGE_EPSILON, fullHeight = Math.abs(h - 1) <= EDGE_EPSILON;
+  const axis = fullWidth && !fullHeight ? 'x' : fullHeight && !fullWidth ? 'y' :
+    orientation === 'portrait' ? 'x' : 'y';
+  return {axis, jitter, offset:number(cell.lateral_offset)};
+}
+function mediaTarget(geometry) {
+  const target = {x:0, y:0, w:geometry.width, h:geometry.height};
+  const overscan = geometry.overscan;
+  if (overscan) {
+    const {axis, jitter, offset} = overscan;
+    if (axis === 'x') { target.x = (offset - jitter) * geometry.width; target.w = (1 + 2*jitter) * geometry.width; }
+    else { target.y = (offset - jitter) * geometry.height; target.h = (1 + 2*jitter) * geometry.height; }
+  }
+  return target;
+}
+function boxGeometry(node) {
+  if (node.geometry) return node.geometry;
+  const rect = node.box?.getBoundingClientRect?.();
+  return rect && rect.width > 0 && rect.height > 0 ? {width:rect.width, height:rect.height, overscan:null} : null;
+}
+const percent = (value, total) => `${100 * value / total}%`;
+/* Place the media element inside its cell box. Without a slice the element is the
+ * box (or its jitter overscan) and CSS object-fit does the fitting. With a slice
+ * the renderer's semantics apply: crop the source to the slice window, then fit
+ * that window to the box with the cell's fit, positioned by the cell focal point.
+ * The element is the whole source at the window's scale, so its aspect is the
+ * source aspect (no stretch). `origin` overrides the slice origin (panel driver). */
+function placeMedia(node, origin) {
+  const media = node.media;
+  if (!media) return;
+  const rawRect = resolveSliceRect(node);
+  const geometry = boxGeometry(node);
+  if (!isPartialSlice(rawRect)) {
+    if (!geometry || !geometry.overscan) {
+      Object.assign(media.style, {width:'100%', height:'100%', left:'0', top:'0', marginLeft:'0', marginTop:'0',
+        position:'', transform:'', clipPath:'', visibility:''});
+      return;
+    }
+    const target = mediaTarget(geometry), guard = COVER_GUARD;
+    Object.assign(media.style, {position:'absolute', left:percent(target.x - guard, geometry.width),
+      top:percent(target.y - guard, geometry.height), width:percent(target.w + 2*guard, geometry.width),
+      height:percent(target.h + 2*guard, geometry.height), marginLeft:'0', marginTop:'0', transform:'',
+      clipPath:'', visibility:''});
+    return;
+  }
+  const [sliceX, sliceY, sw, sh] = sliceValues(rawRect);
+  const [sx, sy] = origin ?? [sliceX, sliceY];
+  const sourceWidth = media.videoWidth || media.naturalWidth || 0;
+  const sourceHeight = media.videoHeight || media.naturalHeight || 0;
+  if (!geometry || !(sourceWidth > 0 && sourceHeight > 0)) {
+    // Size unknown until the media decodes; never show an unfitted full frame.
+    Object.assign(media.style, {visibility:'hidden'});
+    return;
+  }
+  const fit = node.cell?.fit ?? 'cover';
+  const [fx, fy] = (node.cell?.focal ?? ['1/2', '1/2']).map(number);
+  const target = mediaTarget(geometry);
+  const guard = fit === 'cover' ? COVER_GUARD : 0;
+  const tw = target.w + 2*guard, th = target.h + 2*guard;
+  const windowWidth = sw * sourceWidth, windowHeight = sh * sourceHeight;
+  const scale = (fit === 'cover' ? Math.max : Math.min)(tw / windowWidth, th / windowHeight);
+  const windowLeft = target.x - guard + (tw - windowWidth*scale) * fx;
+  const windowTop = target.y - guard + (th - windowHeight*scale) * fy;
+  Object.assign(media.style, {
+    position:'absolute',
+    left:percent(windowLeft - sx*sourceWidth*scale, geometry.width),
+    top:percent(windowTop - sy*sourceHeight*scale, geometry.height),
+    width:percent(sourceWidth*scale, geometry.width), height:percent(sourceHeight*scale, geometry.height),
+    marginLeft:'0', marginTop:'0', transform:'', visibility:'',
+    // The element's aspect equals the source's; cover only absorbs sub-pixel rounding.
+    objectFit:'cover', objectPosition:'50% 50%',
+    // Contain shows only the window, letterboxed by the box background like the renderer's pad.
+    clipPath: fit === 'cover' ? '' :
+      `inset(${100*sy}% ${100*(1-sx-sw)}% ${100*(1-sy-sh)}% ${100*sx}%)`,
+  });
+}
 function applySlice(node) {
   const rawRect = resolveSliceRect(node);
-
-  if (!rawRect) {
-    if (node.box) {
-      if (node.box.dataset) delete node.box.dataset.sliceRect;
-      removeCssProp(node.box.style, '--slice-x');
-      removeCssProp(node.box.style, '--slice-y');
-      removeCssProp(node.box.style, '--slice-w');
-      removeCssProp(node.box.style, '--slice-h');
-    }
-    if (node.media) {
-      if (node.media.dataset) delete node.media.dataset.sliceRect;
-      removeCssProp(node.media.style, '--slice-x');
-      removeCssProp(node.media.style, '--slice-y');
-      removeCssProp(node.media.style, '--slice-w');
-      removeCssProp(node.media.style, '--slice-h');
-      Object.assign(node.media.style, {width:'100%', height:'100%', left:'0', top:'0', marginLeft:'0', marginTop:'0', position:'', transform:''});
-    }
+  const clear = element => {
+    if (!element) return;
+    if (element.dataset) delete element.dataset.sliceRect;
+    for (const prop of ['--slice-x', '--slice-y', '--slice-w', '--slice-h']) removeCssProp(element.style, prop);
+  };
+  if (!isPartialSlice(rawRect)) {
+    clear(node.box); clear(node.media);
+    placeMedia(node);
     return;
   }
-
   const [sx,sy,sw,sh] = sliceValues(rawRect);
-  const isFullFrame = !isPartialSlice(rawRect);
-  if (isFullFrame) {
-    if (node.box) {
-      if (node.box.dataset) delete node.box.dataset.sliceRect;
-      removeCssProp(node.box.style, '--slice-x');
-      removeCssProp(node.box.style, '--slice-y');
-      removeCssProp(node.box.style, '--slice-w');
-      removeCssProp(node.box.style, '--slice-h');
-    }
-    if (node.media) {
-      if (node.media.dataset) delete node.media.dataset.sliceRect;
-      removeCssProp(node.media.style, '--slice-x');
-      removeCssProp(node.media.style, '--slice-y');
-      removeCssProp(node.media.style, '--slice-w');
-      removeCssProp(node.media.style, '--slice-h');
-      Object.assign(node.media.style, {width:'100%', height:'100%', left:'0', top:'0', marginLeft:'0', marginTop:'0', position:'', transform:''});
-    }
-    return;
-  }
-
   const rectStr = `${sx},${sy},${sw},${sh}`;
-  if (node.box) {
-    if (!node.box.dataset) node.box.dataset = {};
-    node.box.dataset.sliceRect = rectStr;
-    setCssProp(node.box.style, '--slice-x', String(sx));
-    setCssProp(node.box.style, '--slice-y', String(sy));
-    setCssProp(node.box.style, '--slice-w', String(sw));
-    setCssProp(node.box.style, '--slice-h', String(sh));
+  for (const element of [node.box, node.media]) {
+    if (!element) continue;
+    if (!element.dataset) element.dataset = {};
+    element.dataset.sliceRect = rectStr;
+    setCssProp(element.style, '--slice-x', String(sx));
+    setCssProp(element.style, '--slice-y', String(sy));
+    setCssProp(element.style, '--slice-w', String(sw));
+    setCssProp(element.style, '--slice-h', String(sh));
   }
-  if (node.media) {
-    if (!node.media.dataset) node.media.dataset = {};
-    node.media.dataset.sliceRect = rectStr;
-    setCssProp(node.media.style, '--slice-x', String(sx));
-    setCssProp(node.media.style, '--slice-y', String(sy));
-    setCssProp(node.media.style, '--slice-w', String(sw));
-    setCssProp(node.media.style, '--slice-h', String(sh));
-    // Deterministic source crop: show only slice region stretched to fill placement via overflow:hidden
-    // Loop box is overflow:hidden; media is scaled 1/w, 1/h and offset -x/w, -y/h
-    Object.assign(node.media.style, {
-      position:'absolute', left:`${-100*sx/sw}%`, top:`${-100*sy/sh}%`,
-      width:`${100/sw}%`, height:`${100/sh}%`,
-      marginLeft:'0', marginTop:'0',
-      objectFit:'fill'
-    });
-  }
+  placeMedia(node);
 }
 function renderSeams() {
   // Clear old seam overlays
@@ -410,8 +543,7 @@ function applyPanelOrientation(seconds) {
       const [sx,sy,sw,sh] = sliceValues(rawRect);
         const x = Math.max(0, Math.min(1-sw, sx - pose.azimuth/(2*Math.PI)));
         const y = Math.max(0, Math.min(1-sh, sy - pose.elevation/(2*Math.PI)));
-        node.media.style.left = `${-100*x/sw}%`;
-        node.media.style.top = `${-100*y/sh}%`;
+        placeMedia(node, [x, y]);
         setCssProp(node.media.style, '--slice-x', String(x));
         setCssProp(node.media.style, '--slice-y', String(y));
         if (node.box) {
@@ -446,11 +578,22 @@ function applyLayout() {
   if (layout && (!panelDriver || panelDriver.score.blocks.length !== layout.cells.length)) {
     installPanelDriver(layout);
   }
+  const ratio = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  const raster = rasterLayout(layout, width, height, ratio);
   layout.cells.forEach((cell, z) => {
     const node = runtime.nodes.get(cell.loop);
     const [x,y,w,h] = cell.rect.map(number);
-    Object.assign(node.box.style, {left:`${x*100}%`, top:`${y*100}%`,
-      width:`${w*100}%`, height:`${h*100}%`, zIndex:String(z), overflow:'hidden'});
+    const {grow, rounded} = raster.cells[z];
+    // Bleed under later neighbours in CSS px (device px / ratio); the edge drawn on top stays exact.
+    const start = (value, before) => before ? `calc(${value*100}% - ${before}px)` : `${value*100}%`;
+    const size = (value, extra) => extra ? `calc(${value*100}% + ${extra}px)` : `${value*100}%`;
+    Object.assign(node.box.style, {left:start(x, grow.left), top:start(y, grow.top),
+      width:size(w, grow.left + grow.right), height:size(h, grow.top + grow.bottom), zIndex:String(z), overflow:'hidden'});
+    const round = new Set([...rounded].flatMap(side => SIDE_CORNERS[side]));
+    for (const corner of CORNERS)
+      node.box.style[`border${corner}Radius`] = round.has(corner) ? `${raster.radius}px` : '';
+    node.geometry = {width:w*width + grow.left + grow.right, height:h*height + grow.top + grow.bottom,
+      overscan:overscanFor(cell, layout, orientation)};
     // Default focal/cover; slice overrides via applySlice per span
     node.cell = cell;
     if (!isPartialSlice(resolveSliceRect(node))) {
@@ -467,6 +610,14 @@ function applyLayout() {
 }
 runtime.resizeObserver = new ResizeObserver(applyLayout);
 runtime.resizeObserver.observe(stage);
+/* The bleed is counted in device pixels, so a pixel-ratio change without a CSS
+ * resize (moving the window to another screen) re-runs the layout too. */
+function watchPixelRatio() {
+  if (typeof window.matchMedia !== 'function') return;
+  const query = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  query.addEventListener?.('change', () => { applyLayout(); watchPixelRatio(); }, {once:true});
+}
+watchPixelRatio();
 /* A caller may pin the authored layout instead of deriving it from the stage
  * shape; null returns to the viewport rule. Like a resize, this only moves loop
  * boxes: no media element, source or clock is touched. */
@@ -971,15 +1122,21 @@ function validatePlan(plan) {
     }
   }
   need(Array.isArray(plan.layout_keyframes) && integer(plan.layout_keyframes.length, 1, plan.frames), 'layouts');
+  const only = (value, allowed) => value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).every(key => allowed.includes(key));
   let last = -1;
   for (const keyframe of plan.layout_keyframes) {
     need(keyframe && integer(keyframe.frame, 0, plan.frames-1) && keyframe.frame > last &&
       (last !== -1 || keyframe.frame === 0), 'layout order'); last = keyframe.frame;
+    need(only(keyframe, ['frame','layouts']) && only(keyframe.layouts, ['portrait','landscape']), 'layout fields');
     for (const orientation of ['portrait','landscape']) {
-      const cells = keyframe.layouts?.[orientation]?.cells;
+      const layout = keyframe.layouts?.[orientation], cells = layout?.cells;
+      need(only(layout, ['name','cells','full_bleed','presentation']) &&
+        (layout.name === undefined || typeof layout.name === 'string'), 'layout fields');
       need(Array.isArray(cells) && cells.length === ids.size, 'paired layout cells');
       const mapped = new Set(), rectangles = [];
       for (const cell of cells) {
+        need(only(cell, ['loop','rect','fit','focal','lateral_offset']), 'cell fields');
         need(cell && ids.has(cell.loop) && !mapped.has(cell.loop), 'one cell per loop'); mapped.add(cell.loop);
         need(['contain','cover'].includes(cell.fit) && Array.isArray(cell.rect) && cell.rect.length === 4 &&
           Array.isArray(cell.focal) && cell.focal.length === 2, 'geometry/fit');
@@ -991,8 +1148,83 @@ function validatePlan(plan) {
             Math.min(y+h,b+d)-Math.max(y,b) <= 1e-12, 'overlapping cells');
         rectangles.push([x,y,w,h]);
       }
+      validateRasterLayout(layout, orientation);
     }
   }
+}
+/* Optional full-bleed fields, mirroring layout_presets.validate_layout_pair. A
+ * full_bleed layout is refused, by name, unless every cell covers and the rects
+ * tile the unit square exactly (disjoint interiors are checked by the caller). */
+function validateRasterLayout(layout, orientation) {
+  const where = `${orientation} layout ${JSON.stringify(layout.name ?? orientation)}`;
+  const need = (test, reason) => { if (!test) throw new Error(`Invalid compiled plan: ${where}: ${reason}`); };
+  const cells = layout.cells, has = key => Object.prototype.hasOwnProperty.call(layout, key);
+  const fraction = (value, label) => {
+    try { return exact(value); } catch (_) { need(false, `${label} must be a canonical rational`); }
+  };
+  const bounded = (value, label) => {
+    const result = fraction(value, label);
+    need(exactCmp(result, [0n, 1n]) >= 0 && exactCmp(result, [1n, 20n]) <= 0, `${label} must be in 0..1/20`);
+    return result;
+  };
+  if (has('full_bleed') || has('presentation'))
+    need(cells.length >= 1 && cells.length <= STRIPS_MAX_CELLS,
+      `full_bleed and presentation are supported for 1..${STRIPS_MAX_CELLS} cells, not ${cells.length}`);
+  if (has('full_bleed')) need(typeof layout.full_bleed === 'boolean', 'full_bleed must be boolean');
+  if (layout.full_bleed === true) {
+    cells.forEach((cell, index) => need(cell.fit === 'cover',
+      `full_bleed requires fit cover on every cell; cell ${index} is ${JSON.stringify(cell.fit)} (contain exposes background)`));
+    let area = [0n, 1n];
+    for (const cell of cells) {
+      const [, , w, h] = cell.rect.map((value, axis) => fraction(value, `rect[${axis}]`));
+      area = exactAdd(area, exactMul(w, h));
+    }
+    need(exactCmp(area, [1n, 1n]) === 0,
+      `full_bleed requires the rects to tile the unit square exactly; they cover ${exactText(area)}`);
+  }
+  let jitter = [0n, 1n];
+  if (has('presentation')) {
+    const presentation = layout.presentation;
+    need(presentation && typeof presentation === 'object' && !Array.isArray(presentation) &&
+      ['overlap_px','corner_radius','lateral_jitter'].every(key => key in presentation) &&
+      Object.keys(presentation).length === 3, 'presentation needs exactly overlap_px, corner_radius, lateral_jitter');
+    need(Number.isSafeInteger(presentation.overlap_px) && presentation.overlap_px >= 0 &&
+      presentation.overlap_px <= OVERLAP_PX_MAX, `presentation.overlap_px must be an integer in 0..${OVERLAP_PX_MAX}`);
+    const edges = adjacency(cells);
+    need(presentation.overlap_px === 0 || edges.length > 0,
+      'presentation.overlap_px > 0 is a bleed across shared edges; this layout has no shared edge');
+    const radius = bounded(presentation.corner_radius, 'presentation.corner_radius');
+    if (radius[0] !== 0n) {
+      need(edges.length > 0, 'presentation.corner_radius > 0 requires cells that share an edge');
+      // Each rounded corner (on a side shared with an earlier cell) needs that cell beneath it.
+      const covered = new Map();
+      for (const edge of edges) {
+        const key = `${edge.b}:${OPPOSITE_SIDE[edge.edge]}`;
+        if (!covered.has(key)) covered.set(key, []);
+        covered.get(key).push(edge.span.map(exact));
+      }
+      for (const [key, spans] of covered) {
+        const [index, side] = key.split(':');
+        const [x, y, w, h] = cells[Number(index)].rect.map(exact);
+        const ends = side === 'top' || side === 'bottom' ? [x, exactAdd(x, w)] : [y, exactAdd(y, h)];
+        for (const corner of ends)
+          need(spans.some(([low, high]) => exactCmp(low, corner) <= 0 && exactCmp(corner, high) <= 0),
+            `cell ${index}: rounded ${side} corner at ${exactText(corner)} has no earlier-drawn neighbour beneath it`);
+      }
+    }
+    jitter = bounded(presentation.lateral_jitter, 'presentation.lateral_jitter');
+  }
+  cells.forEach((cell, index) => {
+    const present = Object.prototype.hasOwnProperty.call(cell, 'lateral_offset');
+    if (jitter[0] === 0n) {
+      need(!present, `cell ${index}: lateral_offset requires presentation.lateral_jitter > 0`);
+      return;
+    }
+    need(present, `cell ${index}: presentation.lateral_jitter > 0 requires a resolved lateral_offset on every cell`);
+    const offset = fraction(cell.lateral_offset, `cell ${index} lateral_offset`);
+    need(exactCmp(offset[0] < 0n ? [-offset[0], offset[1]] : offset, jitter) <= 0,
+      `cell ${index}: |lateral_offset| must not exceed lateral_jitter ${exactText(jitter)}`);
+  });
 }
 async function initialize() {
   releaseResources();
@@ -1266,6 +1498,8 @@ function pageSnapshot(items, options = {}) {
 
 runtime.pageSnapshot = pageSnapshot;
 runtime.applySlice = applySlice;
+runtime.adjacency = adjacency;
+runtime.validatePlan = validatePlan;
 
 if (typeof window !== 'undefined') {
   window.pageSnapshot = pageSnapshot;
@@ -1275,4 +1509,6 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports.runtime = runtime;
   module.exports.pageSnapshot = pageSnapshot;
   module.exports.applySlice = applySlice;
+  module.exports.adjacency = adjacency;
+  module.exports.validatePlan = validatePlan;
 }

@@ -574,6 +574,43 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(res['datasetSliceRect'], '0.25,0.25,0.5,0.5')
         self.assertEqual(res['cssSliceX'], '0.25')
 
+    def test_slice_previews_crop_then_fit_without_stretch(self):
+        """state-slice.json (N=2) and state-slice-3.json (N=3) use contain cells with a slice.
+
+        Behaviour change (full-bleed spec, decision 8): the browser no longer stretches
+        the slice window to the cell (objectFit 'fill'). Like the renderer it crops the
+        source to the window and then fits that window with the cell's fit: here contain,
+        so the window keeps the source aspect, fits inside the box, touches it on one
+        axis and the rest of the source is clipped away.
+        """
+        for name in ('slice', 'slice-3'):
+            page = self.open_preview(name)
+            for width, height in ((390, 844), (1280, 720)):
+                with self.subTest(preview=name, viewport=(width, height)):
+                    page.set_viewport_size({'width': width, 'height': height})
+                    page.wait_for_function("""([w, h]) => compositionRuntime.events
+                      .filter(e => e.type === 'layout').at(-1)?.width === w""", arg=[width, height])
+                    geometry = page.evaluate("""() => [...compositionRuntime.nodes.values()]
+                      .filter(n => n.box.dataset.sliceRect).map(n => ({
+                        box:n.box.getBoundingClientRect().toJSON(), media:n.media.getBoundingClientRect().toJSON(),
+                        slice:n.box.dataset.sliceRect.split(',').map(Number), vw:n.media.videoWidth,
+                        vh:n.media.videoHeight, fit:n.cell.fit, clip:n.media.style.clipPath}))""")
+                    self.assertTrue(geometry)
+                    for item in geometry:
+                        box, media, (sx, sy, sw, sh) = item['box'], item['media'], item['slice']
+                        self.assertEqual(item['fit'], 'contain')
+                        self.assertAlmostEqual((media['width'] / media['height']) / (item['vw'] / item['vh']), 1,
+                                               delta=0.005)
+                        left, top = media['x'] + sx * media['width'], media['y'] + sy * media['height']
+                        right, bottom = left + sw * media['width'], top + sh * media['height']
+                        self.assertGreaterEqual(left, box['x'] - 0.5)
+                        self.assertGreaterEqual(top, box['y'] - 0.5)
+                        self.assertLessEqual(right, box['right'] + 0.5)
+                        self.assertLessEqual(bottom, box['bottom'] + 0.5)
+                        self.assertTrue(abs((right - left) - box['width']) < 1 or
+                                        abs((bottom - top) - box['height']) < 1)
+                        self.assertTrue(item['clip'].startswith('inset('), item['clip'])
+
     def test_pr34_retry_releases_nodes_and_can_retry_again_after_failure(self):
         page = self.open_preview(3)
         result = page.evaluate("""async () => {

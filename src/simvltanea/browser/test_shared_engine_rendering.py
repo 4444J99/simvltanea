@@ -31,7 +31,9 @@ vm.runInContext(`
     const block=score.blocks[0];
     return {azimuth:block.azimuthStart+t*0.1, elevation:0.1, fov:1};
   }};
-  const makeNode = (id) => ({id,span:{},media:{style:{}},box:{getBoundingClientRect(){return {toJSON(){return {};}}}}});
+  // A 320x240 source in a 200x100 box: crop-then-cover needs both sizes.
+  const makeNode = (id) => ({id,span:{},media:{style:{},videoWidth:320,videoHeight:240},
+    box:{getBoundingClientRect(){return {width:200,height:100,toJSON(){return {};}};}}});
   runtime.nodes.set('a',makeNode('a')); runtime.nodes.set('b',makeNode('b'));
   const a={loop:'a',focal:['1/2','1/2']}, b={loop:'b',focal:['1/2','1/2']};
   runtime.plan={fps:24,frames:240,tracks:[{id:'a'},{id:'b'}],
@@ -58,9 +60,15 @@ vm.runInContext(`
   const offset2=node.media.style.left;
   applyPanelOrientation(3);
   if(node.media.style.left===offset2)throw Error('slice did not continue moving');
-  const x=-parseFloat(node.media.style.left)*0.5/100;
-  if(x<0 || x>0.5)throw Error('slice escaped source bounds');
+  const x=Number(node.media.style['--slice-x']), y=Number(node.media.style['--slice-y']);
+  if(!(x>=0 && x<=0.5 && y>=0 && y<=0.5))throw Error('slice escaped source bounds');
   if(node.media.style.marginTop!=='0' || !node.media.style.top.endsWith('%'))throw Error('slice vertical offset must use height-relative top');
+  // Crop then cover: the element keeps the source aspect and the moved window still covers the box.
+  const px=(value,total)=>parseFloat(value)*total/100, st=node.media.style;
+  const left=px(st.left,200), top=px(st.top,100), width=px(st.width,200), height=px(st.height,100);
+  if(Math.abs(width/height-320/240)>1e-9)throw Error('slice stretched the source');
+  if(!(left+x*width<=1e-9 && left+(x+0.5)*width>=200-1e-9 && top+y*height<=1e-9 && top+(y+0.5)*height>=100-1e-9))
+    throw Error('slice window does not cover the box');
   console.log(JSON.stringify({direction:true,identity:true,snapshot:true,slice:true,release:true}));
 `,context);
 '''
