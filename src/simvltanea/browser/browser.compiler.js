@@ -18,8 +18,27 @@
  * multi-source banks (seeded selection), slices, seams and duplicate media.
  *
  * Rationals are integers or "n/d" strings (optionally negative) and use exact
- * BigInt arithmetic. Decimal spellings, floats, exponents and non-finite numbers
- * are rejected, as browser.runtime.js rejects them.
+ * BigInt arithmetic. Decimal strings ("1.5"), exponent strings ("3e0"), non-integer
+ * numbers and non-finite numbers are rejected, as browser.runtime.js rejects them.
+ *
+ * What the compiler can see: compilePlan receives JavaScript values, not JSON text.
+ * JSON.parse turns the number spellings 8.0, 2.4e1 and 1e0 into the integers 8, 24
+ * and 1 before this code runs, so they are invisible here (Python's json.loads keeps
+ * them as floats and refuses the state). The plan and state_sha256 then describe the
+ * re-spelled integer state, which is what Python compiles for that state. A caller
+ * that needs Python's exact strictness must reject such spellings in the raw text
+ * first. One line: if (/\d[.eE]/.test(text.replace(/"(?:[^"\\]|\\.)*"/g, '""'))) throw new Error('float spelling');
+ *
+ * Only plain objects are accepted (prototype Object.prototype or null) and a key
+ * counts only when it is an own enumerable property, so an inherited property can
+ * never change a plan without changing state_sha256. Cross-realm objects (for
+ * example from another iframe) must be copied with structuredClone first.
+ *
+ * Every refusal is a CompilerError and never a different plan. Inputs outside the
+ * subset that Python compiles throw with error.unsupported === true. Inputs that
+ * Python also accepts but this compiler refuses on spelling or range (strings such
+ * as "+1/2", " 1/2", "1_0/3", non-ASCII digits, "1.5" or "3e0", and seeds beyond
+ * 2^53) throw with unsupported === false. So does anything Python itself refuses.
  */
 (function (root) {
   'use strict';
@@ -44,8 +63,15 @@
   }
   const need = (test, message) => { if (!test) throw new CompilerError(message); };
   const refuse = (test, message) => { if (test) throw new CompilerError(message, true); };
-  const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-  const has = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+  // Plain objects only, and a key exists only when it is an own enumerable property: the same
+  // set canonicalJson hashes, so no inherited or hidden property can alter a plan unhashed.
+  const isObject = value => {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  };
+  const has = (value, key) => Object.prototype.propertyIsEnumerable.call(value, key);
+  const MAX_INTEGER_DIGITS = 4300; // CPython's default int/str conversion limit; Fraction() refuses more.
 
   // Exact rationals are normalized [numerator, denominator] BigInt pairs.
   const gcd = (a, b) => { while (b) [a, b] = [b, a % b]; return a < 0n ? -a : a; };
@@ -68,6 +94,8 @@
     if (typeof value === 'number' && Number.isSafeInteger(value)) n = BigInt(value);
     else if (typeof value === 'string' && RATIONAL.test(value)) {
       const [a, b = '1'] = value.split('/');
+      need(a.replace('-', '').length <= MAX_INTEGER_DIGITS && b.length <= MAX_INTEGER_DIGITS,
+        `${where}: rational numerator or denominator exceeds ${MAX_INTEGER_DIGITS} digits (leading zeros count)`);
       n = BigInt(a); d = BigInt(b);
     } else {
       throw new CompilerError(`${where} must be an integer or an exact "n/d" rational string; ` +
@@ -209,8 +237,8 @@
     }
     const audio = state.audio;
     need(isObject(audio), 'audio must be an object');
-    need(Object.keys(audio).length === 3 && audio.mode === 'none' &&
-      audio.routing === null && audio.generative === null,
+    need(Object.keys(audio).length === 3 && ['mode', 'routing', 'generative'].every(key => has(audio, key)) &&
+      audio.mode === 'none' && audio.routing === null && audio.generative === null,
       'versioned loop exports are silent in v1; Audio v1.1 requires schema_version "1.1"');
     validateLayouts(state.layouts, loopIds);
     if (has(state, 'slice')) {
@@ -234,6 +262,14 @@
       'two sources declare the same media digest (duplicate media)');
   }
 
+  // Python sorts str keys by code point; the default JS sort compares UTF-16 units and
+  // disagrees for non-BMP keys against U+E000..U+FFFF.
+  const byCodePoint = (a, b) => {
+    const x = Array.from(a, ch => ch.codePointAt(0)), y = Array.from(b, ch => ch.codePointAt(0));
+    for (let i = 0; i < x.length && i < y.length; i++) if (x[i] !== y[i]) return x[i] - y[i];
+    return x.length - y.length;
+  };
+
   // json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).
   function canonicalJson(value) {
     if (value === null || typeof value === 'boolean') return String(value);
@@ -247,7 +283,7 @@
     }
     if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
     need(isObject(value), 'canonical JSON supports only JSON values');
-    return `{${Object.keys(value).sort().map(key => `${canonicalJson(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+    return `{${Object.keys(value).sort(byCodePoint).map(key => `${canonicalJson(key)}:${canonicalJson(value[key])}`).join(',')}}`;
   }
 
   const K = new Uint32Array([
@@ -297,7 +333,7 @@
       const rate = rational(loop.rate, 'rate'), offset = rational(loop.offset, 'offset');
       need(still || (cmp(rate, [1n, 16n]) >= 0 && cmp(rate, EIGHT) <= 0),
         'browser video rate must be within 1/16..8; offline model unchanged');
-      const [low, high] = (loop.trim || [0, source.duration]).map(value => rational(value, 'trim'));
+      const [low, high] = (has(loop, 'trim') ? loop.trim : [0, source.duration]).map(value => rational(value, 'trim'));
       const length = sub(high, low), step = loop.held || still ? ZERO : mul(rate, [1n, fps]);
       const spans = [];
       let previous = null;

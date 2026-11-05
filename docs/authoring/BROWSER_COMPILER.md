@@ -4,9 +4,9 @@
 browser, without Python. It turns caller loops, their sources, and the authored
 layouts into the plan that `browser.runtime.js` already plays. For every state
 in its supported subset, the plan equals the output of Python `compile_plan`
-exactly, including key order and the state hash. Anything outside the subset
-throws a `CompilerError`. The compiler never returns a plan that differs from
-Python's.
+exactly, including key order and the state hash. Everything else is a
+refusal: the compiler throws a `CompilerError` and never returns a plan that
+differs from Python's.
 
 The file is a classic script without dependencies. It publishes
 `globalThis.SimvltaneaCompiler` and supports `require()` in Node. All time and
@@ -64,16 +64,51 @@ window.compositionIO = {plan: async () => plan, bytes, digest};
 - `fps` from 1 to 60 and `frames` from 1 to 14400.
 - Slice and seam are absent or disabled.
 
-The compiler throws for anything else, with `error.unsupported` set to `true`.
-That covers hold, reroll, swap, and move events; Audio v1.1; N outside 2 to 7;
-multi-source banks; enabled slices or seams; and duplicate media. Rationals must be
-integers or `"n/d"` strings. The compiler rejects decimal and exponent spellings,
-floats, and non-finite numbers. Python accepts decimal strings, but the browser
-runtime does not.
-
 `src/simvltanea/browser/test_browser_compiler.py` tests both sides of this
 boundary against Python with Node 22. It also plays compiled plans in the
 unmodified runtime under Chrome.
+
+## Refusals
+
+Every input outside the subset throws a `CompilerError`. It is always a refusal
+and never a wrong plan. The `error.unsupported` flag tells you which kind:
+
+- `unsupported === true`: Python compiles the state, but the browser compiler
+  does not cover it. That covers hold, reroll, swap, and move events; Audio v1.1;
+  N outside 2 to 7; multi-source banks; enabled slices or seams; and duplicate
+  media.
+- `unsupported === false`: either Python refuses the state too, or Python reads
+  a spelling or value that the compiler will not. The second group is `'+1/2'`,
+  `' 1/2'`, `'1_0/3'`, non-ASCII digits, decimal strings such as `'1.5'`,
+  exponent strings such as `'3e0'`, and seeds above 2^53. The browser runtime
+  does not read the decimal and exponent strings either.
+
+Rationals must be integers or `"n/d"` strings, optionally negative. Floats and
+non-finite numbers are rejected. A numerator or denominator of more than 4300
+digits is rejected, leading zeros included, because Python's `Fraction()` refuses
+it too.
+
+### Number spellings in JSON files
+
+`compilePlan` receives JavaScript values, not JSON text. `JSON.parse` turns the
+spellings `8.0`, `2.4e1` and `1e0` into the integers 8, 24 and 1 before the
+compiler runs, so the compiler cannot see them. Python's `json.loads` keeps them
+as floats and refuses the state. The plan and `state_sha256` describe the integer
+state that `JSON.parse` produced. A caller that needs Python's exact strictness
+must reject these spellings in the raw text before parsing. One line that does
+this, after blanking out strings:
+
+```js
+if (/\d[.eE]/.test(text.replace(/"(?:[^"\\]|\\.)*"/g, '""'))) throw new Error('float spelling');
+```
+
+### Objects
+
+Only plain objects are accepted: the prototype must be `Object.prototype` or
+`null`. A key counts only when it is an own enumerable property. This keeps an
+inherited property from changing a plan without changing `state_sha256`. Objects
+built with `Object.create(proto)` or from a class are refused. Copy objects that
+come from another realm with `structuredClone` first.
 
 ## Layout bundle
 

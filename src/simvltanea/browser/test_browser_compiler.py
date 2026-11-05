@@ -8,6 +8,11 @@ and seam absent or disabled. Inside the subset the JavaScript plan must equal
 Python's compile_plan byte for byte. Outside it the JavaScript must throw a
 CompilerError, never return a differing plan.
 
+Every refusal is a CompilerError. Python-accepted states outside the subset throw with
+unsupported true; Python-accepted spellings and seeds the compiler will not read
+(decimal strings, '+1/2', seeds above 2**53) throw with unsupported false. Only plain
+objects are accepted, and only their own enumerable keys count.
+
 Node.js 22 is a CI prerequisite. These tests fail, never skip, without it.
 """
 from __future__ import annotations
@@ -48,6 +53,85 @@ process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
 '''
 
 
+# Builds objects with inherited or hidden properties, which JSON cannot express.
+INHERITANCE_DRIVER = r'''
+const C = require(process.argv[1]);
+let input = '';
+process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
+  const base = JSON.parse(input);
+  const clone = value => JSON.parse(JSON.stringify(value));
+  // Move the named keys of a plain object onto its prototype.
+  const inherit = (object, keys) => {
+    const prototype = {};
+    const own = Object.create(prototype);
+    for (const [key, value] of Object.entries(object)) (keys.includes(key) ? prototype : own)[key] = value;
+    return own;
+  };
+  const hide = (object, key) => {
+    const copy = {};
+    for (const [name, value] of Object.entries(object)) {
+      Object.defineProperty(copy, name, {value, enumerable: name !== key, writable: true, configurable: true});
+    }
+    return copy;
+  };
+  const variants = {};
+  const edit = (name, change) => { const state = clone(base); variants[name] = change(state) || state; };
+  edit('control-plain', () => {});
+  edit('control-null-prototype', state => {
+    const strip = value => Array.isArray(value) ? value.map(strip) : value && typeof value === 'object'
+      ? Object.assign(Object.create(null), Object.fromEntries(Object.entries(value).map(([k, v]) => [k, strip(v)])))
+      : value;
+    return strip(state);
+  });
+  edit('inherited-trim', state => {
+    state.loops[0].trim = ['1', '2'];
+    state.loops[0] = inherit(state.loops[0], ['trim']);
+  });
+  edit('inherited-trim-second-loop', state => {
+    state.loops[1].trim = ['1/2', '3'];
+    state.loops[1] = inherit(state.loops[1], ['trim']);
+  });
+  edit('hidden-own-trim', state => {
+    state.loops[0].trim = ['1', '2'];
+    state.loops[0] = hide(state.loops[0], 'trim');
+  });
+  edit('inherited-loop-field', state => { state.loops[0] = inherit(state.loops[0], ['rate']); });
+  edit('inherited-source-field', state => { state.sources[0] = inherit(state.sources[0], ['duration']); });
+  edit('inherited-cell-field', state => {
+    state.layouts.portrait.cells[0] = inherit(state.layouts.portrait.cells[0], ['fit']);
+  });
+  edit('inherited-layout-field', state => { state.layouts.landscape = inherit(state.layouts.landscape, ['name']); });
+  edit('inherited-layouts-orientation', state => { state.layouts = inherit(state.layouts, ['portrait']); });
+  edit('inherited-state-field', state => inherit(state, ['fps']));
+  edit('inherited-enabled-seam', state => inherit({...state, seam: {enabled: true}}, ['seam']));
+  edit('inherited-disabled-slice', state => inherit({...state, slice: {enabled: false}}, ['slice']));
+  edit('inherited-audio-routing', state => { state.audio = inherit(state.audio, ['routing', 'generative']); });
+  edit('inherited-audio-nonbmp-keys', state => {
+    const audio = Object.create({routing: null, generative: null});
+    Object.assign(audio, {mode: 'none', '\u{1F600}': 1, '\uE000': 2});
+    state.audio = audio;
+  });
+  edit('hidden-audio-key', state => { state.audio = hide(state.audio, 'generative'); });
+  edit('class-instance-loop', state => {
+    class Loop { constructor(fields) { Object.assign(this, fields); } }
+    state.loops[0] = new Loop(state.loops[0]);
+  });
+  edit('class-instance-state', state => {
+    class State { constructor(fields) { Object.assign(this, fields); } }
+    return new State(state);
+  });
+  const results = {};
+  for (const [name, state] of Object.entries(variants)) {
+    try { results[name] = {ok: true, plan: C.compilePlan(state), digest: C.stateDigest(state)}; }
+    catch (error) {
+      results[name] = {ok: false, name: error.name, message: error.message, unsupported: error.unsupported === true};
+    }
+  }
+  process.stdout.write(JSON.stringify(results));
+});
+'''
+
+
 def node_executable() -> str:
     executable = shutil.which('node')
     if executable is None:
@@ -70,6 +154,12 @@ def node(*calls) -> list[dict]:
     completed = subprocess.run([node_executable(), '-e', DRIVER, str(COMPILER)],
                                input=json.dumps(wire(list(calls))), capture_output=True,
                                text=True, check=True, timeout=300)
+    return json.loads(completed.stdout)
+
+
+def node_inheritance(state: dict) -> dict:
+    completed = subprocess.run([node_executable(), '-e', INHERITANCE_DRIVER, str(COMPILER)],
+                               input=json.dumps(state), capture_output=True, text=True, check=True, timeout=300)
     return json.loads(completed.stdout)
 
 
@@ -298,6 +388,99 @@ class CompilerParityTests(unittest.TestCase):
         results = node(*(['stateDigest', value] for value in values))
         for value, result in zip(values, results):
             self.assertEqual(result['value'], hashlib.sha256(c.canonical_json(value).encode()).hexdigest())
+
+    def test_oversized_rational_strings_are_refused_like_python(self):
+        """Fraction() refuses integer strings above 4300 digits; leading zeros count."""
+        limit = 4300
+        def padded(value: int, digits: int) -> str:
+            return str(value).zfill(digits)
+        def edit(change):
+            state = authored_state(2, frames=48)
+            change(state)
+            return state
+        def loop_field(key, value):
+            return lambda s: s['loops'][0].__setitem__(key, value)
+        def duration(value):
+            return lambda s: s['sources'][0].__setitem__('duration', value)
+        def rect(value):
+            return lambda s: s['layouts']['portrait']['cells'][0]['rect'].__setitem__(0, value)
+        def trim(value):
+            return lambda s: s['loops'][0].__setitem__('trim', ['0', value])
+        # Each spelling is shown at the limit (accepted by both) and one digit beyond (refused by both).
+        spellings = {
+            'offset-numerator': (loop_field, 'offset', lambda d: padded(1, d) + '/2'),
+            'offset-denominator': (loop_field, 'offset', lambda d: '1/' + padded(2, d)),
+            'offset-integer-string': (loop_field, 'offset', lambda d: padded(3, d)),
+            'rate-denominator': (loop_field, 'rate', lambda d: '1/' + padded(1, d)),
+            'rate-padded-fraction': (loop_field, 'rate', lambda d: f'{padded(12, d)}/{padded(24, d)}'),
+            'duration-numerator': (duration, None, lambda d: padded(8, d) + '/1'),
+            'duration-denominator': (duration, None, lambda d: '16/' + padded(2, d)),
+            'trim-bound': (trim, None, lambda d: padded(5, d)),
+            'rect-numerator': (rect, None, lambda d: padded(0, d)),
+            'negative-offset-zero': (loop_field, 'offset', lambda d: '-' + padded(0, d) + '/1'),
+        }
+        states = {}
+        for name, (maker, key, spell) in spellings.items():
+            for digits in (limit, limit + 1):
+                change = maker(key, spell(digits)) if key else maker(spell(digits))
+                states[name, digits] = edit(change)
+        keys = list(states)
+        results = node(*(['compilePlan', states[key]] for key in keys),
+                       ['compilePlan', edit(loop_field('offset', '1/' + padded(2, limit + 1)))])
+        for key, result in zip(keys, results):
+            name, digits = key
+            with self.subTest(case=name, digits=digits):
+                if digits <= limit:
+                    self.assertTrue(result['ok'], result)
+                    self.assertSamePlan(result['value'], compile_plan(states[key]))
+                else:
+                    self.assertFalse(result['ok'], f'{name} with {digits} digits compiled')
+                    self.assertEqual(result['name'], 'CompilerError')
+                    self.assertFalse(result['unsupported'], result)
+                    self.assertRegex(result['message'], f'exceeds {limit} digits')
+                    with self.assertRaises(c.StateError):
+                        compile_plan(states[key])
+        self.assertRegex(results[-1]['message'], 'offset: rational numerator or denominator exceeds 4300 digits')
+
+    def test_inherited_and_hidden_properties_are_refused_consistently(self):
+        """No inherited property may change a plan without changing state_sha256."""
+        state = authored_state(3, frames=48)
+        results = node_inheritance(state)
+        control = results['control-plain']
+        self.assertTrue(control['ok'], control)
+        self.assertSamePlan(control['plan'], compile_plan(state))
+        # Null-prototype objects are plain: they behave exactly like JSON objects.
+        self.assertEqual(results['control-null-prototype']['plan'], control['plan'])
+        # A non-enumerable own property is not a key: validation, compilation and hashing all ignore it.
+        hidden = results['hidden-own-trim']
+        self.assertTrue(hidden['ok'], hidden)
+        self.assertEqual(hidden['plan'], control['plan'])
+        refused = [name for name in results if not name.startswith('control-') and name != 'hidden-own-trim']
+        self.assertEqual(len(refused), 15)
+        for name in refused:
+            result = results[name]
+            with self.subTest(case=name):
+                self.assertFalse(result['ok'], f'{name} compiled to a plan with state_sha256 '
+                                 f'{result.get("plan", {}).get("state_sha256")}')
+                self.assertEqual(result['name'], 'CompilerError')
+        self.assertRegex(results['inherited-trim']['message'], 'loop must be an object')
+        self.assertRegex(results['class-instance-state']['message'], 'state must be an object')
+        # The same loop with its trim as an own key is accepted and hashes differently.
+        trimmed = copy.deepcopy(state)
+        trimmed['loops'][0]['trim'] = ['1', '2']
+        (own,) = node(['compilePlan', trimmed])
+        self.assertTrue(own['ok'], own)
+        self.assertSamePlan(own['value'], compile_plan(trimmed))
+        self.assertNotEqual(own['value']['state_sha256'], control['plan']['state_sha256'])
+
+    def test_canonical_json_sorts_keys_by_code_point_like_python(self):
+        """JS sorts UTF-16 units: U+1F600 (surrogates) would precede U+E000; Python orders the reverse."""
+        value = {'\U0001f600': 1, '\ue000': 2, 'a': [{'\U00010000': 3, '\uffff': 4, 'b': 5}]}
+        (result,) = node(['canonicalJson', value])
+        self.assertEqual(result['value'], c.canonical_json(value))
+        self.assertLess(result['value'].index('\ue000'), result['value'].index('\U0001f600'))
+        (hashed,) = node(['stateDigest', value])
+        self.assertEqual(hashed['value'], hashlib.sha256(c.canonical_json(value).encode()).hexdigest())
 
 
 class LayoutBundleTests(unittest.TestCase):
