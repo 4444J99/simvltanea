@@ -304,6 +304,225 @@ class RealFrameExtractionTests(TaggerTestCase):
 
 @needs_sdk
 @needs_pillow
+def make_fixture_clips(folder: pathlib.Path) -> dict[str, pathlib.Path]:
+    """Synthetic clips: ``short`` is 3 video frames (0.4 s at 7.5 fps, 1440x1080) next to a 0.66 s audio
+    track, so the container is longer than the video, exactly like the reported Live Photo."""
+    folder.mkdir(parents=True, exist_ok=True)
+    common = ["ffmpeg", "-v", "error", "-y"]
+    encode = ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    clips = {name: folder / f"{name}.mov" for name in ("short", "single", "normal", "garbage")}
+    subprocess.run([*common, "-f", "lavfi", "-i", "testsrc=size=1440x1080:rate=7.5:duration=0.4",
+                    "-f", "lavfi", "-i", "sine=duration=0.66", *encode, "-c:a", "aac", str(clips["short"])], check=True)
+    subprocess.run([*common, "-f", "lavfi", "-i", "testsrc=size=320x180:rate=10", "-frames:v", "1", *encode,
+                    str(clips["single"])], check=True)
+    subprocess.run([*common, "-f", "lavfi", "-i", "testsrc=size=640x360:rate=30:duration=2",
+                    "-f", "lavfi", "-i", "sine=duration=2", *encode, "-c:a", "aac", str(clips["normal"])], check=True)
+    clips["garbage"].write_bytes(bytes((i * 37 + 11) % 256 for i in range(4096)))
+    return clips
+
+
+@needs_pillow
+@needs_ffmpeg
+class ShortAndBrokenClipTests(TaggerTestCase):
+    """One odd clip must never stop the others from being tagged."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._fixture_tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._fixture_tmp.cleanup)
+        cls.fixtures = make_fixture_clips(pathlib.Path(cls._fixture_tmp.name))
+
+    def put_clip(self, uuid: str, kind: str, **receipt_kwargs) -> None:
+        self.add_clip(uuid, **receipt_kwargs)
+        shutil.copy(self.fixtures[kind], self.root / "originals" / uuid / "clip.mov")
+
+    def assert_three_real_jpegs(self, frames):
+        from PIL import Image
+
+        self.assertEqual([f.name for f in frames], ["f0.jpg", "f1.jpg", "f2.jpg"])
+        for frame in frames:
+            self.assertGreater(frame.stat().st_size, 0)
+            with Image.open(frame) as image:
+                image.load()
+                self.assertEqual(image.format, "JPEG")
+
+    def failed_marker(self, uuid: str) -> dict:
+        return json.loads((self.root / "analysis" / "failed" / f"{uuid}.json").read_text())
+
+    def assert_no_private_text(self, text: str) -> None:
+        for private in (self._tmp.name, "clip.mov", "originals", "garbage", "ffmpeg", "ffprobe"):
+            self.assertNotIn(private, text)
+
+    def test_fixture_container_is_longer_than_its_video(self):
+        facts = json.loads(subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=duration,nb_frames:format=duration", "-of", "json", str(self.fixtures["short"])],
+            capture_output=True, text=True, check=True).stdout)
+        self.assertEqual(facts["streams"][0]["nb_frames"], "3")
+        self.assertGreater(float(facts["format"]["duration"]), float(facts["streams"][0]["duration"]) + 0.2)
+
+    def test_a_clip_whose_video_is_shorter_than_its_container_still_yields_three_frames(self):
+        self.put_clip(UUID_A, "short", width=1440, height=1080, duration=0.66)
+        frames = tag_clips.extract(self.root, UUID_A, 640)
+        self.assert_three_real_jpegs(frames)
+        self.assertEqual(len({f.read_bytes() for f in frames}), 3)  # three different frames, not one repeated
+        from PIL import Image
+
+        with Image.open(frames[0]) as image:
+            self.assertEqual(image.size, (640, 480))
+
+    def test_a_one_frame_clip_yields_three_frames(self):
+        self.put_clip(UUID_A, "single", width=320, height=180, duration=0.1)
+        self.assert_three_real_jpegs(tag_clips.extract(self.root, UUID_A, 128))
+
+    def test_a_receipt_duration_longer_than_the_video_does_not_matter(self):
+        self.put_clip(UUID_A, "single", width=320, height=180, duration=5.0)
+        self.assert_three_real_jpegs(tag_clips.extract(self.root, UUID_A, 128))
+
+    def test_a_normal_clip_is_sampled_across_its_length_and_sized_as_before(self):
+        self.put_clip(UUID_A, "normal", width=640, height=360, duration=2.0)
+        frames = tag_clips.extract(self.root, UUID_A, 128)
+        self.assert_three_real_jpegs(frames)
+        self.assertEqual(len({f.read_bytes() for f in frames}), 3)
+        from PIL import Image
+
+        for frame in frames:
+            with Image.open(frame) as image:
+                self.assertEqual(image.size, (128, 72))
+        features = tag_clips.local_features(frames, make_receipt(width=640, height=360, duration=2.0))
+        self.assertEqual(features["orientation"], "landscape")
+
+    def test_frame_indices_are_spread_over_the_available_frames(self):
+        self.assertEqual(tag_clips.pick_frame_indices(100), [10, 50, 90])
+        self.assertEqual(tag_clips.pick_frame_indices(3), [0, 1, 2])
+        self.assertEqual(tag_clips.pick_frame_indices(2), [0, 1, 1])
+        self.assertEqual(tag_clips.pick_frame_indices(1), [0, 0, 0])
+
+    def test_extraction_stays_one_clip_when_the_frame_count_is_not_reported(self):
+        # Matroska does not store nb_frames: ffprobe prints N/A and the count must be estimated.
+        mkv = self.root / "originals" / UUID_A / "clip.mkv"
+        self.add_clip(UUID_A, width=1440, height=1080, duration=0.66)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(self.fixtures["short"]), "-c", "copy", str(mkv)], check=True)
+        (self.root / "originals" / UUID_A / ".done").write_text(json.dumps(
+            {"video": {"name": "clip.mkv", "duration": 0.66, "width": 1440, "height": 1080}}))
+        self.assert_three_real_jpegs(tag_clips.extract(self.root, UUID_A, 128))
+
+    def test_an_undecodable_clip_raises_a_message_without_names_or_paths(self):
+        self.put_clip(UUID_A, "garbage")
+        with self.assertRaises(Exception) as caught:
+            tag_clips.extract(self.root, UUID_A, 128)
+        self.assert_no_private_text(str(caught.exception))
+        self.assertFalse((self.root / "analysis" / "frames" / UUID_A).exists())
+
+    def test_prepare_records_a_failed_marker_and_prepares_the_other_clips(self):
+        self.put_clip(UUID_A, "normal", width=640, height=360, duration=2.0)
+        self.put_clip(UUID_B, "garbage")
+        self.put_clip(UUID_C, "short", width=1440, height=1080, duration=0.66)
+        self.put_clip(UUID_D, "single", width=320, height=180, duration=0.1)
+        self.assertEqual(self.run_main("prepare"), 0)
+        self.assertIn("prepared 3 clips", self.output)
+        self.assertIn("skipped 1 unusable clip(s)", self.output)
+        self.assert_no_private_text(self.output)
+        marker = self.failed_marker(UUID_B)
+        self.assertEqual(set(marker), {"uuid", "error", "attempts"})
+        self.assertEqual((marker["uuid"], marker["error"]), (UUID_B, "frame_extraction_failed"))
+        self.assertIsInstance(marker["attempts"], int)
+        self.assertGreaterEqual(marker["attempts"], 1)
+        self.assert_no_private_text((self.root / "analysis" / "failed" / f"{UUID_B}.json").read_text())
+        self.assertFalse((self.root / "analysis" / "frames" / UUID_B).exists())
+        self.assertFalse((self.root / "analysis" / "features" / f"{UUID_B}.json").exists())
+        for uuid in (UUID_A, UUID_C, UUID_D):
+            self.assertEqual(len(list((self.root / "analysis" / "frames" / uuid).glob("f*.jpg"))), 3)
+            self.assertTrue((self.root / "analysis" / "features" / f"{uuid}.json").exists())
+            self.assertFalse((self.root / "analysis" / "failed" / f"{uuid}.json").exists())
+
+    def test_ready_clips_skips_failed_clips_until_the_marker_is_deleted(self):
+        self.put_clip(UUID_A, "normal", width=640, height=360, duration=2.0)
+        self.put_clip(UUID_B, "garbage")
+        self.assertEqual(tag_clips.ready_clips(self.root), [UUID_A, UUID_B])
+        self.assertEqual(self.run_main("prepare"), 0)
+        self.assertEqual(tag_clips.ready_clips(self.root), [UUID_A])
+        (self.root / "analysis" / "failed" / f"{UUID_B}.json").unlink()
+        self.assertEqual(tag_clips.ready_clips(self.root), [UUID_A, UUID_B])
+
+    def test_a_malformed_receipt_or_a_feature_failure_only_skips_that_clip(self):
+        self.put_clip(UUID_A, "normal", width=640, height=360, duration=2.0)
+        self.put_clip(UUID_B, "normal", width=640, height=360, duration=2.0)
+        self.put_clip(UUID_C, "normal", width=640, height=360, duration=2.0)
+        (self.root / "originals" / UUID_B / ".done").write_text("{not json")
+        real = tag_clips.local_features
+        broken = {"count": 0}
+
+        def flaky(frames, receipt):
+            if frames[0].parent.name == UUID_C:
+                broken["count"] += 1
+                raise OSError("image file is truncated: /private/path/f0.jpg")
+            return real(frames, receipt)
+
+        with mock.patch.object(tag_clips, "local_features", side_effect=flaky):
+            self.assertEqual(self.run_main("prepare"), 0)
+        self.assertEqual(broken["count"], 1)
+        self.assertIn("prepared 1 clips", self.output)
+        self.assertIn("skipped 2 unusable clip(s)", self.output)
+        self.assert_no_private_text(self.output)
+        for uuid in (UUID_B, UUID_C):
+            self.assertEqual(self.failed_marker(uuid)["error"], "frame_extraction_failed")
+            self.assert_no_private_text((self.root / "analysis" / "failed" / f"{uuid}.json").read_text())
+            self.assertFalse((self.root / "analysis" / "frames" / uuid).exists())
+        self.assertTrue((self.root / "analysis" / "features" / f"{UUID_A}.json").exists())
+
+    @needs_sdk
+    def test_run_tags_the_good_clips_around_a_broken_one_and_never_retries_it(self):
+        self.put_clip(UUID_A, "normal", width=640, height=360, duration=2.0)
+        self.put_clip(UUID_B, "garbage")
+        self.put_clip(UUID_C, "short", width=1440, height=1080, duration=0.66)
+        self.put_clip(UUID_D, "single", width=320, height=180, duration=0.1)
+        client = StubClient([succeeded(uuid, json.dumps(GOOD_ANALYSIS)) for uuid in (UUID_A, UUID_C, UUID_D)])
+        with mock.patch.object(tag_clips.time, "sleep"):
+            self.assertEqual(self.run_main("run", "--confirm-upload", client=client), 0)
+        batches = client.messages.batches
+        self.assertEqual(len(batches.created), 1)
+        self.assertEqual(sorted(r["custom_id"] for r in batches.created[0]), [UUID_A, UUID_C, UUID_D])
+        for request in batches.created[0]:
+            images = [part for part in request["params"]["messages"][0]["content"] if part["type"] == "image"]
+            self.assertEqual(len(images), 3)
+            self.assertTrue(all(part["source"]["data"] for part in images))
+        self.assertIn("skipped 1 unusable clip(s)", self.output)
+        self.assertIn("clips tagged: 3", self.output)
+        self.assertIn("clips failed frame extraction: 1", self.output)
+        self.assert_no_private_text(self.output)
+        self.assertEqual(self.failed_marker(UUID_B)["uuid"], UUID_B)
+
+        # The next run sends nothing, does not touch ffmpeg for the failed clip and keeps its marker.
+        before = (self.root / "analysis" / "failed" / f"{UUID_B}.json").read_bytes()
+        with mock.patch.object(subprocess, "run", wraps=subprocess.run) as spy:
+            self.assertEqual(self.run_main("run", "--confirm-upload", client=client), 0)
+        self.assertEqual([c.args[0][0] for c in spy.call_args_list if c.args[0][0] in ("ffmpeg", "ffprobe")], [])
+        self.assertEqual(len(batches.created), 1)
+        self.assertIn("nothing to submit", self.output)
+        self.assertNotIn("skipped", self.output)
+        self.assertEqual((self.root / "analysis" / "failed" / f"{UUID_B}.json").read_bytes(), before)
+
+    def test_report_shows_how_many_clips_failed_with_or_without_tags(self):
+        self.put_clip(UUID_B, "garbage")
+        self.assertEqual(self.run_main("prepare"), 0)
+        self.assertEqual(self.run_main("report"), 0)
+        self.assertIn("no tags yet", self.output)
+        self.assertIn("clips failed frame extraction: 1", self.output)
+        self.assert_no_private_text(self.output)
+        tags = self.root / "analysis" / "tags"
+        tags.mkdir(parents=True, exist_ok=True)
+        (tags / f"{UUID_A}.json").write_text(json.dumps(
+            {"uuid": UUID_A, "analysis": GOOD_ANALYSIS, "error": None, "usd": 0.001, "needs_review": False}))
+        self.assertEqual(self.run_main("report"), 0)
+        self.assertIn("clips tagged: 1", self.output)
+        self.assertIn("clips failed frame extraction: 1", self.output)
+
+    def test_report_without_failures_says_zero(self):
+        self.assertEqual(self.run_main("report"), 0)
+        self.assertIn("clips failed frame extraction: 0", self.output)
+
+
 class RequestBuildingTests(TaggerTestCase):
     def test_request_has_three_images_then_the_fixed_instruction_and_json_schema_output(self):
         import anthropic
@@ -489,6 +708,10 @@ class FakeFfmpegTestCase(TaggerTestCase):
     def fake_ffmpeg(self, command, **kwargs):
         if pathlib.Path(command[0]).name == "git":
             return REAL_RUN(command, **kwargs)
+        if command[0] == "ffprobe":  # a plausible 30-frame video stream
+            facts = {"streams": [{"duration": "1.000000", "nb_frames": "30", "avg_frame_rate": "30/1"}],
+                     "format": {"duration": "1.000000"}}
+            return subprocess.CompletedProcess(command, 0, json.dumps(facts), "")
         assert command[0] == "ffmpeg", command
         save_frame(pathlib.Path(command[-1]), (len(command[-1]) * 7 % 255, 90, 160))
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -692,9 +915,9 @@ class PrepareGuardTests(FakeFfmpegTestCase):
         self.run_mock.side_effect = lambda command, **kwargs: (
             REAL_RUN(command, **kwargs) if pathlib.Path(command[0]).name == "git"
             else subprocess.CompletedProcess(command, 1, "", "boom"))
-        with self.assertRaises(SystemExit):
-            self.run_main("prepare", "--limit", "1")
+        self.assertEqual(self.run_main("prepare", "--limit", "1"), 0)  # the clip is skipped, the run goes on
         self.assertEqual(list(stale.glob("f*.jpg")), [])
+        self.assertIn("skipped 1 unusable clip(s)", self.output)
 
     def test_prepare_without_pillow_fails_with_the_install_hint_before_extracting_anything(self):
         with mock.patch.dict(sys.modules, {"PIL": None, "PIL.Image": None}):

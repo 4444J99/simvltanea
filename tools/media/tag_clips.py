@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tag and safety-screen exported Live Photo clips with Claude vision (Anthropic Batch API, 50% price).
 
-For each exported clip this sends THREE downscaled still frames (start / middle / end, long side
+For each exported clip this sends THREE downscaled still frames (start / middle / end of the VIDEO stream, long side
 --frame-px, JPEG) plus a fixed instruction to the Anthropic API, and stores a private per-clip
 analysis. Nothing is sent unless you pass --confirm-upload. No names are requested or stored; the
 model is told never to identify people. Local features (palette, luma, saturation, motion) are
@@ -14,6 +14,7 @@ Layout under --root (private; never committed; may live outside the checkout):
   originals/<uuid>/.done                written by export_photos_album.py
   analysis/frames/<uuid>/f{0,1,2}.jpg   temporary; deleted once the clip is tagged
   analysis/features/<uuid>.json         local deterministic features (no API)
+  analysis/failed/<uuid>.json           clip whose frames could not be made; never retried (delete to retry)
   analysis/batches/<batch>.json         which clips went into which batch
   analysis/tags/<uuid>.json             final per-clip record (analysis + safety + features + cost)
   analysis/tags.jsonl                   append-only copy of the above
@@ -166,7 +167,7 @@ def make_client(keychain_service: str | None = None):
 
 def dirs(root: pathlib.Path, create: bool = True) -> dict[str, pathlib.Path]:
     base = root / "analysis"
-    paths = {name: base / name for name in ("frames", "features", "batches", "tags")}
+    paths = {name: base / name for name in ("frames", "features", "batches", "tags", "failed")}
     if create:
         for path in paths.values():
             path.mkdir(parents=True, exist_ok=True)
@@ -214,40 +215,136 @@ def pending_uuids(root: pathlib.Path) -> set[str]:
 
 
 def ready_clips(root: pathlib.Path) -> list[str]:
-    """UUIDs with an export receipt, no final tag record and no upload waiting to be collected."""
+    """UUIDs with an export receipt, no final tag record, no failed marker and no upload waiting.
+
+    A clip with a marker in ``analysis/failed/`` is never retried automatically; delete the marker to retry.
+    """
     tags = root / "analysis" / "tags"
+    failed = root / "analysis" / "failed"
     waiting = pending_uuids(root)
     return [receipt.parent.name for receipt in sorted((root / "originals").glob("*/.done"))
             if UUID_RE.fullmatch(receipt.parent.name) and receipt.parent.name not in waiting
-            and not (tags / f"{receipt.parent.name}.json").exists()]
+            and not (tags / f"{receipt.parent.name}.json").exists()
+            and not (failed / f"{receipt.parent.name}.json").exists()]
 
 
 def read_receipt(root: pathlib.Path, uuid: str) -> dict:
     return json.loads((root / "originals" / uuid / ".done").read_text(encoding="utf-8"))
 
 
+class ClipUnusable(Exception):
+    """A clip whose frames or features cannot be produced. The message never holds names or paths."""
+
+    def __init__(self, attempts: int = 0):
+        super().__init__("frame_extraction_failed")
+        self.attempts = attempts
+
+
+def parse_frame_rate(text) -> float | None:
+    """``"15/2"`` -> 7.5; ``"0/0"`` and anything unreadable -> None."""
+    try:
+        numerator, _, denominator = str(text).partition("/")
+        rate = float(numerator) / float(denominator or 1)
+    except (ValueError, ZeroDivisionError):
+        return None
+    return rate if math.isfinite(rate) and rate > 0 else None
+
+
+def probe_video(mov: pathlib.Path) -> tuple[int | None, float | None]:
+    """(frame count, duration in seconds) of the VIDEO stream; None for what ffprobe cannot tell.
+
+    The container duration also covers audio, which can be longer than the picture, so it is only used
+    when the stream has no duration of its own. ``nb_frames`` can be ``N/A``; then it is estimated from
+    the duration and the average frame rate.
+    """
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=duration,nb_frames,avg_frame_rate:format=duration", "-of", "json", str(mov)],
+            capture_output=True, text=True)
+        facts = json.loads(proc.stdout) if proc.returncode == 0 else {}
+        stream = (facts.get("streams") or [{}])[0]
+        container = facts.get("format") or {}
+    except (OSError, ValueError, AttributeError, TypeError, IndexError):
+        return None, None
+
+    def positive_float(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) and number > 0 else None
+
+    duration = positive_float(stream.get("duration")) or positive_float(container.get("duration"))
+    try:
+        count = int(stream["nb_frames"])
+    except (KeyError, TypeError, ValueError):  # missing or "N/A"
+        count = 0
+    if count < 1:
+        rate = parse_frame_rate(stream.get("avg_frame_rate"))
+        count = max(1, round(duration * rate)) if duration and rate else 0
+    return (count or None), duration
+
+
+def pick_frame_indices(count: int) -> list[int]:
+    """Frame numbers at about 10 / 50 / 90 % of ``count`` frames; a short clip repeats its nearest frames."""
+    return [min(count - 1, int(count * fraction)) for fraction in FRAME_FRACTIONS]
+
+
 def extract(root: pathlib.Path, uuid: str, px: int) -> list[pathlib.Path]:
-    """Three downscaled JPEG frames (start / middle / end) via ffmpeg."""
+    """Three downscaled JPEG frames (start / middle / end) of the clip's VIDEO stream via ffmpeg.
+
+    Frames are chosen by index among the video's own frames, so a clip whose audio outlasts its picture
+    cannot make a position fall off the end. A position that yields no image falls back to the last
+    decodable frame, then to the nearest frame already written. Raises ``ClipUnusable`` (no names, no
+    paths) when no frame can be produced at all.
+    """
     d = dirs(root)
     receipt = read_receipt(root, uuid)
     mov = root / "originals" / uuid / pathlib.Path(receipt["video"]["name"]).name
-    duration = max(float(receipt["video"].get("duration") or 1.0), 0.2)
     out_dir = d["frames"] / uuid
     shutil.rmtree(out_dir, ignore_errors=True)  # never reuse frames of another size or a partial earlier file
     out_dir.mkdir(parents=True)
-    frames = []
-    for index, fraction in enumerate(FRAME_FRACTIONS):
-        out = out_dir / f"f{index}.jpg"
+    count, duration = probe_video(mov)
+    scale = f"scale='if(gt(iw,ih),{px},-2)':'if(gt(iw,ih),-2,{px})'"
+    attempts = 0
+
+    def grab(out: pathlib.Path, before_input: list[str], video_filter: str, after_input: list[str]) -> bool:
+        nonlocal attempts
+        attempts += 1
+        out.unlink(missing_ok=True)
         proc = subprocess.run(
-            ["ffmpeg", "-v", "error", "-y", "-ss", f"{duration * fraction:.3f}", "-i", str(mov), "-frames:v", "1",
-             "-vf", f"scale='if(gt(iw,ih),{px},-2)':'if(gt(iw,ih),-2,{px})'", "-q:v", "4", str(out)],
-            capture_output=True, text=True,
-        )
-        if proc.returncode != 0 or not out.exists():
-            shutil.rmtree(out_dir, ignore_errors=True)
-            raise SystemExit(f"ffmpeg could not extract frame {index} for clip {uuid}.")
-        frames.append(out)
-    return frames
+            ["ffmpeg", "-v", "error", "-y", *before_input, "-i", str(mov), "-map", "0:v:0", *after_input,
+             "-vf", video_filter, "-q:v", "4", str(out)],
+            capture_output=True, text=True)
+        if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
+            return True
+        out.unlink(missing_ok=True)
+        return False
+
+    if count:
+        wanted = [(["-fps_mode", "passthrough", "-frames:v", "1"], f"select='eq(n,{k})',{scale}")
+                  for k in pick_frame_indices(count)]
+    else:  # no frame count: fall back to time positions inside the video (or the receipt's duration)
+        span = duration or max(float(receipt["video"].get("duration") or 1.0), 0.2)
+        wanted = [(["-frames:v", "1", "-ss", f"{span * fraction:.3f}"], scale) for fraction in FRAME_FRACTIONS]
+    last_resort = ["-update", "1"]  # decodes every frame into one file: the last decodable frame is what stays
+    frames: list[pathlib.Path | None] = []
+    for index, (options, video_filter) in enumerate(wanted):
+        out = out_dir / f"f{index}.jpg"
+        got = (grab(out, [], video_filter, options)
+               or grab(out, ["-sseof", "-0.2"], scale, ["-frames:v", "1"])
+               or grab(out, [], scale, last_resort))
+        frames.append(out if got else None)
+    written = [i for i, frame in enumerate(frames) if frame is not None]
+    if not written:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise ClipUnusable(attempts)
+    for index, frame in enumerate(frames):
+        if frame is None:  # reuse the nearest frame that exists
+            nearest = min(written, key=lambda i: (abs(i - index), i))
+            shutil.copyfile(out_dir / f"f{nearest}.jpg", out_dir / f"f{index}.jpg")
+    return [out_dir / f"f{index}.jpg" for index in range(len(wanted))]
 
 
 def local_features(frames: list[pathlib.Path], receipt: dict) -> dict:
@@ -299,19 +396,54 @@ def require_pillow() -> None:
         raise SystemExit(f"Pillow is not installed. {INSTALL_HINT}") from None
 
 
+def mark_failed(root: pathlib.Path, uuid: str, attempts: int) -> None:
+    """Record that a clip is unusable: only the uuid, a fixed error code and the attempt count."""
+    d = dirs(root)
+    shutil.rmtree(d["frames"] / uuid, ignore_errors=True)
+    (d["features"] / f"{uuid}.json").unlink(missing_ok=True)
+    write_json(d["failed"] / f"{uuid}.json",
+               {"uuid": uuid, "error": "frame_extraction_failed", "attempts": max(attempts, 1)}, indent=1)
+
+
+def prepare_clip(root: pathlib.Path, uuid: str, px: int) -> None:
+    """Frames and local features of one clip; raises ``ClipUnusable`` when they cannot be made.
+
+    Only per-clip problems become ``ClipUnusable`` (an undecodable video, an unreadable frame, a malformed
+    receipt). A file error while reading the receipt or running ffmpeg (OSError) still stops the run with
+    exit code 5.
+    """
+    try:
+        receipt = read_receipt(root, uuid)
+        frames = extract(root, uuid, px)
+    except (ValueError, KeyError, TypeError, AttributeError):  # a malformed receipt; OSError stays fatal
+        raise ClipUnusable(0) from None
+    try:
+        features = local_features(frames, receipt)
+    except (OSError, ValueError, ArithmeticError, IndexError, TypeError):  # Pillow cannot read a frame
+        raise ClipUnusable(0) from None
+    write_json(dirs(root)["features"] / f"{uuid}.json", features, indent=1)
+
+
 def cmd_prepare(args) -> list[str]:
     require_pillow()  # before any frame is extracted: local features need it
     if shutil.which("ffmpeg") is None:
         raise SystemExit("ffmpeg is required to extract frames; install FFmpeg first.")
-    d = dirs(args.root)
+    dirs(args.root)
     todo = ready_clips(args.root)
     if args.limit:
         todo = todo[: args.limit]
+    prepared = []
     for uuid in todo:
-        frames = extract(args.root, uuid, args.frame_px)
-        write_json(d["features"] / f"{uuid}.json", local_features(frames, read_receipt(args.root, uuid)), indent=1)
-    print(f"prepared {len(todo)} clips (frames + local features)")
-    return todo
+        try:
+            prepare_clip(args.root, uuid, args.frame_px)
+        except ClipUnusable as unusable:
+            mark_failed(args.root, uuid, unusable.attempts)
+            continue
+        prepared.append(uuid)
+    print(f"prepared {len(prepared)} clips (frames + local features)")
+    if len(prepared) < len(todo):
+        print(f"skipped {len(todo) - len(prepared)} unusable clip(s); see analysis/failed/ (delete a marker to retry)")
+    return prepared
 
 
 def estimate(model: str, n: int, px: int) -> float:
@@ -467,8 +599,10 @@ def cmd_collect(args, batch_ids: list[str]) -> None:
 def cmd_report(args) -> None:
     tag_dir = dirs(args.root, create=False)["tags"]
     tags = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(tag_dir.glob("*.json"))]
+    failed = sum(1 for _ in dirs(args.root, create=False)["failed"].glob("*.json"))
     if not tags:
         print("no tags yet")
+        print(f"clips failed frame extraction: {failed}")
         return
     verdicts: dict[str, int] = {}
     subjects: dict[str, int] = {}
@@ -487,6 +621,7 @@ def cmd_report(args) -> None:
     print("sharing sensitivity:", sensitivity)
     print("top subjects:", sorted(subjects.items(), key=lambda kv: -kv[1])[:12])
     print(f"needs human review: {sum(1 for t in tags if t.get('needs_review'))}")
+    print(f"clips failed frame extraction: {failed}")
 
 
 def build_parser() -> argparse.ArgumentParser:

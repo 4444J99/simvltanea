@@ -89,6 +89,7 @@ the folder.
 └── analysis/                      written by tag_clips.py
     ├── frames/<uuid>/f0-f2.jpg    temporary; deleted once the clip is tagged
     ├── features/<uuid>.json       local features (palette, luma, motion)
+    ├── failed/<uuid>.json         clip with no usable frames; skipped until deleted
     ├── batches/<batch>.json       which clips went into which batch
     ├── tags/<uuid>.json           final per-clip record
     ├── tags.jsonl                 append-only copy of the records
@@ -175,6 +176,24 @@ the error type.
 clip's frame folder first), so a frame never comes from an earlier run with a
 different `--frame-px`. It stops with the install hint before extracting
 anything if Pillow is missing.
+
+The frames come from the video stream, not the container. A Live Photo's audio
+can outlast its picture (for example 3 video frames over 0.4 s inside a 0.66 s
+container), so `prepare` reads the video stream's frame count with `ffprobe`
+and decodes the frames at about 10, 50 and 90 percent of the frame numbers. A
+position with no image falls back to the last decodable frame. A clip with
+fewer than three frames repeats its nearest frames, so the model still gets
+three images.
+
+One unusable clip never stops the run. If no frame or feature can be made for
+a clip (a file ffmpeg cannot decode, an unreadable frame, a malformed receipt),
+`prepare`, `submit` and `run` write `analysis/failed/<uuid>.json`, skip the
+clip, continue with the others, and print `skipped N unusable clip(s)`. The
+marker holds only `uuid`, `error` (`frame_extraction_failed`) and `attempts`
+(the number of ffmpeg runs tried); it holds no path, file name or ffmpeg text.
+A clip with a marker is not retried automatically. Delete its marker to try it
+again. `report` prints `clips failed frame extraction: N`. A file error on the
+root itself still exits with code 5.
 
 Credentials use the SDK's standard resolution: set `ANTHROPIC_API_KEY`. On
 macOS you can instead pass `--keychain-service NAME` to read the key from a
