@@ -13,15 +13,16 @@
  * Between 2 and 7 loops are accepted; other counts are refused, never padded
  * or duplicated.
  *
- * The pure helpers (quantizeDuration, admitSize, countVerdict, sniffContainer,
- * playbackQueries, blobType, mediaSuffix) are exported for Node tests through
+ * The pure helpers (quantizeDuration, admitSize, countVerdict, spanVerdict,
+ * sniffContainer, playbackQueries, blobType, mediaSuffix) are exported for Node tests through
  * module.exports and published as globalThis.SimvltaneaStudio in the browser.
  */
 (function (root) {
   'use strict';
   const MIN_LOOPS = 2, MAX_LOOPS = 7, FPS = 24, DEFAULT_SECONDS = 120, MAX_FRAMES = 14400;
   const MIB = 1024 * 1024, MAX_TOTAL_BYTES = 512 * MIB;
-  const MIN_FRAMES = 6; // a quarter second at 24 fps keeps every track inside the span guard
+  const MIN_FRAMES = 6; // a quarter second at 24 fps; spanVerdict checks the span guard for the piece length
+  const MAX_SPANS_PER_TRACK = 1024; // browser.compiler.js MAX_SEGMENTS: at most this many spans per track on average
   const METADATA_TIMEOUT_MS = 15000;
   // Tolerates float spellings such as 0.7 * 30 = 20.999999999999996 (about 40 ns at 24 fps).
   const FRAME_EPSILON = 1e-6;
@@ -200,9 +201,23 @@
     return Math.min(MAX_FRAMES, seconds * fps);
   }
 
+  /* The compiler's span guard for the chosen loops: a loop of L frames at rate 1
+   * from offset 0 opens ceil(frames / L) spans, and the total must not exceed
+   * MAX_SPANS_PER_TRACK per loop. When it would, name the longest piece that fits. */
+  function spanVerdict(frames, loopFrames, fps = FPS) {
+    const spans = length => loopFrames.reduce((sum, each) => sum + Math.ceil(length / each), 0);
+    const budget = MAX_SPANS_PER_TRACK * loopFrames.length;
+    if (spans(frames) <= budget) return {ok: true, message: ''};
+    let seconds = Math.floor(frames / fps);
+    while (seconds > 1 && spans(seconds * fps) > budget) seconds -= 1;
+    return {ok: false, message: `These loops are too short for a ${frames / fps}-second piece: the player ` +
+      `can start them at most ${budget} times in all. Choose longer loops, or open the page with ` +
+      `?seconds=${seconds} or less.`};
+  }
+
   const api = {
-    MIN_LOOPS, MAX_LOOPS, FPS, DEFAULT_SECONDS, MAX_TOTAL_BYTES, MIN_FRAMES,
-    quantizeDuration, admitSize, countVerdict, sniffContainer, playbackQueries, blobType, mediaSuffix,
+    MIN_LOOPS, MAX_LOOPS, FPS, DEFAULT_SECONDS, MAX_TOTAL_BYTES, MIN_FRAMES, MAX_SPANS_PER_TRACK,
+    quantizeDuration, admitSize, countVerdict, spanVerdict, sniffContainer, playbackQueries, blobType, mediaSuffix,
     compositionFrames, formatMiB,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -339,13 +354,20 @@
       codec: sniff.codec ? sniff.codec.label : null, container: sniff.container, ...facts, quantized});
   }
 
+  // Batches are checked one at a time, so the size cap counts every loop
+  // accepted before them, including those of a batch still being checked.
+  let admissions = Promise.resolve();
   async function addFiles(list) {
     const files = Array.from(list || []);
     if (!files.length) return;
-    ui.refusals.replaceChildren();
     busy += 1; render();
-    const probe = document.createElement('video');
+    const previous = admissions;
+    let release;
+    admissions = new Promise(resolve => { release = resolve; });
     try {
+      await previous;
+      ui.refusals.replaceChildren();
+      const probe = document.createElement('video');
       for (const [index, file] of files.entries()) {
         say(ui.progress, `Checking ${index + 1} of ${files.length}: ${file.name}. Nothing is uploaded.`);
         try { await admit(file, probe); } catch (error) {
@@ -357,6 +379,7 @@
       say(ui.progress, `Checked ${files.length} file${files.length === 1 ? '' : 's'}: ${added} added` +
         `${ui.refusals.children.length ? `, ${ui.refusals.children.length} not added` : ''}.`);
     } finally {
+      release();
       busy -= 1; render();
     }
   }
@@ -371,8 +394,15 @@
     return element;
   }
 
-  function render(focus) {
+  function selectionVerdict() {
     const verdict = countVerdict(loops.length);
+    if (!verdict.ok) return verdict;
+    const spans = spanVerdict(frames, loops.map(loop => loop.quantized.frames));
+    return spans.ok ? verdict : spans;
+  }
+
+  function render(focus) {
+    const verdict = selectionVerdict();
     say(ui.count, verdict.message);
     studio.dataset.count = String(loops.length);
     ui.start.disabled = !verdict.ok || busy > 0;
@@ -467,7 +497,7 @@
   }
 
   async function startSession() {
-    const verdict = countVerdict(loops.length);
+    const verdict = selectionVerdict();
     if (!verdict.ok || busy > 0) { say(ui.count, verdict.message); return; }
     const r = runtime();
     if (!r) { say(ui.count, 'The player did not load. Reload the page and try again.'); return; }

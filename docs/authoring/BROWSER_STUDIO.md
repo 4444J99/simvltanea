@@ -73,7 +73,12 @@ Compatible") export plays almost everywhere.
 
 The piece lasts two minutes by default. The `seconds` query parameter sets
 another length, capped at the compiler's 14400 frames (600 seconds at 24 fps).
-For example, `index.html?seconds=30` sets 30 seconds.
+For example, `index.html?seconds=30` sets 30 seconds. Each pass through a loop
+starts it again, and the compiler allows at most 1024 starts per loop on
+average across the selection. A long piece with very short loops can exceed
+that budget: the quarter-second minimum fits only up to 256 seconds. The page
+then keeps Play disabled, says so before Play is pressed, and names the longest
+`seconds` value that fits the chosen loops.
 
 ## Runtime hook
 

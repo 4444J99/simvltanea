@@ -340,6 +340,57 @@ process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
         self.assertEqual(out['suffixes'], ['mov', 'mov', 'mp4'])
         self.assertEqual((out['cap'], out['fps'], out['frames120']), (512 * MIB, 24, 2880))
 
+    def test_span_verdict_agrees_with_the_compiler_guard(self):
+        """The ready/not-ready verdict must match what compilePlan accepts, and name a piece length that compiles."""
+        script = r'''
+const S = require(process.argv[1]);
+const path = require('path');
+const C = require(path.join(path.dirname(process.argv[1]), 'browser.compiler.js'));
+let input = '';
+process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
+  const {bundle} = JSON.parse(input);
+  const compiles = (frames, loopFrames) => {
+    const ids = loopFrames.map((_, index) => `loop-${index + 1}`);
+    const sources = loopFrames.map((count, index) => {
+      const sha = String(index + 1).padStart(64, '0');
+      return {id: `source-${index + 1}`, path: `media/${sha}.mp4`, sha256: sha, kind: 'video',
+              duration: S.quantizeDuration(count / S.FPS, S.FPS).duration};
+    });
+    try {
+      C.compilePlan(C.buildState({sources, frames, fps: S.FPS,
+        loops: sources.map((source, index) => ({id: ids[index], source: source.id})),
+        layouts: C.bindLayouts(bundle[String(loopFrames.length)], ids)}));
+      return true;
+    } catch (error) {
+      if (/span resource guard/.test(error.message)) return false;
+      throw error;
+    }
+  };
+  const cases = [];
+  for (const count of [2, 3, 4]) for (const seconds of [120, 256, 257, 600]) for (const each of [6, 12, 15, 1440]) {
+    const loops = Array(count).fill(each), frames = Math.min(seconds * S.FPS, 14400), verdict = S.spanVerdict(frames, loops);
+    const named = verdict.ok ? null : Number((/\?seconds=(\d+)/.exec(verdict.message) || [])[1]);
+    cases.push({count, seconds, each, ok: verdict.ok, compiles: compiles(frames, loops), named,
+      namedFits: named === null ? null : compiles(named * S.FPS, loops),
+      nextFails: named === null ? null : !compiles((named + 1) * S.FPS, loops)});
+  }
+  const pair = S.spanVerdict(14400, [12, 12]);
+  process.stdout.write(JSON.stringify({cases, pair, short: S.spanVerdict(2880, [6, 6]), constant: S.MAX_SPANS_PER_TRACK}));
+});
+'''
+        out = node(script, {'bundle': authored_layout_bundle()})
+        for case in out['cases']:
+            with self.subTest(**{key: case[key] for key in ('count', 'seconds', 'each')}):
+                self.assertEqual(case['ok'], case['compiles'], case)
+                if not case['ok']:
+                    self.assertTrue(case['namedFits'], case)
+                    self.assertTrue(case['nextFails'], case)
+        self.assertTrue(any(not case['ok'] for case in out['cases']))
+        self.assertFalse(out['pair']['ok'])
+        self.assertIn('?seconds=512', out['pair']['message'])
+        self.assertTrue(out['short']['ok'])
+        self.assertEqual(out['constant'], 1024)
+
     def test_container_sniff_reports_rfc6381_codecs(self):
         script = SNIFF
         names = ['loop-1.mp4', 'phone-h264.mov', 'phone-hevc.mov', 'phone-rotated.mov', 'prores.mov', 'garbage.mp4']
@@ -557,6 +608,28 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertEqual(page.inner_text('#count'), '2 loops chosen. Ready to play.')
         self.play(page)
         self.assertEqual(len(self.clocks(page)['loops']), 2)
+
+    def test_overlapping_batches_share_one_size_cap(self):
+        """Two batches dropped back to back are checked one after the other, so the cap counts both."""
+        page = self.open()
+        files = [dict(name=path.name, data=base64.b64encode(path.read_bytes()).decode()) for path in self.loops[:2]]
+        page.evaluate('''files => {
+          const zone = document.querySelector('#drop');
+          for (const spec of files) {
+            const file = new File([Uint8Array.from(atob(spec.data), c => c.charCodeAt(0))], spec.name, {type: 'video/mp4'});
+            Object.defineProperty(file, 'size', {value: 300 * 1048576});   // each batch alone is under the cap
+            const drop = new Event('drop', {bubbles: true, cancelable: true});
+            Object.defineProperty(drop, 'dataTransfer', {value: {files: [file]}});
+            zone.dispatchEvent(drop);                                     // same task: both batches overlap
+          }
+        }''', files)
+        page.wait_for_function('() => !SimvltaneaStudio.snapshot().busy', timeout=60000)
+        snapshot = page.evaluate('SimvltaneaStudio.snapshot()')
+        self.assertEqual([loop['name'] for loop in snapshot['loops']], ['loop-1.mp4'])
+        self.assertEqual(len(snapshot['refusals']), 1, snapshot['refusals'])
+        self.assertRegex(snapshot['refusals'][0], r'^loop-2\.mp4 was not added: .*600 MiB, over the 512 MiB limit')
+        self.assertEqual(page.locator('#refusals li').all_inner_texts(), snapshot['refusals'])
+        self.assertTrue(page.is_disabled('#start'))
 
     def test_remove_and_reorder_with_labelled_focusable_buttons(self):
         page = self.open()
