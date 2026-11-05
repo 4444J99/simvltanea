@@ -11,7 +11,6 @@ files (by path), and the legacy count map of ``examples/layouts.json``.
 Nothing is read from inside the package.
 """
 from __future__ import annotations
-from tools.paths import resolve_references
 
 import argparse
 import json
@@ -51,6 +50,16 @@ def legacy_value(value):
     if type(value) is float and math.isfinite(value):
         return str(Fraction(str(value)))
     return value
+
+
+def unique_keys(pairs: list) -> dict:
+    """object_pairs_hook: a repeated key fails as in load_layout_file instead of keeping the last value."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise LayoutError("json", f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
 
 
 def validate_payload(data: dict, source: Path) -> list[str]:
@@ -101,9 +110,13 @@ def validate_payload(data: dict, source: Path) -> list[str]:
 
 def validate_file(target: Path, presets_only: bool = False) -> tuple[list[str], str]:
     """Validate one file; return (errors, summary)."""
+    # A layout file holds numbers and plain names: no "@role/path" reference is resolved here, so a
+    # name that merely starts with "@" is data, exactly as the strict loader reads it.
     try:
-        data = resolve_references(json.loads(target.read_text(encoding="utf-8")))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        data = json.loads(target.read_text(encoding="utf-8"), object_pairs_hook=unique_keys)
+    except LayoutError as exc:  # first: LayoutError is a ValueError
+        return [f"{target}: {exc} [{exc.code}]"], ""
+    except (OSError, ValueError) as exc:  # includes UnicodeDecodeError, JSONDecodeError and oversized integers
         return [f"{target}: cannot read JSON: {exc}"], ""
     if presets_only and not (isinstance(data, dict) and data.get("format") == PRESET_FORMAT):
         found = data.get("format") if isinstance(data, dict) else type(data).__name__

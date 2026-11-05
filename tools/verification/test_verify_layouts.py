@@ -25,6 +25,36 @@ def run(*argv: str) -> tuple[int, str]:
 
 
 class LayoutGuardTests(unittest.TestCase):
+    def test_oversized_integer_is_reported_not_raised(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "huge.json"
+            path.write_text('{"format": "simvltanea.layout-pair/1", "count": ' + "1" * 5000 + "}")
+            errors, summary = guard.validate_file(path)
+            self.assertEqual(summary, "")
+            self.assertEqual(len(errors), 1, errors)
+            self.assertTrue(errors[0].startswith(f"{path}: cannot read JSON: "), errors[0])
+
+    def test_legacy_duplicate_keys_are_rejected(self):
+        # The first "2" overlaps and the second is valid: keeping only the last value would hide it.
+        shadowed = ('{"2": {"portrait": [[0,0,1,0.6],[0,0.5,1,0.5]], "landscape": [[0,0,0.5,1],[0.5,0,0.5,1]]}, '
+                    '"2": {"portrait": [[0,0,1,0.5],[0,0.5,1,0.5]], "landscape": [[0,0,0.5,1],[0.5,0,0.5,1]]}}')
+        repeated = ('{"2": {"portrait": [[0,0,1,0.6],[0,0.5,1,0.5]], "portrait": [[0,0,1,0.5],[0,0.5,1,0.5]], '
+                    '"landscape": [[0,0,0.5,1],[0.5,0,0.5,1]]}}')
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, text, key in (("shadowed.json", shadowed, "2"), ("repeated.json", repeated, "portrait")):
+                with self.subTest(name=name):
+                    path = Path(tmp) / name
+                    path.write_text(text)
+                    self.assertEqual(guard.validate_file(path), ([f"{path}: duplicate JSON key: {key} [json]"], ""))
+
+    def test_literal_at_names_are_not_path_references(self):
+        data = json.loads((CORPUS / "valid/strips-1-pair.json").read_text())
+        data["portrait"]["name"] = "@portrait"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "at-name-pair.json"
+            path.write_text(json.dumps(data))
+            self.assertEqual(guard.validate_file(path), ([], "pair: count 1"))
+
     def test_declared_bleed_is_accepted(self):
         for name in ("valid/strips-5-pair.json", "valid/grid-4-bleed-pair.json"):
             with self.subTest(name=name):

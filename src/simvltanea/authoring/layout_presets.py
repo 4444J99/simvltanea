@@ -230,6 +230,9 @@ def _validate_layout(layout: Any, loop_ids: set[str] | None, where: _Where) -> l
     _require(isinstance(layout["name"], str) and bool(layout["name"]), where, "wrong-type",
              "layout name is required", legacy=True)
     _require(isinstance(layout["cells"], list), where, "wrong-type", "cells must be an array", legacy=True)
+    # Count before geometry: the pairwise overlap loop is quadratic in len(cells).
+    _require(loop_ids is not None or where.count is None or len(layout["cells"]) == where.count, where,
+             "cell-count", f"has {len(layout['cells'])} cells, expected {where.count}")
     seen: list[str] = []
     boxes: list[tuple[Fraction, ...]] = []
     for index, cell in enumerate(layout["cells"]):
@@ -253,8 +256,6 @@ def _validate_layout(layout: Any, loop_ids: set[str] | None, where: _Where) -> l
         _require(len(seen) == len(loop_ids) and set(seen) == loop_ids, where, "mapping",
                  "each orientation must map every loop exactly once", legacy=True)
     else:
-        _require(where.count is None or len(seen) == where.count, where, "cell-count",
-                 f"has {len(seen)} cells, expected {where.count}")
         _require(len(set(seen)) == len(seen), where, "mapping", "each loop must appear in exactly one cell")
 
     cells = layout["cells"]
@@ -403,6 +404,11 @@ def _resolve_preset(raw: Any, source: str | None = None) -> _Preset:
                  f"weights.by_count needs exactly {count} weights")
         parsed = tuple(_rational(v, "weights.by_count", where.at(count=count), "weights") for v in value)
         _require(all(v > 0 for v in parsed), where.at(count=count), "weights", "weights must be positive")
+        total = sum(parsed)
+        edges = [sum(parsed[:k], Fraction(0)) / total for k in range(count + 1)]
+        _require(all(v.denominator <= 10**9 for v in edges + [w / total for w in parsed]),
+                 where.at(count=count), "weights",
+                 "weights.by_count must give strip edges and sizes with denominators of at most 10**9")
         weights[count] = parsed
 
     fit = raw.get("fit", DEFAULT_STRIPS_PRESET["fit"])
@@ -451,6 +457,15 @@ def _resolve_preset(raw: Any, source: str | None = None) -> _Preset:
                    z1, gamma, min_zoom, quantum, table, radius, jitter, source)
 
 
+def _checked_preset(raw: Any, source: str | None = None) -> _Preset:
+    """Resolve a preset and expand every count it advertises, as a preset file is."""
+    preset = _resolve_preset(raw, source)
+    for count in range(preset.count_min, preset.count_max + 1):
+        _expand(preset, count)
+        _slice_size(preset, count)
+    return preset
+
+
 def _preset(preset: Any) -> _Preset:
     if isinstance(preset, str):
         if preset == FAMILY_AUTHORED:
@@ -466,7 +481,7 @@ def _preset(preset: Any) -> _Preset:
             raise LayoutError("format", f"{path}: expected a {PRESET_FORMAT} file, got {data['format']}")
         return _resolve_preset(data, str(path))
     if isinstance(preset, Mapping):
-        return _resolve_preset(dict(preset))
+        return _checked_preset(dict(preset))
     raise LayoutError("preset", "preset must be a built-in name, a preset object or a file path")
 
 
@@ -627,6 +642,10 @@ def _read_json(path: Path) -> Any:
         return json.loads(text, object_pairs_hook=unique, parse_constant=constant)
     except json.JSONDecodeError as exc:
         raise LayoutError("json", f"{path}: malformed JSON: {exc}") from exc
+    except LayoutError:
+        raise
+    except ValueError as exc:
+        raise LayoutError("json", f"{path}: invalid JSON value: {exc}") from exc
 
 
 def load_layout_file(path: str | os.PathLike) -> dict[str, Any]:
@@ -642,10 +661,7 @@ def load_layout_file(path: str | os.PathLike) -> dict[str, Any]:
     _require(isinstance(data, dict), where, "wrong-type", "layout file must be a JSON object")
     kind = data.get("format")
     if kind == PRESET_FORMAT:
-        preset = _resolve_preset(data, str(path))
-        for count in range(preset.count_min, preset.count_max + 1):
-            _expand(preset, count)
-            _slice_size(preset, count)
+        _checked_preset(data, str(path))
     elif kind == PAIR_FORMAT:
         _keys(data, PAIR_FIELDS, PAIR_FIELDS, "pair", where)
         count = _integer(data["count"], 1, PAIR_MAX_COUNT, "count", where, "count-range")

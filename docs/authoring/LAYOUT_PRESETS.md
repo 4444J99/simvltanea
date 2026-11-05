@@ -93,7 +93,7 @@ strings such as `"3/5"`. JSON floats are refused.
 | `counts` | integers with `1 <= min <= max <= 12` |
 | `orientations.*.direction` | `rows` or `columns` |
 | `orientations.*.order` | `forward` or `reverse` |
-| `weights.by_count` | `"N"` → N positive rationals |
+| `weights.by_count` | `"N"` → N positive rationals; every edge `e_k` and size `w_k / Σw` must have a denominator of at most 10^9 |
 | `fit` | `cover` (required by `full_bleed`) or `contain` |
 | `focal.by_index` | `"k"` (0-based strip index) → focal pair in 0..1 |
 | `overlap_px` | integer device pixels, 0..8 |

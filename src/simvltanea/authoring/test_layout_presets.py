@@ -263,6 +263,15 @@ class ZoomTests(unittest.TestCase):
         raises_code(self, "zoom", strips_slice, 5, preset(zoom={**DEFAULT_STRIPS_PRESET["zoom"], "min_zoom": "1"}))
         raises_code(self, "zoom", strips_slice, 5, preset(zoom={**DEFAULT_STRIPS_PRESET["zoom"], "curve": "linear"}))
 
+    def test_preset_object_validates_every_count(self):
+        # A preset object is checked like a preset file: every count it advertises must expand.
+        coarse = preset(zoom={**DEFAULT_STRIPS_PRESET["zoom"], "quantum": 2})
+        for function in (strips_slice, strips_layouts, build_strips):
+            with self.subTest(function=function.__name__):
+                raises_code(self, "zoom", function, 5, coarse)
+        narrowed = preset(counts={"min": 5, "max": 12}, zoom={**DEFAULT_STRIPS_PRESET["zoom"], "quantum": 2})
+        self.assertEqual(strips_slice(5, narrowed)["width"], "1/2")
+
 
 class SelectionTests(unittest.TestCase):
     def test_spec_examples(self):
@@ -420,6 +429,36 @@ class StrictFileTests(unittest.TestCase):
             with self.subTest(invalid=name):
                 message = raises_code(self, code, load_layout_file, CORPUS / name)
                 self.assertTrue(message.startswith(str(CORPUS / name)), message)
+
+    def test_pair_cell_count_is_checked_before_geometry(self):
+        # The pairwise overlap loop is quadratic, so a wrong count must be refused before any geometry.
+        cell = {"loop": "loop-1", "rect": ["0", "0", "1", "1"], "fit": "cover", "focal": ["1/2", "1/2"]}
+        two = [cell, {**cell, "loop": "loop-2"}]
+        layout = lambda name: {"name": name, "cells": two}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "count.json"
+            path.write_text(json.dumps({"format": "simvltanea.layout-pair/1", "count": 1,
+                                        "portrait": layout("p"), "landscape": layout("l")}))
+            message = raises_code(self, "cell-count", load_layout_file, path)
+            self.assertIn("count 1, portrait: has 2 cells, expected 1", message)
+
+    def test_weights_outside_state_rationals_are_refused_at_parse(self):
+        for weights in (["1", "1/1000000000"], ["1000000000", "1"]):
+            with self.subTest(weights=weights):
+                message = raises_code(self, "weights", strips_layouts, 2,
+                                      preset(weights={"default": "equal", "by_count": {"2": weights}}))
+                self.assertIn("count 2", message)
+        # The largest legal neighbour is still accepted.
+        strips_layouts(2, preset(weights={"default": "equal", "by_count": {"2": ["999999999", "1"]}}))
+
+    def test_oversized_integer_is_a_coded_json_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "huge.json"
+            path.write_text('{"format": "simvltanea.layout-pair/1", "count": ' + "1" * 5000 + "}")
+            message = raises_code(self, "json", load_layout_file, path)
+            self.assertTrue(message.startswith(str(path)), message)
+            path.write_text('{"a": 1, "a": 2}')
+            self.assertIn("duplicate JSON key", raises_code(self, "json", load_layout_file, path))
 
     def test_errors_name_file_count_orientation_and_cell(self):
         with tempfile.TemporaryDirectory() as tmp:
