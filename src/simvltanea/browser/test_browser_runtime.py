@@ -765,6 +765,37 @@ class BrowserTests(unittest.TestCase):
                 self.assertIsNone(page.evaluate('compositionRuntime.error'))
                 self.assertEqual(page.locator('#runtime-note').count(),0)
 
+    def test_set_orientation_pins_the_authored_layout_without_touching_clocks(self):
+        page=self.open_preview(3);state=c.load_state(ROOT/'state-3.json')
+        page.evaluate('compositionRuntime.start()')
+        before=self.settled_snapshot(page,12,'orientation-auto')
+        self.assertEqual((before['orientation'],before['orientationOverride']),('portrait',None))
+        def cells(orientation):
+            stage=page.evaluate('(() => { const r = stage.getBoundingClientRect(); return [r.width, r.height]; })()')
+            return [[float(Fraction(v))*stage[i%2] for i,v in enumerate(cell['rect'])]
+                    for cell in state['layouts'][orientation]['cells']]
+        for value,expected in (('landscape','landscape'),('portrait','portrait'),(None,'portrait')):
+            page.evaluate('value => compositionRuntime.setOrientation(value)',value)
+            page.wait_for_timeout(350)
+            after=self.snap(page,f'orientation-{value}')
+            # The 390x844 stage is portrait-shaped; only the hook can choose landscape.
+            self.assertEqual((after['orientation'],after['orientationOverride']),(expected,value))
+            boxes=[[loop['rect'][key] for key in ('x','y','width','height')] for loop in after['loops']]
+            for box,cell in zip(boxes,cells(expected)):
+                for actual,wanted in zip(box,cell):self.assertAlmostEqual(actual,wanted,delta=1.5)
+            self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every((n,i) => n.media === initialMedia[i] && n.box === initialBoxes[i])'))
+            for old,new in zip(before['loops'],after['loops']):
+                self.assertGreater(new['callbacks'],old['callbacks'])
+                self.assertFalse(new['paused'])
+            self.check_model(after,state)
+            before=after
+        events=page.evaluate('compositionRuntime.events')
+        self.assertEqual([e['orientation'] for e in events if e['type']=='orientation-override'],['landscape','portrait',None])
+        self.assertFalse([e for e in events if e['type'] in ('seek-command','source','loadstart') and e['frame']>12])
+        error=page.evaluate("() => { try { compositionRuntime.setOrientation('square'); } catch (e) { return String(e); } }")
+        self.assertEqual(error,'Error: Orientation must be "portrait", "landscape" or null')
+        self.assertIsNone(page.evaluate('compositionRuntime.orientationOverride'))
+
     def test_seven_loop_videos_are_labelled_by_position(self):
         page=self.open_preview(7)
         self.assertEqual(page.locator('#stage video').evaluate_all('nodes => nodes.map(n => n.getAttribute("aria-label"))'),
