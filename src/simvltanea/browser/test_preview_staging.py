@@ -361,6 +361,7 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
         self.assertNotRegex(text, WINDOWS_DRIVE)
         self.assertIn('<html lang="en">', text)
         self.assertIn(f'<title>{runtime.PREVIEW_TITLE}</title>', text)
+        self.assertIn(f'<main id="stage" aria-label="{runtime.PREVIEW_TITLE}"></main>', text)
         self.assertIn('#stage:focus-visible{', text)
         self.assertIn('<p id="runtime-status" role="status" aria-live="polite">', text)
 

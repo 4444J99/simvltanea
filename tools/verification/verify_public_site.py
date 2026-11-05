@@ -39,9 +39,13 @@ FORBIDDEN_TEXT = (
 # and Windows drive paths. A POSIX root only counts where an absolute path can
 # begin (not inside a URL path or after "../"), so "https://host/home/" and
 # "../var/site" remain public. A drive letter must follow a delimiter, so
-# "https://" and minified "{a:/re/}" are not drive paths.
+# "https://" and minified "{a:/re/}" are not drive paths. Known, accepted false
+# positives: a root-relative link such as "/home/" or "/tmp/notes.html" is
+# flagged although it is not a build path. Such links are rare in what this
+# verifier scans and flagging them is the conservative choice, so they are not
+# special-cased.
 PRIVATE_PATH_PATTERNS = (
-    re.compile(r"(?<![A-Za-z0-9._~%+-])/(?:Volumes|private|home|var|tmp)/"),
+    re.compile(r"(?<![A-Za-z0-9._~%+-])/(?:Volumes|volumes|private|home|var|tmp|opt|root|mnt|srv|__w)/"),
     re.compile(r"(?:^|(?<=[\s\"'`(=<>\[|;]))[A-Za-z]:[\\/]"),
     re.compile(r"file:///[A-Za-z]:"),
 )

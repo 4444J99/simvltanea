@@ -68,7 +68,7 @@ box-shadow:inset 0 0 0 3px #fff,inset 0 0 0 5px #000}
 font:13px/1.4 system-ui,sans-serif;color:#fff;background:#000b;pointer-events:none}
 #runtime-note{position:fixed;top:8px;left:8px;z-index:100;margin:0;padding:4px 8px;
 font:12px/1.4 system-ui,sans-serif;color:#ccc;background:#000b;pointer-events:none}
-</style><main id="stage" aria-label="Composition runtime proof"></main>
+</style><main id="stage" aria-label="''' + PREVIEW_TITLE + '''"></main>
 <p id="runtime-status" role="status" aria-live="polite">Loading verified composition…</p>
 <script src="runtime.js" defer></script>
 '''

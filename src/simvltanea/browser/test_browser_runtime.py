@@ -840,6 +840,123 @@ class BrowserTests(unittest.TestCase):
         page.keyboard.press('Space')
         page.wait_for_function("stage.dataset.status === 'playing'")
 
+    def watch_space(self,page):
+        page.evaluate("""() => { window.spaceSeen=[];
+            window.addEventListener('keydown', e => { if (e.code === 'Space') spaceSeen.push([e.defaultPrevented, e.repeat]); }); }""")
+
+    def test_held_space_toggles_once_but_still_blocks_page_scroll(self):
+        page=self.open_preview(3);self.watch_space(page)
+        page.keyboard.down('Space')
+        page.wait_for_function("stage.dataset.status === 'playing'")
+        for _ in range(3):   # auto-repeat of the held key
+            page.keyboard.down('Space');page.wait_for_timeout(60)
+        page.wait_for_timeout(200)
+        self.assertEqual(page.evaluate('[stage.dataset.status, compositionRuntime.running]'),['playing',True])
+        self.assertEqual(page.evaluate('spaceSeen'),[[True,False]]+[[True,True]]*3)
+        page.keyboard.up('Space')
+        page.keyboard.press('Space')
+        page.wait_for_function("stage.dataset.status === 'paused'")
+        # Holding the key after the composition finished restarts once and keeps playing.
+        before=self.finish(page)
+        page.keyboard.down('Space')
+        page.wait_for_function("compositionRuntime.running && stage.dataset.status === 'playing'",timeout=5000)
+        for _ in range(3):
+            page.keyboard.down('Space');page.wait_for_timeout(60)
+        page.wait_for_timeout(300)
+        self.assertEqual(page.evaluate('[stage.dataset.status, compositionRuntime.running]'),['playing',True])
+        tail=[event['type'] for event in page.evaluate('compositionRuntime.events')[before:]]
+        self.assertEqual(tail.count('restart'),1);self.assertNotIn('paused',tail)
+        page.keyboard.up('Space')
+
+    def test_space_with_modifier_or_during_composition_is_left_to_the_browser(self):
+        page=self.open_preview(3);self.watch_space(page)
+        for state in ('ready','playing'):
+            if state=='playing':
+                page.evaluate('compositionRuntime.start()')
+                page.wait_for_function("stage.dataset.status === 'playing'")
+            for chord in ('Control+Space','Alt+Space','Meta+Space','Shift+Space'):
+                with self.subTest(state=state,chord=chord):
+                    page.evaluate('spaceSeen.length=0')
+                    page.keyboard.press(chord)
+                    page.wait_for_timeout(120)
+                    self.assertEqual(page.evaluate('[stage.dataset.status, compositionRuntime.running, spaceSeen]'),
+                                     [state,state=='playing',[[False,False]]])
+            with self.subTest(state=state,chord='composition'):
+                composed=page.evaluate("""() => { const e=new KeyboardEvent('keydown',
+                    {code:'Space',key:' ',isComposing:true,bubbles:true,cancelable:true});
+                    return [document.body.dispatchEvent(e), e.defaultPrevented]; }""")
+                page.wait_for_timeout(120)
+                self.assertEqual(composed,[True,False])
+                self.assertEqual(page.evaluate('[stage.dataset.status, compositionRuntime.running]'),[state,state=='playing'])
+        # A plain Space is still the toggle.
+        page.keyboard.press('Space')
+        page.wait_for_function("stage.dataset.status === 'paused'")
+
+    def finish_during_transition(self,page):
+        """Finish playback while a real media transition (a span boundary) is still busy."""
+        page.evaluate("""async () => {
+            const r=compositionRuntime, n=[...r.nodes.values()][0], play=n.media.play.bind(n.media);
+            window.slowNode=n;
+            // Delay the real activation at the last span boundary beyond the end of the composition.
+            n.media.play=async () => { if (n.busy) await new Promise(resolve=>setTimeout(resolve,1800)); return play(); };
+            await r.seek(r.plan.tracks[0].spans.at(-1).frame/r.plan.fps - 1/r.plan.fps); await r.start();
+        }""")
+        page.wait_for_function('compositionRuntime.finished',timeout=5000)
+        self.assertTrue(page.evaluate('slowNode.busy'))
+        self.assertEqual(page.evaluate('stage.dataset.status'),'finished')
+        return page.evaluate('compositionRuntime.events.length')
+
+    def test_restart_requested_during_busy_transition_runs_when_it_settles(self):
+        for gesture in ('click','space'):
+            with self.subTest(gesture=gesture):
+                page=self.open_preview('trim');state=c.load_state(ROOT/'state-trim.json')
+                before=self.finish_during_transition(page)
+                if gesture=='click':page.click('#stage')
+                else:
+                    page.evaluate('document.activeElement.blur()');page.keyboard.press('Space')
+                queued=page.evaluate("""() => ({status:stage.dataset.status, text:document.querySelector('#runtime-status').textContent,
+                    running:compositionRuntime.running, intent:compositionRuntime.restartIntent})""")
+                self.assertEqual(queued,dict(status='finished',running=False,intent=True,
+                                             text='Composition finished. Restarting as soon as media is ready…'))
+                page.click('#stage');page.keyboard.press('Space')   # no double start while waiting
+                page.wait_for_function("compositionRuntime.running && stage.dataset.status === 'playing'",timeout=8000)
+                self.assertFalse(page.evaluate('compositionRuntime.restartIntent'))
+                self.assertFalse(page.evaluate('slowNode.busy'))
+                page.wait_for_timeout(300)
+                self.assertEqual(page.evaluate('[stage.dataset.status, compositionRuntime.running]'),['playing',True])
+                events=page.evaluate('compositionRuntime.events')[before:]
+                tail=[event['type'] for event in events]
+                self.assertEqual(tail.count('restart-intent'),1);self.assertEqual(tail.count('restart'),1)
+                self.assertLess(tail.index('restart-intent'),tail.index('restart'))
+                self.assertEqual([event['time'] for event in events if event['type']=='transport-seek'],[0])
+                self.assertNotIn('error',tail)
+
+    def test_queued_restart_is_cleared_by_pause_and_by_dispose(self):
+        page=self.open_preview('trim')
+        before=self.finish_during_transition(page)
+        page.click('#stage')
+        self.assertTrue(page.evaluate('compositionRuntime.restartIntent'))
+        page.evaluate('compositionRuntime.pause()')
+        self.assertEqual(page.evaluate("""() => [compositionRuntime.restartIntent, stage.dataset.status,
+            document.querySelector('#runtime-status').textContent]"""),
+            [False,'finished','Composition finished. Click or press Space to play again.'])
+        page.wait_for_function('!slowNode.busy',timeout=5000);page.wait_for_timeout(300)
+        self.assertEqual(page.evaluate('[compositionRuntime.running, compositionRuntime.finished]'),[False,True])
+        self.assertNotIn('restart',[event['type'] for event in page.evaluate('compositionRuntime.events')[before:]])
+        # The page can still be restarted by a fresh gesture.
+        page.click('#stage')
+        page.wait_for_function("compositionRuntime.running && stage.dataset.status === 'playing'",timeout=5000)
+        # Dispose while a restart is queued: nothing restarts afterwards.
+        page=self.open_preview('trim')
+        self.finish_during_transition(page)
+        page.click('#stage')
+        self.assertTrue(page.evaluate('compositionRuntime.restartIntent'))
+        page.evaluate('compositionRuntime.dispose()')
+        self.assertFalse(page.evaluate('compositionRuntime.restartIntent'))
+        page.wait_for_timeout(2200)
+        self.assertEqual(page.evaluate('[compositionRuntime.running, compositionRuntime.disposed]'),[False,True])
+        self.assertNotIn('restart',[event['type'] for event in page.evaluate('compositionRuntime.events')])
+
 
 class SnapshotPagingAndViewportTests(unittest.TestCase):
     def test_page_snapshot_pure_helper_and_decoder_bounds(self):

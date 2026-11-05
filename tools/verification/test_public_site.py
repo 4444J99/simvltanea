@@ -27,6 +27,12 @@ class PrivatePathScanTests(unittest.TestCase):
             "C:\\": '{"root": "C:\\\\Users\\\\alice\\\\site"}',
             "C:/": "<a href='C:/Users/alice/site/index.html'>local</a>",
             "d:\\": "Looked at d:\\builds\\site\n",
+            "/volumes/": '<p>"/volumes/archive/proofs"</p>',
+            "/opt/": 'cache = "/opt/build/site";',
+            "/root/": "Looked at /root/work/site\n",
+            "/mnt/": '{"root": "/mnt/disk/site"}',
+            "/srv/": "<p>/srv/www/site</p>",
+            "/__w/": 'path = "/__w/repo/repo/site";',
         }
         for fragment, text in cases.items():
             for suffix in (".html", ".txt", ".json", ".js"):
@@ -57,6 +63,8 @@ class PrivatePathScanTests(unittest.TestCase):
             "See var/site/index.html and simvltanea/tmp/notes.",
             "const pick = ready?a:/x/.test(s); const re = {a:/re/};",
             "https://example.org:8080/private/page",
+            '<a href="https://example.org/opt/root/mnt/srv/__w/volumes/">dirs</a>',
+            "See ../opt/site, ./root/notes and mnt/srv/index.html.",
             "Time 12:30/14:00 and ratio 1:/2.",
             "Shared engine not included in this build (not found at build time); "
             "loops play with their authored framing.",

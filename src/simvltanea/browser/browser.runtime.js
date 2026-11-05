@@ -18,7 +18,7 @@ const runtime = window.compositionRuntime = {
   events: [], maxEvents: 256, nodes: new Map(), sources: new Map(), plan: null, origin: 0,
   orientation: null, layoutIndex: 0, position: 0, generation: 0, starting: false,
   initEpoch: 0, initController: null, transitions: new Set(), pauseIntent: false, initializing: false, retryable: false, assetError: null, disposed: false,
-  restarting: null,
+  restarting: null, restartIntent: false,
   audio: {mode:'none', context:null, enabled:false, buffer:null, source:null, gain:null, interrupted:false},
 };
 function record(type, id, details = {}) {
@@ -33,9 +33,20 @@ function setStatus(status,message) {
   const label=document.querySelector('#runtime-status');
   if(label) label.textContent=message;
 }
+const FINISHED_TEXT = 'Composition finished. Click or press Space to play again.';
+const RESTART_QUEUED_TEXT = 'Composition finished. Restarting as soon as media is ready…';
+/* A queued restart (see restartFinished) ends when it is performed or when the
+ * user starts, pauses or disposes the page another way. If it never ran, the
+ * status goes back to the truthful finished text. */
+function cancelRestartIntent() {
+  if (!runtime.restartIntent) return;
+  runtime.restartIntent = false;
+  if (runtime.finished && !runtime.error && !runtime.disposed) setStatus('finished', FINISHED_TEXT);
+}
 function fail(error, isAsset = false) {
   if (runtime.disposed) return;
   runtime.error = String(error); runtime.running = false; runtime.ready = false;
+  runtime.restartIntent = false;
   if (isAsset || /Media (?:failure|timeout|decode|integrity)|Missing media|Cannot load compiled plan/.test(String(error))) {
     runtime.retryable = true;
     runtime.assetError = {message: String(error), retryable: true};
@@ -520,7 +531,7 @@ function tick(generation) {
     for (const node of runtime.nodes.values()) node.media?.pause?.();
     stopSoundtrack();
     record('finished', null);
-    setStatus('finished','Composition finished. Click or press Space to play again.'); return;
+    setStatus('finished', FINISHED_TEXT); return;
   }
   try {
     const layouts = runtime.plan.layout_keyframes;
@@ -540,7 +551,12 @@ function tick(generation) {
           runtime.transitions.delete(transition);
           if (epoch !== runtime.initEpoch || runtime.disposed) return;
           node.busy = false;
-          if (runtime.pauseIntent && ![...runtime.nodes.values()].some(n => n.busy)) runtime.pause();
+          if ([...runtime.nodes.values()].some(n => n.busy)) return;
+          if (runtime.pauseIntent) runtime.pause();
+          if (runtime.restartIntent) {
+            if (runtime.finished && !runtime.error) { runtime.restartIntent = false; restartFinished(); }
+            else cancelRestartIntent();
+          }
         });
         runtime.transitions.add(transition);
       }
@@ -557,6 +573,7 @@ runtime.start = async () => {
   const epoch = runtime.initEpoch;
   runtime.starting=true;
   runtime.pauseIntent=false;
+  runtime.restartIntent=false;
   try {
     if (runtime.audio.context) {
       const context=runtime.audio.context;
@@ -611,12 +628,14 @@ runtime.start = async () => {
 };
 runtime.play = async () => {
   if (runtime.running) return;
+  cancelRestartIntent();
   if (runtime.finished) {
     await runtime.seek(0);
   }
   return runtime.start();
 };
 runtime.pause = () => {
+  cancelRestartIntent();
   if (runtime.audio.resumeRequested) {
     runtime.audio.resumeRequested = false;
     runtime.pauseIntent = false;
@@ -731,6 +750,7 @@ function releaseResources() {
   runtime.initController = null;
   runtime.initializing = false;
   runtime.pauseIntent = false;
+  runtime.restartIntent = false;
   runtime.audio.resumeRequested = false;
   audioRecovery = null;
   runtime.running = false;
@@ -801,6 +821,7 @@ runtime.snapshot = () => {
     retryable: !!runtime.retryable,
     assetError: runtime.assetError ?? null,
     pauseIntent: runtime.pauseIntent,
+    restartIntent: runtime.restartIntent,
     disposed: !!runtime.disposed,
     compositionTime:sampledTime,
     /* The shared engine's contribution, reported so a test can assert the module
@@ -1092,7 +1113,10 @@ stage.tabIndex = 0;
  * shared clock restarts, so the loops restart together on their authored clocks. */
 function restartFinished() {
   if ([...runtime.nodes.values()].some(node => node.busy)) {
-    record('transport-busy', null, {message: 'Restart waits for media transitions to settle'});
+    // Remember the gesture; the settling transition performs the restart.
+    runtime.restartIntent = true;
+    record('restart-intent', null);
+    setStatus('finished', RESTART_QUEUED_TEXT);
     return;
   }
   const token = {}, epoch = runtime.initEpoch;
@@ -1108,7 +1132,7 @@ stage.addEventListener('click', () => {
     runtime.recoverAudio().catch(() => {});
     return;
   }
-  if (!runtime.ready || runtime.starting || runtime.restarting || runtime.error) return;
+  if (!runtime.ready || runtime.starting || runtime.restarting || runtime.restartIntent || runtime.error) return;
   if (runtime.finished) { restartFinished(); return; }
   if (runtime.running) { try { runtime.pause(); } catch (error) { record('transport-busy',null,{message:String(error)}); } }
   else runtime.start().catch(error=>{if(!runtime.audio.blocked)fail(error);});
@@ -1122,12 +1146,16 @@ const INTERACTIVE_FOCUS = 'a[href],area[href],button,input,select,textarea,summa
   '[role="menuitem"],[role="option"],[role="slider"],[role="spinbutton"],[role="textbox"],[role="combobox"]';
 function spaceTogglesPlayback(event) {
   if (event.code !== 'Space' || event.defaultPrevented) return false;
+  // Space with a modifier, or while composing text, belongs to the browser or the IME.
+  if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.isComposing) return false;
   const target = event.target;
   return !(target && typeof target.closest === 'function' && target.closest(INTERACTIVE_FOCUS));
 }
 (typeof document.addEventListener === 'function' ? document : stage).addEventListener('keydown', event => {
   if (!spaceTogglesPlayback(event)) return;
   event.preventDefault();
+  // A held key repeats keydown: it must neither scroll the page nor toggle again.
+  if (event.repeat) return;
   stage.click();
 });
 
