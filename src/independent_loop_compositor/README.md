@@ -13,6 +13,7 @@ from independent_loop_compositor.browser import build_preview
 python -m independent_loop_compositor preview --help
 python -m independent_loop_compositor render --help
 python -m independent_loop_compositor doctor
+python -m independent_loop_compositor proxy --help
 python -m independent_loop_compositor --version
 ```
 
@@ -21,6 +22,10 @@ python -m independent_loop_compositor --version
 reports whether the optional shared engine is available, without failing on it.
 Use `doctor --json` for machine-readable output; the exit code is 1 when a
 required check fails.
+
+`proxy` turns a folder of phone clips into small H.264 proxies with rotation baked
+in, constant frame rate, no audio and limited-range BT.709; see
+[proxy clips](../../docs/authoring/PROXY_CLIPS.md).
 
 Expected failures print one line, `independent-loop-compositor: error: <message>`,
 and exit 1. Set `SIMVLTANEA_DEBUG=1` to get the full traceback instead.

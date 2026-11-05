@@ -21,6 +21,7 @@ COMMANDS = {
     "preview": "compile a composition state into a local browser preview",
     "render": "render a composition state (or exported clips) to MP4 with FFmpeg",
     "doctor": "check Python, FFmpeg, encoders and the workspace",
+    "proxy": "make small, browser-playable H.264 proxies of phone clips",
 }
 EPILOG = (
     "commands:\n"
@@ -81,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "preview":
         from simvltanea.browser import browser_runtime
         run = browser_runtime.main
+    elif args.command == "proxy":
+        from .proxy import main as run
     else:
         from simvltanea.rendering import render_triptych
         run = render_triptych.main
