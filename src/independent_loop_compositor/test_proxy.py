@@ -338,9 +338,14 @@ class ProxyCommandTests(unittest.TestCase):
         source = self.phone / "landscape-h264.mov"
         tags = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709"
         naive = {
-            # Full-range samples declared limited: shadows crushed, highlights clipped.
-            "crushed": f"format=yuv420p,scale=w=320:h=240:in_range=tv:out_range=tv:in_color_matrix=bt601"
-                       f":out_color_matrix=bt709,{tags}:range=tv",
+            # Full-range samples declared limited: shadows crushed, highlights clipped, chroma exaggerated.
+            # The correct conversion runs first and a lookup table then stretches the stored samples to
+            # the full 0..255 extent, so the result does not depend on how an FFmpeg version treats the
+            # yuvj420p alias (6.1 converts range when a graph names yuv420p; 9 keeps the samples).
+            "crushed": f"scale=w=320:h=240:in_range=pc:out_range=tv:in_color_matrix=bt601"
+                       f":out_color_matrix=bt709,format=yuv420p,"
+                       f"lutyuv=y='clip((val-16)*255/219,0,255)':u='clip((val-128)*255/224+128,0,255)'"
+                       f":v='clip((val-128)*255/224+128,0,255)',{tags}:range=tv",
             # Converted to limited but tagged full: washed-out blacks and dull whites.
             "washed": f"scale=w=320:h=240:in_range=pc:out_range=tv:in_color_matrix=bt601"
                       f":out_color_matrix=bt709,format=yuv420p,{tags}:range=pc",
