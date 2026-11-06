@@ -927,6 +927,29 @@ class LayoutFileErrorParityTests(unittest.TestCase):
                 self.assertSameFailure(CORPUS / name, result, code)
         self.assertEqual(len(results), 39)
 
+    def test_pair_files_beyond_the_compiler_subset_are_refused_when_described(self):
+        # Python accepts pairs of up to 32 loops; the studio asks describeLayoutFile what a file offers, so a pair
+        # the compiler cannot play must be refused there, before anyone picks videos for it.
+        def pair_of(count):
+            cells = lambda: [{'loop': f'loop-{i + 1}', 'rect': ['0', f'{i}/{count}', '1', f'1/{count}'],
+                              'fit': 'cover', 'focal': ['1/2', '1/2']} for i in range(count)]
+            return {'format': 'simvltanea.layout-pair/1', 'count': count,
+                    'portrait': {'name': f'rows-{count}', 'cells': cells()},
+                    'landscape': {'name': f'rows-{count}', 'cells': cells()}}
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = {}
+            for count in (12, 13, 32):
+                paths[count] = Path(tmp) / f'rows-{count}.json'
+                paths[count].write_text(json.dumps(pair_of(count)))
+                self.assertTrue(python_layout_file(paths[count])['ok'], count)  # valid in Python at every count
+            results = node_layout_files((paths[count], str(paths[count])) for count in (12, 13, 32))
+        self.assertTrue(results[0]['ok'], results[0])
+        for count, result in zip((13, 32), results[1:]):
+            with self.subTest(count=count):
+                self.assertFalse(result['ok'], result)
+                self.assertEqual(result['name'], 'CompilerError')
+                self.assertIn(f'places {count} loops; the browser compiler covers N=1..12', result['message'])
+
     def test_mutated_files_fail_like_python(self):
         pair = json.loads((CORPUS / 'valid' / 'strips-3-pair.json').read_text())
         base = {'format': 'simvltanea.layout-preset/1', 'name': 'm', 'family': 'strips'}

@@ -682,6 +682,29 @@ class StudioBrowserTests(unittest.TestCase):
                     for box in turned['boxes']:
                         self.assertAlmostEqual(box[3], turned['stage'][1], delta=1)
 
+    def test_layout_pair_beyond_the_compiler_subset_is_refused_at_once(self):
+        # Python accepts pairs of up to 32 loops; the compiler plays 1..12. Offering a 13-panel file would let the
+        # visitor choose and hash 13 videos before Play failed, so it is refused immediately and nothing changes.
+        count = 13
+        cells = lambda: [{'loop': f'loop-{i + 1}', 'rect': ['0', f'{i}/{count}', '1', f'1/{count}'],
+                          'fit': 'cover', 'focal': ['1/2', '1/2']} for i in range(count)]
+        pair = {'format': 'simvltanea.layout-pair/1', 'count': count,
+                'portrait': {'name': 'rows-13', 'cells': cells()}, 'landscape': {'name': 'rows-13', 'cells': cells()}}
+        path = ROOT / 'rows-13-pair.json'
+        ROOT.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(pair))
+        self.addCleanup(path.unlink)
+        page = self.open('?seconds=30', width=390, height=844)
+        before = page.evaluate('SimvltaneaStudio.snapshot()')
+        page.set_input_files('#layout-file', str(path))
+        page.wait_for_function("() => SimvltaneaStudio.snapshot().layoutError !== ''")
+        after = page.evaluate('SimvltaneaStudio.snapshot()')
+        self.assertIn('places 13 loops; the browser compiler covers N=1..12', after['layoutError'])
+        self.assertIn(path.name, after['layoutError'])
+        self.assertEqual((after['family'], after['panels'], after['counts']),
+                         (before['family'], before['panels'], before['counts']))
+        self.assertNotIn('file', [item['name'] for item in after['families']])
+
     def test_own_layout_file_preset_pair_and_one_line_errors(self):
         page = self.open('?seconds=30', width=390, height=844)
         preset = CORPUS / 'valid' / 'strips-custom-preset.json'

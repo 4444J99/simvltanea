@@ -1170,7 +1170,11 @@
   // What a loaded layout file offers: its kind, name and loop counts.
   function describeLayoutFile(data, name = null) {
     if (isObject(data) && data.format === PAIR_FORMAT) {
-      return {kind: 'pair', name: data.portrait.name, counts: [Number(data.count)]};
+      // A pair file may declare up to 32 loops; the studio must not offer one the compiler cannot play.
+      const count = Number(data.count);
+      refuse(count < MIN_LOOPS || count > MAX_LOOPS,
+        `${name ?? 'layout file'}: this layout pair places ${count} loops; the browser compiler covers N=${MIN_LOOPS}..${MAX_LOOPS}`);
+      return {kind: 'pair', name: data.portrait.name, counts: [count]};
     }
     const preset = presetOf(data, name);
     return {kind: 'preset', name: preset.name,
