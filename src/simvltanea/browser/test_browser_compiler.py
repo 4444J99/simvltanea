@@ -787,6 +787,46 @@ class StripsExpansionParityTests(unittest.TestCase):
                                    check=True, timeout=60)
         self.assertEqual(completed.stdout, c.canonical_json(DEFAULT_STRIPS_PRESET))
 
+    def test_preset_objects_are_checked_at_every_advertised_count(self):
+        """A preset object is refused when any count it advertises fails, not only the requested one."""
+        # N=2 alone is fine (s = 1/2); N=1 rounds 1/5 to an empty slice at quantum 1/2.
+        preset = {'format': 'simvltanea.layout-preset/1', 'name': 'zoomy', 'family': 'strips',
+                  'counts': {'min': 1, 'max': 2}, 'zoom': {'z1': '5', 'gamma': '1', 'quantum': 2}}
+        results = node(['stripsLayouts', 2, preset], ['stripsSlice', 2, preset])
+        for result, function in zip(results, (strips_layouts, strips_slice)):
+            with self.subTest(function=function.__name__):
+                with self.assertRaises(LayoutError) as caught:
+                    function(2, preset)
+                self.assertEqual(caught.exception.code, 'zoom')
+                self.assertFalse(result['ok'], result)
+                self.assertEqual((result['code'], result['message']), (caught.exception.code, str(caught.exception)))
+
+    def test_oversized_count_keys_are_refused_with_the_call_site_code(self):
+        """A 5000-digit count key is refused before conversion, with a bounded key excerpt.
+
+        The message is the one layout_presets._count_key gives since it checks the length before int()
+        (origin/main 404a71c). An older _count_key raises ValueError past 4300 digits, so the codes are
+        compared with Python under an unlimited int() digit limit.
+        """
+        key = '9' * 5000
+        base = {'format': 'simvltanea.layout-preset/1', 'name': 'huge', 'family': 'strips'}
+        cases = [('weights', {'weights': {'default': 'equal', 'by_count': {key: ['1']}}}, 'weights.by_count', 1, 12),
+                 ('focal', {'focal': {'default': ['1/2', '1/2'], 'by_index': {key: ['0', '0']}}}, 'focal.by_index',
+                  0, 11),
+                 ('zoom', {'zoom': {'table': {key: '1/2'}}}, 'zoom.table', 1, 12)]
+        results = node(*(['stripsLayouts', 1, {**base, **change}] for _, change, _, _, _ in cases))
+        limit = sys.get_int_max_str_digits()
+        sys.set_int_max_str_digits(0)
+        self.addCleanup(sys.set_int_max_str_digits, limit)
+        for (code, change, label, low, high), result in zip(cases, results):
+            with self.subTest(code=code):
+                with self.assertRaises(LayoutError) as caught:
+                    strips_layouts(1, {**base, **change})
+                self.assertEqual(caught.exception.code, code)
+                self.assertFalse(result['ok'], result)
+                self.assertEqual(result['code'], code)
+                self.assertEqual(result['message'], f'{label} key {key[:40]!r} must be an integer string in {low}..{high}')
+
     def generated_presets(self, root: Path) -> list[Path]:
         def preset(name, **changes):
             data = {'format': 'simvltanea.layout-preset/1', 'name': name, 'family': 'strips', **changes}
@@ -801,6 +841,8 @@ class StripsExpansionParityTests(unittest.TestCase):
             preset('jitter-below-step', style={'corner_radius': '0', 'lateral_jitter': '1/1999'}),
             preset('unequal', weights={'default': 'equal', 'by_count': {
                 str(n): primes[:n][::-1] if n % 2 else [f'{k + 1}/{n}' for k in range(n)] for n in range(1, 13)}}),
+            # Edges and sizes at denominator exactly 10**9: the largest the weights bound accepts.
+            preset('weights-bound', weights={'default': 'equal', 'by_count': {'2': ['999999999', '1']}}),
             preset('spelled', weights={'default': 'equal', 'by_count': {
                 '4': ['0.5', ' 1/3 ', '1_0', '1 / 3'], '3': ['1e1', '+2', '25E-1']}}),
             preset('turned', orientations={'portrait': {'direction': 'columns', 'order': 'reverse'},
@@ -922,6 +964,10 @@ class LayoutFileErrorParityTests(unittest.TestCase):
             'weights-bool': json.dumps({**base, 'weights': {'default': 'equal', 'by_count': {'2': [True, '1']}}}),
             'weights-huge-integer': json.dumps({**base, 'weights': {'default': 'equal',
                                                                     'by_count': {'2': [10**30, 1]}}}),
+            'weights-size-denominator': json.dumps({**base, 'weights': {'default': 'equal',
+                                                                        'by_count': {'2': ['1', '1000000000']}}}),
+            'weights-edge-denominator': json.dumps({**base, 'weights': {'default': 'equal',
+                                                                        'by_count': {'2': ['2', '999999999']}}}),
             'focal-index-range': json.dumps({**base, 'counts': {'min': 1, 'max': 3},
                                              'focal': {'default': ['1/2', '1/2'], 'by_index': {'3': ['0', '0']}}}),
             'min-zoom-empty-slice': json.dumps({**base, 'zoom': {'min_zoom': '1000', 'quantum': 2}}),
@@ -936,6 +982,9 @@ class LayoutFileErrorParityTests(unittest.TestCase):
                                                  'orientations': {'portrait': {'order': 'reverse'}}}),
             'pair-count-float': mutate_pair(lambda d: d.__setitem__('count', 3)).replace('"count": 3', '"count": 3.0'),
             'pair-count-33': mutate_pair(lambda d: d.__setitem__('count', 33)),
+            # The cell count is checked before any per-cell geometry, so the bad fit on cell 0 is never reached.
+            'pair-count-before-geometry': mutate_pair(lambda d: (
+                d.__setitem__('count', 2), d['portrait']['cells'][0].__setitem__('fit', 'stretch'))),
             'pair-portrait-string': mutate_pair(lambda d: d.__setitem__('portrait', 'rows')),
             'pair-landscape-first': json.dumps({'format': pair['format'], 'count': 3,
                                                 'landscape': {**pair['landscape'], 'name': ''},
@@ -966,13 +1015,15 @@ class LayoutFileErrorParityTests(unittest.TestCase):
             results = node_layout_files((path, str(path)) for path in paths.values())
             # An escaped NUL is a legal JSON string and layout name; a reversed pair rounds only shared corners.
             valid = {'pair-control-character', 'radius-reverse-single'}
+            codes = {'weights-size-denominator': 'weights', 'weights-edge-denominator': 'weights',
+                     'pair-count-before-geometry': 'cell-count'}
             for (name, path), result in zip(paths.items(), results):
                 with self.subTest(case=name):
                     if name in valid:
                         self.assertTrue(python_layout_file(path)['ok'])
                         self.assertTrue(result['ok'], result)
                     else:
-                        self.assertSameFailure(path, result)
+                        self.assertSameFailure(path, result, codes.get(name))
 
     def test_valid_spellings_and_the_non_ascii_digit_deviation(self):
         """Python's Fraction() spellings load; non-ASCII digits are the one documented refusal."""

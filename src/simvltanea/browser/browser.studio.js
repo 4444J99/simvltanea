@@ -363,8 +363,10 @@
 
   function renderLayout() {
     const names = layout.order.concat(layout.own ? [OWN_FAMILY] : []);
-    const current = Array.from(ui.families.querySelectorAll('input'), input => input.value).join(' ');
-    if (current !== names.join(' ')) {
+    // Values and labels both: a second own file keeps the value 'file' but changes its label.
+    const current = Array.from(ui.families.querySelectorAll('label'),
+      label => `${label.querySelector('input').value}\n${label.textContent}`).join('\n\n');
+    if (current !== names.map(name => `${name}\n${layout.families[name].label}`).join('\n\n')) {
       ui.families.replaceChildren(...names.map(name => {
         const label = document.createElement('label'), input = document.createElement('input');
         input.type = 'radio'; input.name = 'family'; input.value = name;

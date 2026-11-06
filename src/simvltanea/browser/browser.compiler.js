@@ -394,6 +394,9 @@
     check(typeof layout.name === 'string' && layout.name !== '', where, 'wrong-type', 'layout name is required', true);
     check(Array.isArray(layout.cells), where, 'wrong-type', 'cells must be an array', true);
     const cells = layout.cells, seen = [], boxes = [];
+    // Count before geometry: the pairwise overlap loop is quadratic in cells.length.
+    check(loopIds || where.count == null || cells.length === where.count, where, 'cell-count',
+      `has ${cells.length} cells, expected ${where.count}`);
     cells.forEach((cell, index) => {
       const at = {...where, cell: index};
       keysOf(cell, CELL_FIELDS, CELL_REQUIRED, 'cell', at, true);
@@ -414,8 +417,6 @@
       check(seen.length === loopIds.size && new Set(seen).size === loopIds.size && seen.every(id => loopIds.has(id)),
         where, 'mapping', 'each orientation must map every loop exactly once', true);
     } else {
-      check(where.count == null || seen.length === where.count, where, 'cell-count',
-        `has ${seen.length} cells, expected ${where.count}`);
       check(new Set(seen).size === seen.length, where, 'mapping', 'each loop must appear in exactly one cell');
     }
     if (has(layout, 'full_bleed') || has(layout, 'presentation')) {
@@ -924,9 +925,11 @@
     keysOf(raw[key], allowed, [], key, where);
     return {...presetDefault(key), ...raw[key]};
   }
+  // The length check comes first, as in Python, and the key excerpt in the message is bounded.
   function countKey(key, low, high, label, where, code) {
-    check(/^(?:0|[1-9][0-9]*)$/.test(key) && Number(key) >= low && Number(key) <= high, where, code,
-      `${label} key ${pyRepr(key)} must be an integer string in ${low}..${high}`);
+    check(key.length <= String(high).length && /^(?:0|[1-9][0-9]*)$/.test(key) && Number(key) >= low &&
+      Number(key) <= high, where, code,
+      `${label} key ${pyRepr(Array.from(key).slice(0, 40).join(''))} must be an integer string in ${low}..${high}`);
     return Number(key);
   }
   function focalPair(value, label, where) {
@@ -971,6 +974,11 @@
       check(Array.isArray(value) && value.length === count, at, 'weights', `weights.by_count needs exactly ${count} weights`);
       const parsed = value.map(item => pyRead(item, 'weights.by_count', at, 'weights'));
       check(parsed.every(positive), at, 'weights', 'weights must be positive');
+      const total = parsed.reduce(add, ZERO), edges = [ZERO];
+      for (const weight of parsed) edges.push(add(edges[edges.length - 1], weight));
+      check(edges.map(edge => div(edge, total)).concat(parsed.map(weight => div(weight, total)))
+        .every(value => value[1] <= BOUND), at, 'weights',
+        'weights.by_count must give strip edges and sizes with denominators of at most 10**9');
       weights.set(count, parsed);
     }
 
@@ -1035,8 +1043,17 @@
       }
       return resolvePreset(DEFAULT_STRIPS_PRESET, null);
     }
-    if (isObject(preset)) return resolvePreset(preset, source ?? null);
+    if (isObject(preset)) return checkedPreset(preset, source ?? null);
     return fail({}, 'preset', 'preset must be a built-in name, a preset object or a file path');
+  }
+  // layout_presets._checked_preset: resolve, then expand every count the preset advertises.
+  function checkedPreset(raw, source) {
+    const preset = resolvePreset(raw, source);
+    for (let count = preset.low; count <= preset.high; count++) {
+      expandPreset(preset, count);
+      presetSlice(preset, count);
+    }
+    return preset;
   }
   function presetCount(preset, count) {
     const where = {source: preset.source};
@@ -1128,11 +1145,7 @@
     check(isObject(data), where, 'wrong-type', 'layout file must be a JSON object');
     const kind = has(data, 'format') ? data.format : null;
     if (kind === PRESET_FORMAT) {
-      const preset = resolvePreset(data, name);
-      for (let count = preset.low; count <= preset.high; count++) {
-        expandPreset(preset, count);
-        presetSlice(preset, count);
-      }
+      checkedPreset(data, name);
     } else if (kind === PAIR_FORMAT) {
       keysOf(data, PAIR_FIELDS, PAIR_FIELDS, 'pair', where);
       const count = integerIn(data.count, 1, PAIR_MAX_COUNT, 'count', where, 'count-range');

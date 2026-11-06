@@ -747,6 +747,20 @@ class StudioBrowserTests(unittest.TestCase):
                          ['strips', 5])
         self.assertEqual(page.inner_text('#count'), '5 loops chosen. Ready to play.')
 
+    def test_own_layout_file_radio_label_follows_the_latest_file(self):
+        """A second own file keeps the radio value 'file'; its visible label names the new file."""
+        page = self.open()
+        first, second = CORPUS / 'valid' / 'strips-custom-preset.json', CORPUS / 'valid' / 'strips-5-pair.json'
+        for path in (first, second):
+            page.set_input_files('#layout-file', str(path))
+            page.wait_for_function('name => (SimvltaneaStudio.snapshot().layoutFile || {}).name === name', arg=path.name)
+            self.assertEqual(page.get_by_role('radio', name=f'My file: {path.name}', exact=True).count(), 1)
+            self.assertEqual(page.locator('input[name="family"][value="file"]').count(), 1)
+            self.assertTrue(page.is_checked('input[name="family"][value="file"]'))
+        self.assertEqual(page.get_by_role('radio', name=f'My file: {first.name}', exact=True).count(), 0)
+        self.assertEqual(page.locator('#families label').all_inner_texts(),
+                         ['Authored', 'Strips', f'My file: {second.name}'])
+
     def test_default_piece_is_two_minutes_and_each_file_is_hashed_once(self):
         page = self.open()
         page.evaluate('''() => { window.digests = []; const digest = SubtleCrypto.prototype.digest;
