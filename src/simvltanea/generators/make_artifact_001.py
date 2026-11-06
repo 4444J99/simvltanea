@@ -18,6 +18,8 @@ from simvltanea.authoring import ENGINE_VERSION, RNG, SCHEMA_VERSION, save_state
 from simvltanea.paths import ARTIFACT_OUTPUT_DIR, REPO_ROOT
 
 HERE = Path(__file__).resolve().parent
+# Authored pairs stay N=2..7; strips fixtures cover these counts in both orientations.
+STRIPS_COUNTS = (1, 5, 8, 12)
 
 def write_json(path: Path, obj: object) -> None:
     path.write_text(json.dumps(obj, indent=2) + '\n', encoding='utf-8')
@@ -29,7 +31,7 @@ def prepare(root: Path) -> list[Path]:
         (root / child).mkdir(exist_ok=True)
     commands = []
     sources = []
-    for i in range(7):
+    for i in range(max(STRIPS_COUNTS)):  # loops 1..7 feed the authored pairs; 8..12 only strips
         file = root / 'media' / f'loop-{i+1}.mp4'
         command = ['ffmpeg','-hide_banner','-loglevel','error','-y','-filter_threads','1',
                    '-f','lavfi','-i','testsrc2=s=320x320:r=24:d=3',
@@ -52,7 +54,7 @@ def prepare(root: Path) -> list[Path]:
     still_src = dict(id='still',path='media/still.png',sha256=sha256_file(still),kind='still',duration='2')
     write_json(root/'evidence/source-commands.json',commands)
     write_json(root/'sources.json',dict(kind='synthetic-engineering-media',sources=sources+[still_src]))
-    from simvltanea.authoring import build_artifact001
+    from simvltanea.authoring import build_artifact001, build_strips
     paths = []
     for count in (2,3,4,5,6,7):
         authoring = build_artifact001(count)
@@ -62,6 +64,12 @@ def prepare(root: Path) -> list[Path]:
         path = root/f'state-{count}.json'
         save_state(state,path)
         paths.append(path)
+    # Full-bleed strips (engineering preset, not an artist-approved design), zoom tied to N.
+    strips = []
+    for count in STRIPS_COUNTS:
+        path = root/f'state-strips-{count}.json'
+        save_state(build_strips(count, sources=sources[:count]), path)
+        strips.append(path)
     # A separate compatibility/control proof: still duration and all four controls.
     # Use the 3-loop state for controls (requires loop-3 for swap)
     try:
@@ -80,7 +88,7 @@ def prepare(root: Path) -> list[Path]:
                        dict(op='move',frame=108,loop='loop-1',orientation='portrait',
                             rect=['1/10','3/100','4/5','21/50'])]
     save_state(state,root/'state-still-controls.json')
-    return paths+[root/'state-still-controls.json']
+    return paths+[root/'state-still-controls.json']+strips
 
 def probe(path: Path) -> dict:
     result=subprocess.run(['ffprobe','-v','error','-show_entries',

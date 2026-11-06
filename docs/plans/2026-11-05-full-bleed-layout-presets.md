@@ -725,3 +725,25 @@ Hotspots:
    later.
 3. **Is 12 the ceiling?** Recommended: yes, 1..12. 13+ is refused until it is measured on
    the phones the work targets, because decode drops already reach 9% at 12 on a desktop.
+
+## Amendments found in review and testing (2026-11-06)
+
+These refine "Overlap" and "Style parameters"; the decision table stands. Each was found by
+independent review of the browser and export lanes and is covered by a test that fails without it.
+
+- **The corner radius is reduced where the bleed cannot back it.** The bleed under a rounded
+  corner is capped at half of the thinnest later neighbour on that side, so the target
+  `overlap_px + ceil(radius)` can be out of reach on a thin strip. Each cell's effective radius
+  is limited so that `overlap_px` plus the radius fits under every earlier neighbour's granted
+  bleed; a cell with nothing to back its corners stays square. Without the limit, N=12 on a
+  360x360 canvas (30 px strips, configured radius 18 px) exposed the background in the export,
+  and 800x800 at 2x showed 44 background pixels in the browser.
+- **The bleed grows only where the later cells cover it.** A side grows only when the nominal
+  boxes of all later-drawn cells cover the whole bleed strip, and a grown corner square must be
+  covered too. This matters for non-strip layouts; strips are unaffected. Browser and export
+  apply the same rule.
+- **Jitter axis for cells that are not strips.** A cell spanning only the full width slides along
+  x, only the full height along y, and a cell spanning both follows the orientation (x in
+  portrait, y in landscape). Any other cell uses its longer side. Browser and export agree.
+- **Measurement.** The hairline matrix includes the near-square canvases 360x360, 744x768 and
+  800x800, where strips are thinnest relative to the radius.

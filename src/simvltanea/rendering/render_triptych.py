@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from typing import Any
 
 from simvltanea.paths import REPO_ROOT, RENDERS_DIR, SAMPLES_DIR, WORK_DIR
@@ -125,9 +126,34 @@ class Panel:
     source_audio_channels: int = 0
 
 
+CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
+
+
+@dataclass(frozen=True)
+class Raster:
+    """Device-pixel drawing of one cell of a layout that declares ``presentation``.
+
+    All values are even (H.264 4:2:0 chroma alignment). ``bleed`` (left, top, right,
+    bottom) extends the drawn box under neighbours drawn later, so the later overlay
+    hides it. ``overscan`` is the per-side lateral-jitter margin along x and y and
+    ``shift`` the picture's lateral offset (positive moves it right or down).
+    ``corners`` are rounded with ``radius`` device pixels by an alpha mask.
+    """
+
+    bleed: tuple[int, int, int, int] = (0, 0, 0, 0)
+    overscan: tuple[int, int] = (0, 0)
+    shift: tuple[int, int] = (0, 0)
+    radius: float = 0.0
+    corners: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class Placement:
-    """Resolved presentation geometry; never owns a source or a clock."""
+    """Resolved presentation geometry; never owns a source or a clock.
+
+    ``x, y, width, height`` are always the nominal cell. ``raster`` is ``None`` for
+    layouts without ``presentation``; those keep the historical filter graph byte for byte.
+    """
 
     name: str
     x: int
@@ -136,6 +162,14 @@ class Placement:
     height: int
     fit: str = "cover"
     focal: tuple[float, float] = (0.5, 0.5)
+    raster: Raster | None = None
+
+    def drawn_box(self) -> tuple[int, int, int, int]:
+        """The box actually composited: the nominal cell grown by its bleed."""
+        if self.raster is None:
+            return self.x, self.y, self.width, self.height
+        left, top, right, bottom = self.raster.bleed
+        return self.x - left, self.y - top, self.width + left + right, self.height + top + bottom
 
 
 @dataclass(frozen=True)
@@ -150,6 +184,146 @@ class Segment:
     @property
     def end(self) -> float:
         return self.start + self.duration
+
+
+_SIDE_CORNERS = {
+    "top": ("top-left", "top-right"),
+    "bottom": ("bottom-left", "bottom-right"),
+    "left": ("top-left", "bottom-left"),
+    "right": ("top-right", "bottom-right"),
+}
+_OPPOSITE_SIDE = {"top": "bottom", "bottom": "top", "left": "right", "right": "left"}
+
+
+def _even_ceil(value: Fraction | float) -> int:
+    return 2 * math.ceil(Fraction(value) / 2)
+
+
+def _bleed_region(cell: Placement, side: str, amount: int) -> tuple[int, int, int, int]:
+    if side == "bottom":
+        return cell.x, cell.y + cell.height, cell.width, amount
+    if side == "top":
+        return cell.x, cell.y - amount, cell.width, amount
+    if side == "right":
+        return cell.x + cell.width, cell.y, amount, cell.height
+    return cell.x - amount, cell.y, amount, cell.height
+
+
+def _covered(region: tuple[int, int, int, int], cells: tuple[Placement, ...]) -> bool:
+    """True when the nominal boxes of ``cells`` (pairwise disjoint) cover ``region``."""
+    x, y, w, h = region
+    area = 0
+    for cell in cells:
+        dx = min(x + w, cell.x + cell.width) - max(x, cell.x)
+        dy = min(y + h, cell.y + cell.height) - max(y, cell.y)
+        if dx > 0 and dy > 0:
+            area += dx * dy
+    return area == w * h
+
+
+def _jitter_axis(cell: Placement, width: int, height: int) -> str:
+    """The axis a cell's picture slides along: the strip's long axis.
+
+    A full-width row slides along x and a full-height column along y. A cell spanning
+    the whole canvas (one strip) follows the default strip direction of its orientation:
+    portrait rows (x), landscape columns (y). Any other cell uses its longer side.
+    """
+    full_width = cell.x == 0 and cell.width == width
+    full_height = cell.y == 0 and cell.height == height
+    if full_width and not full_height:
+        return "x"
+    if full_height and not full_width:
+        return "y"
+    if full_width and full_height:
+        return "x" if height > width else "y"
+    return "x" if cell.width >= cell.height else "y"
+
+
+def presentation_placements(
+    placements: tuple[Placement, ...],
+    presentation: dict[str, Any],
+    edges: list[dict[str, Any]],
+    lateral_offsets: list[Any],
+    width: int,
+    height: int,
+) -> tuple[Placement, ...]:
+    """Attach the device-pixel drawing of a layout's ``presentation`` to nominal placements.
+
+    ``placements`` are the even-snapped nominal cells in draw order, ``edges`` the exact
+    shared edges (``authoring.adjacency``: side ``edge`` of cell ``a`` touches the later
+    cell ``b``) and ``lateral_offsets`` the resolved per-cell ``lateral_offset`` (or
+    ``None``). The rules follow the full-bleed layout presets spec:
+
+    - Bleed: a side shared with later-drawn neighbours grows by ``2*ceil(k/2)`` px with
+      ``k = overlap_px`` (plus ``ceil(radius)`` when corners are rounded), clamped to half
+      of the thinnest such neighbour. A side grows only when the later cells cover the
+      whole bleed, so the bleed never changes a visible pixel.
+    - Corners: only the corners on a side shared with an earlier-drawn neighbour are
+      rounded, with ``corner_radius`` times the canvas minor dimension, reduced so that
+      ``overlap_px`` plus the radius fits inside every earlier neighbour's granted bleed.
+    - Lateral jitter: the picture is fitted to the cell overscanned by
+      ``2*ceil(J*L/2)`` px on both ends of the strip's long axis (``L`` is the canvas
+      extent along it) and slid by ``lateral_offset*L`` px, rounded to even.
+    """
+    count = len(placements)
+    overlap = int(presentation["overlap_px"])
+    radius = float(Fraction(presentation["corner_radius"])) * min(width, height)
+    jitter = Fraction(presentation["lateral_jitter"])
+    rounded: dict[int, set[str]] = {index: set() for index in range(count)}
+    later: dict[tuple[int, str], list[int]] = {}
+    shared: dict[int, list[tuple[int, str]]] = {index: [] for index in range(count)}
+    for edge in edges:
+        a, b, side = int(edge["a"]), int(edge["b"]), str(edge["edge"])
+        if not 0 <= a < b < count or side not in _OPPOSITE_SIDE:
+            raise ValueError(f"invalid adjacency entry {edge!r} for {count} cells")
+        later.setdefault((a, side), []).append(b)
+        shared[b].append((a, side))
+    # The backing under a rounded corner is the earlier cell's bleed, capped at half of the thinnest
+    # later neighbour (an even number of px). A thin cell therefore gets the radius that backing can
+    # cover: overlap + radius must fit under the cap, otherwise the cutout would show the background.
+    caps = {key: (min(placements[b].height if key[1] in ("top", "bottom") else placements[b].width
+                      for b in neighbours) // 2) // 2 * 2 for key, neighbours in later.items()}
+    radii = {index: min([radius] + [max(0, caps[key] - overlap) for key in shared[index]]) if radius > 0 else 0.0
+             for index in range(count)}
+    for index in range(count):
+        if radii[index] > 0:
+            rounded[index] = {_OPPOSITE_SIDE[side] for _, side in shared[index]}
+    bleeds: dict[int, dict[str, int]] = {index: {} for index in range(count)}
+    for (a, side), neighbours in sorted(later.items()):
+        want = overlap + max(math.ceil(radii[b]) if radii[b] > 0 else 0 for b in neighbours)
+        amount = min(_even_ceil(want), caps[(a, side)]) if want > 0 else 0
+        if amount > 0 and _covered(_bleed_region(placements[a], side, amount), placements[a + 1:]):
+            bleeds[a][side] = amount
+    result = []
+    for index, cell in enumerate(placements):
+        sides = bleeds[index]
+        # A grown corner square (two perpendicular grown sides) must be hidden too.
+        for vertical in ("top", "bottom"):
+            for horizontal in ("left", "right"):
+                if vertical in sides and horizontal in sides:
+                    corner = (cell.x - sides[horizontal] if horizontal == "left" else cell.x + cell.width,
+                              cell.y - sides[vertical] if vertical == "top" else cell.y + cell.height,
+                              sides[horizontal], sides[vertical])
+                    if not _covered(corner, placements[index + 1:]):
+                        del sides[horizontal]
+        overscan, shift = (0, 0), (0, 0)
+        offset = lateral_offsets[index] if index < len(lateral_offsets) else None
+        if jitter > 0:
+            axis = _jitter_axis(cell, width, height)
+            extent = width if axis == "x" else height
+            margin = _even_ceil(jitter * extent)
+            value = Fraction(offset if offset is not None else 0) * extent
+            moved = max(-margin, min(margin, 2 * math.floor(value / 2 + Fraction(1, 2))))
+            overscan, shift = ((margin, 0), (moved, 0)) if axis == "x" else ((0, margin), (0, moved))
+        # Earlier cells are final here: a bleed dropped above (side or corner square not under later
+        # cells) backs no corner, so the radius shrinks to what every earlier neighbour's bleed covers.
+        cell_radius = min([radii[index]] + [max(0, bleeds[a].get(side, 0) - overlap) for a, side in shared[index]])
+        corners = tuple(corner for corner in CORNERS
+                        if any(corner in _SIDE_CORNERS[side] for side in rounded[index])) if cell_radius > 0 else ()
+        raster = Raster(bleed=(sides.get("left", 0), sides.get("top", 0), sides.get("right", 0), sides.get("bottom", 0)),
+                        overscan=overscan, shift=shift, radius=cell_radius if corners else 0.0, corners=corners)
+        result.append(replace(cell, raster=raster))
+    return tuple(result)
 
 
 def parse_args() -> argparse.Namespace:
@@ -884,11 +1058,77 @@ def silence_filter(segment: Segment) -> str:
     )
 
 
+def raster_geometry(raster: Raster, panel_width: int, settings: Settings) -> str:
+    """Fit, bleed and lateral-jitter geometry for a cell of a ``presentation`` layout.
+
+    The picture is fitted to the cell overscanned by the jitter margins. The bleed is
+    taken from the same fitted picture around the nominal window (edge pixels are
+    smeared only where the source has none left), so the nominal window is the same
+    pixels for every ``overlap_px``. Output size is the drawn box.
+    """
+    left, top, right, bottom = raster.bleed
+    margin_x, margin_y = raster.overscan
+    shift_x, shift_y = raster.shift
+    fit_w, fit_h = panel_width + 2 * margin_x, settings.height + 2 * margin_y
+    out_w, out_h = panel_width + left + right, settings.height + top + bottom
+    grow_w, grow_h = left + right, top + bottom
+    if settings.media_fit == "contain":
+        chain = (f"scale={fit_w}:{fit_h}:force_original_aspect_ratio=decrease,"
+                 f"pad={fit_w}:{fit_h}:(ow-iw)/2:(oh-ih)/2:black,")
+        if grow_w or grow_h:
+            chain += f"pad={fit_w + grow_w}:{fit_h + grow_h}:{left}:{top}:black,"
+        if margin_x or margin_y:
+            chain += f"crop={out_w}:{out_h}:{margin_x - shift_x}:{margin_y - shift_y},"
+        return chain
+    fx, fy = settings.focal
+    chain = f"scale={fit_w}:{fit_h}:force_original_aspect_ratio=increase:force_divisible_by=2,"
+    if grow_w or grow_h:
+        chain += (f"pad=w=iw+{grow_w}:h=ih+{grow_h}:x={left}:y={top},"
+                  f"fillborders=left={left}:right={right}:top={top}:bottom={bottom}:mode=smear,")
+    chain += (f"crop={out_w}:{out_h}:(in_w-{grow_w}-{fit_w})*{fx}{margin_x - shift_x:+d}:"
+              f"(in_h-{grow_h}-{fit_h})*{fy}{margin_y - shift_y:+d},")
+    return chain
+
+
+def corner_mask_filters(raster: Raster, panel_width: int, height: int, fps: int, duration: float,
+                        input_label: str, output_label: str, tag: str) -> list[str]:
+    """Alpha-mask the rounded corners of a later-drawn cell (anti-aliased, one pixel ramp)."""
+    left, top, right, bottom = raster.bleed
+    box_w, box_h = panel_width + left + right, height + top + bottom
+    r = raster.radius
+    x0, y0, x1, y1 = left, top, left + panel_width, top + height
+    expression = "255"
+    for corner in reversed(raster.corners):
+        vertical, horizontal = corner.split("-")
+        cx = x0 + r if horizontal == "left" else x1 - r
+        cy = y0 + r if vertical == "top" else y1 - r
+        inside_x = f"gte(X,{x0})*lt(X+0.5,{cx:.6f})" if horizontal == "left" else f"gt(X+0.5,{cx:.6f})*lt(X,{x1})"
+        inside_y = f"gte(Y,{y0})*lt(Y+0.5,{cy:.6f})" if vertical == "top" else f"gt(Y+0.5,{cy:.6f})*lt(Y,{y1})"
+        alpha = f"255*clip({r + 0.5:.6f}-hypot(X+0.5-{cx:.6f},Y+0.5-{cy:.6f}),0,1)"
+        expression = f"if({inside_x}*{inside_y},{alpha},{expression})"
+    # On an overlay source's last chroma row (column) FFmpeg's overlay takes the chroma alpha from
+    # the upper (left) pixels only, so a rounded bottom (right) corner there blends the wrong colour.
+    # Two fully transparent pixels past those edges keep every corner off them.
+    pad_w = 2 if any(corner.endswith("right") for corner in raster.corners) else 0
+    pad_h = 2 if any(corner.startswith("bottom") for corner in raster.corners) else 0
+    pad = f"pad=w=iw+{pad_w}:h=ih+{pad_h}," if pad_w or pad_h else ""
+    if pad:
+        expression = f"if(gte(X,{box_w})+gte(Y,{box_h}),0,{expression})"
+    fill, mask = f"[{tag}fill]", f"[{tag}mask]"
+    return [
+        f"{input_label}{pad}format=yuva420p{fill}",
+        (f"color=c=white:s={box_w + pad_w}x{box_h + pad_h}:r={fps}:d={seconds(duration)},"
+         f"format=gray,geq=lum='{expression}'{mask}"),
+        f"{fill}{mask}alphamerge{output_label}",
+    ]
+
+
 def finish_video_filter(
     input_label: str,
     panel_width: int,
     settings: Settings,
     output_label: str,
+    raster: Raster | None = None,
 ) -> str:
     tone_filters: list[str] = []
     if settings.tone_mode == "normalize":
@@ -901,7 +1141,9 @@ def finish_video_filter(
     elif settings.tone_mode == "histeq":
         tone_filters.append("histeq")
     tone = "".join(f",{filter_name}" for filter_name in tone_filters)
-    if settings.media_fit == "contain":
+    if raster is not None:
+        geometry = raster_geometry(raster, panel_width, settings)
+    elif settings.media_fit == "contain":
         geometry = (
             f"scale={panel_width}:{settings.height}:force_original_aspect_ratio=decrease,"
             f"pad={panel_width}:{settings.height}:(ow-iw)/2:(oh-ih)/2:black,"
@@ -939,6 +1181,7 @@ def video_source_filters(
     settings: Settings,
     panel_width: int,
     output_label: str,
+    raster: Raster | None = None,
 ) -> list[str]:
     input_label = f"[{input_index}:v]"
     crop = _crop_prefix(panel)
@@ -953,7 +1196,7 @@ def video_source_filters(
             chain += f"setpts=PTS/{seconds(panel.playback_rate)},fps={settings.fps},"
             chain += f"tpad=stop_mode=clone:stop_duration={seconds(segment.duration)},"
         chain += f"trim=duration={seconds(segment.duration)},setpts=PTS-STARTPTS,"
-        return [finish_video_filter(input_label + chain, panel_width, settings, output_label)]
+        return [finish_video_filter(input_label + chain, panel_width, settings, output_label, raster)]
     if settings.video_direction == "forward":
         return [
             finish_video_filter(
@@ -968,6 +1211,7 @@ def video_source_filters(
                 panel_width,
                 settings,
                 output_label,
+                raster,
             )
         ]
 
@@ -991,6 +1235,7 @@ def video_source_filters(
                 panel_width,
                 settings,
                 output_label,
+                raster,
             )
         ]
 
@@ -1018,7 +1263,7 @@ def video_source_filters(
             "setpts=PTS-STARTPTS"
             f"{loop_label}"
         ),
-        finish_video_filter(loop_label, panel_width, settings, output_label),
+        finish_video_filter(loop_label, panel_width, settings, output_label, raster),
     ]
 
 
@@ -1040,7 +1285,7 @@ def render_segment(
     render_panels = [panel_by_name(segment, cell.name) for cell in placements]
 
     for panel, cell in zip(render_panels, placements):
-        panel_width = cell.width
+        _, _, panel_width, panel_height = cell.drawn_box()
         if panel.source_path is None:
             command.extend(
                 [
@@ -1049,7 +1294,7 @@ def render_segment(
                     "-t",
                     seconds(segment.duration),
                     "-i",
-                    f"color=c=black:s={panel_width}x{cell.height}:r={settings.fps}",
+                    f"color=c=black:s={panel_width}x{panel_height}:r={settings.fps}",
                 ]
             )
         elif panel.source_kind == "still":
@@ -1063,6 +1308,10 @@ def render_segment(
         cell_settings = replace(settings, height=cell.height, media_fit=cell.fit, focal=cell.focal)
         input_label = f"[{index}:v]"
         output_label = f"[v{index}]"
+        masked = cell.raster is not None and bool(cell.raster.corners) and cell.raster.radius > 0
+        if masked:
+            # Rounded corners: the cell's picture gains an alpha mask before its overlay.
+            output_label = f"[v{index}square]"
         if panel.source_path is None:
             filters.append(
                 (
@@ -1082,8 +1331,12 @@ def render_segment(
                     cell_settings,
                     cell.width,
                     output_label,
+                    cell.raster,
                 )
             )
+        if masked:
+            filters.extend(corner_mask_filters(cell.raster, cell.width, cell.height, settings.fps,
+                                               segment.duration, output_label, f"[v{index}]", f"v{index}"))
 
     audio_labels: list[str] = []
     audio_panel_indexes = selected_audio_panels(render_panels, settings)
@@ -1124,7 +1377,10 @@ def render_segment(
                        f"d={seconds(segment.duration)}[canvas0]")
         for index, cell in enumerate(placements):
             target = "[outv]" if index == len(placements) - 1 else f"[canvas{index + 1}]"
-            filters.append(f"[canvas{index}][v{index}]overlay=x={cell.x}:y={cell.y}:"
+            # Cells overlay in draw order; a bleed (drawn box beyond the nominal cell)
+            # lies under a later cell and is hidden by that later overlay.
+            x, y, _, _ = cell.drawn_box()
+            filters.append(f"[canvas{index}][v{index}]overlay=x={x}:y={y}:"
                            f"shortest=1{target}")
         final_video_label = "[outv]"
         # Seamed slice seam blur/merge/morph: optional blur strip bridging adjacent panels

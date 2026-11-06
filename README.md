@@ -68,23 +68,38 @@ Source identifiers, composition identities, and artwork titles are caller data.
 
 ## Supported configurations
 
-Authored engineering pairs currently exist for **2 through 7** loops:
+Two layout families exist. **Strips** (default) are computed full-bleed partitions
+for any count from 1 through 12. **Authored** engineering pairs exist for 2 through
+7. Each family places exactly one cell per independent loop. A count outside the
+selected family's range fails explicitly and is never filled, duplicated or moved
+to the other family: `build_artifact001(8)` still raises, and strips at 13 raise.
 
-| N | Portrait | Landscape |
-| --- | --- | --- |
-| 2 | authored | authored |
-| 3 | authored | authored |
-| 4 | authored | authored |
-| 5 | authored | authored |
-| 6 | authored | authored |
-| 7 | authored | authored |
+| N | Family | Portrait | Landscape |
+| --- | --- | --- | --- |
+| 1 | strips | one full-canvas strip | one full-canvas strip |
+| 2 to 7 | strips (default) | rows | columns |
+| 2 to 7 | authored | authored | authored |
+| 8 to 12 | strips | rows | columns |
+| 13 or more | none | refused | refused |
 
-The seven-loop pair promotes the previously experimental Portvs geometry into
-the reviewed engineering family. Counts without an authored pair still fail
-explicitly; eight loops are currently unsupported.
+Every cell is a distinct loop (no filler), sources are never reused (no implicit
+duplication), and no family substitutes for another. N=1 is a field of one loop,
+by the owner's explicit choice.
 
-Layouts live in [`src/simvltanea/authoring/artifact001_layouts.py`](src/simvltanea/authoring/artifact001_layouts.py). They are synthetic engineering
-geometries, not artist-approved designs.
+Strips touch edge to edge with no gutter or margin. Zoom is tied to N through
+the state-wide slice, `zoom(N) = 8 / N^(3/5)` (8× at 1, 3.05× at 5, 1.80× at 12).
+Strips and the zoom curve are engineering presets matched to the owner's sketch,
+not artist-approved designs. See [Layout presets](docs/authoring/LAYOUT_PRESETS.md)
+and [`layout_presets.py`](src/simvltanea/authoring/layout_presets.py).
+
+The seven-loop authored pair promotes the previously experimental Portvs
+geometry into the reviewed engineering family. Authored layouts live in
+[`src/simvltanea/authoring/artifact001_layouts.py`](src/simvltanea/authoring/artifact001_layouts.py).
+They are synthetic engineering geometries, not artist-approved designs.
+
+Capacity is measured on one desktop only (Apple M5, headless Chrome 156, synthetic
+540×720 clips): twelve strips dropped 4.6–8.9% of frames. No claim is made about
+phones, Safari/WebKit or real footage.
 
 ## Repository Layout
 

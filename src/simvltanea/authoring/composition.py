@@ -548,7 +548,7 @@ def audio_at(state: dict, frame: int, orientation: str, snapshot: dict | None = 
 
 
 def pixel_placements(layout: dict, width: int, height: int) -> tuple:
-    from simvltanea.rendering import Placement
+    from simvltanea.rendering import Placement, presentation_placements
     def edge(value: Fraction, dimension: int) -> int:
         return 2 * round(value * dimension / 2)
     result = []
@@ -559,7 +559,15 @@ def pixel_placements(layout: dict, width: int, height: int) -> tuple:
         require(c > a and d > b, "panel collapsed at this export resolution")
         result.append(Placement(cell["loop"], a, b, c - a, d - b, cell["fit"],
                                 tuple(float(rational(v, "focal")) for v in cell["focal"])))
-    return tuple(result)
+    if "presentation" not in layout:
+        return tuple(result)
+    # Full-bleed presentation: hidden bleed, rounded corners and lateral jitter are drawn
+    # in device pixels from the exact shared edges (layout_presets imports this module).
+    from simvltanea.authoring.layout_presets import adjacency
+    offsets = [rational(cell["lateral_offset"], "lateral_offset") if "lateral_offset" in cell else None
+               for cell in layout["cells"]]
+    return presentation_placements(tuple(result), layout["presentation"], adjacency(layout["cells"]),
+                                   offsets, width, height)
 
 
 def continuous(previous: dict, current: dict, fps: int, orientation: str) -> bool:
@@ -598,7 +606,16 @@ def compile_segments(state: dict, root: Path, orientation: str, width: int, heig
         if not continuous(previous, current, state["fps"], orientation):
             starts.append((frame, current))
         previous = current
-    require(len(starts) <= MAX_SEGMENTS, "composition exceeds segment resource guard; no panels were removed")
+    if len(starts) > MAX_SEGMENTS:
+        # Every loop wrap, source change, slice re-roll or event in this orientation starts
+        # an FFmpeg segment. The guard is total, unlike the browser's per-loop span guard.
+        fits = starts[MAX_SEGMENTS][0]
+        raise StateError(
+            f"composition needs {len(starts)} render segments, over the renderer's cap of {MAX_SEGMENTS} "
+            f"segments (MAX_SEGMENTS); a new segment starts at every loop wrap, source change, slice "
+            f"re-roll and event. Remedy: shorten the export to at most {fits} frames "
+            f"({fits / state['fps']:g} s at {state['fps']} fps), use longer loops or fewer loops. "
+            "No panels were removed")
     segments = []
     scfg = seam_config(state)
     for index, (frame, snapshot) in enumerate(starts):
