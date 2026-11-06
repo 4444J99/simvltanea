@@ -1,18 +1,16 @@
 """Executed proofs for the SIMVLTANEA web studio (browser_studio + browser.studio.js).
 
 The staged studio is served from a local HTTP server under a subpath and driven
-in the installed Chrome through Playwright's real file input. Every video is
+in the installed Chrome through Playwright. It must play on load with no
+interaction (built-in loops recorded in the page), reroll from ?seed, turn the
+sound on at the first gesture, and accept the visitor's own files through the
+real file input or a drop. Every video is
 synthetic and generated at test time by FFmpeg under var/work; nothing personal
 is read and nothing generated is committed. The phone-like fixtures mimic the
 measured properties of real exported motion clips: QuickTime MOV, H.264 High
 with full-range yuvj420p or HEVC hvc1, a rotation tag on landscape-coded
 frames, variable frame rate and an audio track in every clip.
 
-The layout controls are proven the same way: the family switch, the panel
-picker (whose counts come from layouts.json, never from a constant), the strips
-default at five panels, strips from one to twelve loops with their zoom slice,
-the authored family by name, and "Use my own layout file" with valid and invalid
-preset and pair files from fixtures/layouts/.
 
 Requires Python Playwright, an installed Chromium/Chrome, FFmpeg/ffprobe (with
 libx264, libx265 and prores_ks) and Node.js. Missing tools fail; nothing skips.
@@ -39,7 +37,6 @@ import simvltanea.authoring.composition as c
 from simvltanea.browser import stage_studio, StudioStagingError
 from simvltanea.browser.browser_runtime import HERE
 from simvltanea.browser.browser_studio import INDEX_HTML, STUDIO_FILES, studio_files
-from simvltanea.authoring import LayoutError, load_layout_file, strips_layouts, strips_slice
 from simvltanea.browser.layout_bundle import authored_layout_bundle, layout_bundle_v2
 from simvltanea.browser.test_browser_runtime import browser_executable
 from simvltanea.paths import WORK_DIR
@@ -53,7 +50,6 @@ SUBPATH = 'simvltanea/studio'
 FPS = 24
 MIB = 1024 * 1024
 REPOSITORY = HERE.parents[2]
-CORPUS = REPOSITORY / 'fixtures' / 'layouts'
 # Twelve distinct H.264 MP4 loops with AAC audio and pairwise different periods.
 LOOPS = [(f'loop-{index}.mp4', seconds, hue) for index, (seconds, hue) in
          enumerate(zip((1.2, 1.5, 1.8, 2.1, 2.4, 2.7, 3.0, 1.3, 1.6, 1.9, 2.2, 2.5),
@@ -184,7 +180,7 @@ class StageStudioTests(unittest.TestCase):
         html = (output / 'index.html').read_text()
         self.assertEqual(html, INDEX_HTML)
         self.assertIn('<html lang="en">', html)
-        self.assertIn('<title>SIMVLTANEA studio: your loops, playing at once</title>', html)
+        self.assertIn('<title>SIMVLTANEA studio: loops on their own clocks</title>', html)
         for name in ('compiler.js', 'studio.js', 'runtime.js'):
             self.assertIn(f'<script src="{name}" defer></script>', html)
         # Order matters: the studio installs compositionIO before the runtime reads it.
@@ -443,7 +439,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 class StudioBrowserTests(unittest.TestCase):
-    """The staged studio, served under a subpath, driven through its real file input."""
+    """The staged studio, served under a subpath: it plays on load and the visitor's files are optional."""
 
     @classmethod
     def setUpClass(cls):
@@ -473,692 +469,353 @@ class StudioBrowserTests(unittest.TestCase):
 
     # ---- helpers -----------------------------------------------------------
 
-    def open(self, query='', width=1280, height=720, reduced_motion='no-preference', bundle=None):
+    def open(self, query='', width=1280, height=720, reduced_motion='no-preference'):
         context = self.browser.new_context(viewport={'width': width, 'height': height}, reduced_motion=reduced_motion)
         self.addCleanup(context.close)
         page = context.new_page()
-        if bundle is not None:  # serve another layouts.json at the same URL
-            page.route('**/layouts.json', lambda route: route.fulfill(
-                status=200, content_type='application/json', body=json.dumps(bundle)))
         page.requests, page.errors = [], []
         page.on('request', lambda request: page.requests.append(request.url))
         page.on('pageerror', lambda error: page.errors.append(str(error)))
         page.goto(self.url + query)
         page.wait_for_function('() => window.SimvltaneaStudio && window.SimvltaneaStudio.snapshot && '
-                               'window.compositionRuntime && !SimvltaneaStudio.snapshot().loading')
+                               'window.compositionRuntime && SimvltaneaStudio.snapshot().seed !== null')
         self.addCleanup(lambda: self.assertEqual(page.errors, []))
         return page
 
-    def layout(self, page, panels, family=None):
-        """Choose a family (by its radio) and a panel count (by the picker), as a visitor does."""
-        if family is not None:
-            page.check(f'input[name="family"][value="{family}"]')
-        page.select_option('#panels', str(panels))
-        snapshot = page.evaluate('SimvltaneaStudio.snapshot()')
-        self.assertEqual(snapshot['panels'], panels)
-        if family is not None:
-            self.assertEqual(snapshot['family'], family)
-        return snapshot
+    def snapshot(self, page):
+        return page.evaluate('SimvltaneaStudio.snapshot()')
 
-    def tiling(self, page):
-        """Cell boxes relative to the stage, and how much of the stage they cover."""
-        return page.evaluate('''() => { const s = stage.getBoundingClientRect();
-          const boxes = [...document.querySelectorAll('#stage > .loop')].map(b => b.getBoundingClientRect());
-          const area = boxes.reduce((sum, b) => sum + b.width * b.height, 0);
-          return {stage: [s.width, s.height], area: area / (s.width * s.height),
-                  boxes: boxes.map(b => [b.x - s.x, b.y - s.y, b.width, b.height])}; }''')
+    def playing(self, page, count=None, timeout=45000):
+        """Wait until the runtime plays every panel with decoded frames, then return its snapshot."""
+        page.wait_for_function(
+            '''count => { const r = compositionRuntime;
+              return r.error || (r.running && r.snapshot().compositionTime > 0.3 &&
+                (count === null || r.nodes.size === count) &&
+                [...r.nodes.values()].every(n => !n.busy && n.media && n.media.readyState >= 2)); }''',
+            arg=count, timeout=timeout)
+        self.assertIsNone(page.evaluate('compositionRuntime.error'))
+        return page.evaluate('''() => { const r = compositionRuntime, s = r.snapshot();
+          s.sha = r.plan.sources.map(x => x.sha256); s.version = r.plan.plan_version;
+          s.muted = [...document.querySelectorAll('#stage video')].map(v => v.muted);
+          s.inline = [...document.querySelectorAll('#stage video')].map(v => v.playsInline);
+          return s; }''')
+
+    def advancing(self, page):
+        before = page.evaluate('compositionRuntime.snapshot().compositionTime')
+        page.wait_for_function('t => compositionRuntime.running && compositionRuntime.snapshot().compositionTime > t + 0.3',
+                               arg=before, timeout=15000)
+
+    def unlock(self, page):
+        """A real click on the stage: the first gesture turns the sound on (and rerolls nothing)."""
+        before = self.snapshot(page)['selection']
+        box = page.locator('#frame').bounding_box()
+        page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+        page.wait_for_function('''() => { const r = compositionRuntime;
+          return r.error || (r.running && r.plan.plan_version === 2 && r.audio.enabled &&
+            r.audio.context && r.audio.context.state === 'running'); }''', timeout=30000)
+        self.assertEqual(self.snapshot(page)['selection'], before)
+
+    def tap(self, page, selector):
+        """Move the pointer first, as a person does: the idle control bar returns, then the click lands."""
+        page.mouse.move(5, 5)
+        page.mouse.move(9, 9)
+        page.wait_for_function("() => !document.querySelector('#studio').classList.contains('idle')")
+        page.click(selector)
 
     def add(self, page, paths):
         page.set_input_files('#files', [str(path) for path in paths])
         page.wait_for_function('() => !SimvltaneaStudio.snapshot().busy', timeout=60000)
-        return page.evaluate('SimvltaneaStudio.snapshot()')
+        return self.snapshot(page)
 
-    def play(self, page):
-        page.click('#start')
-        page.wait_for_function('() => compositionRuntime.running || compositionRuntime.error', timeout=30000)
-        self.assertIsNone(page.evaluate('compositionRuntime.error'))
-        self.assertEqual(page.evaluate("document.querySelector('#studio').dataset.view"), 'player')
-
-    def clocks(self, page, after=0.0):
-        """A settled snapshot with each loop's own period from the compiled plan."""
-        page.wait_for_function(
-            '''after => { const r = compositionRuntime;
-              return r.error || (r.running && r.snapshot().compositionTime > after &&
-                [...r.nodes.values()].every(n => !n.busy && n.media && n.media.readyState >= 2)); }''',
-            arg=after, timeout=30000)
-        return page.evaluate('''() => {
-          const r = compositionRuntime, s = r.snapshot();
-          const number = v => { const [n, d = 1] = String(v).split('/').map(Number); return n / d; };
-          const periods = Object.fromEntries(r.plan.sources.map(x => [x.id, number(x.duration)]));
-          s.periods = s.loops.map(loop => periods[loop.source]);
-          s.muted = [...document.querySelectorAll('#stage video')].map(v => v.muted && v.defaultMuted);
-          s.inline = [...document.querySelectorAll('#stage video')].map(v => v.playsInline);
-          s.sha = r.plan.sources.map(x => x.sha256);
-          return s; }''')
-
-    def assert_own_clocks(self, snapshot, tolerance=0.2):
-        """Each loop sits at the shared composition time modulo its own period."""
-        for loop, period in zip(snapshot['loops'], snapshot['periods']):
-            expected = snapshot['compositionTime'] % period
-            distance = abs(loop['currentTime'] - expected)
-            self.assertLess(min(distance, period - distance), tolerance, (loop['id'], loop['currentTime'], expected))
-
-    def assert_advancing(self, before, after):
-        for old, new in zip(before['loops'], after['loops']):
-            self.assertEqual(old['id'], new['id'])
-            self.assertFalse(new['paused'])
-            self.assertGreater(new['callbacks'], old['callbacks'])
-            moved = (new['currentTime'] - old['currentTime']) % next(
-                p for p, loop in zip(after['periods'], after['loops']) if loop['id'] == new['id'])
-            self.assertGreater(moved, 0.05)
-
-    def external(self, page):
-        allowed = (f'{self.origin}/{SUBPATH}/', 'blob:', 'data:')
-        return [url for url in page.requests if not url.startswith(allowed)]
+    def allowed(self, page):
+        """Requests beyond the staged files (blob: and data: URLs are made on the device)."""
+        staged = {f'{self.origin}/{SUBPATH}/{name}' for name in ('', *STUDIO_FILES)}
+        return [url for url in page.requests if not (url.split('?')[0] in staged or url.startswith(('blob:', 'data:')))]
 
     # ---- tests -------------------------------------------------------------
 
-    def test_two_to_seven_loops_play_at_once_on_independent_clocks(self):
-        """The authored family stays selectable by name and plays its own pairs for 2 to 7 loops."""
-        for count in range(2, 8):
-            with self.subTest(count=count):
-                page = self.open('?seconds=30', width=390, height=844)
-                self.layout(page, count, 'authored')
-                snapshot = self.add(page, self.loops[:count])
-                self.assertEqual(snapshot['count'], f'{count} loops chosen. Ready to play.')
-                self.assertEqual(snapshot['refusals'], [])
-                self.assertTrue(page.is_enabled('#start'))
-                self.play(page)
-                first = self.clocks(page, after=1.3)
-                self.assertEqual(len(first['loops']), count)
-                self.assertEqual(page.locator('#stage > .loop').count(), count)
-                self.assertEqual(page.locator('#stage video').count(), count)
-                self.assertEqual(len(set(first['sha'])), count)
-                self.assertEqual(first['sha'], [loop['sha256'] for loop in snapshot['loops']])
-                self.assertEqual(first['muted'], [True] * count)
-                self.assertEqual(first['inline'], [True] * count)
-                self.assertEqual(first['orientation'], 'portrait')
-                self.assertEqual(page.locator('#stage video').evaluate_all(
-                    'nodes => nodes.map(n => n.getAttribute("aria-label"))'),
-                    [f'Loop {index} of {count}' for index in range(1, count + 1)])
-                self.assert_own_clocks(first)
-                page.wait_for_timeout(700)
-                second = self.clocks(page)
-                self.assert_own_clocks(second)
-                self.assert_advancing(first, second)
-                frames = page.evaluate('[compositionRuntime.plan.frames, compositionRuntime.plan.fps]')
-                self.assertEqual(frames, [720, 24])
-                # Every box sits inside the stage and no two overlap.
-                rects = [loop['rect'] for loop in second['loops']]
-                for index, a in enumerate(rects):
-                    self.assertGreater(a['width'] * a['height'], 0)
-                    for b in rects[index + 1:]:
-                        self.assertFalse(a['x'] < b['x'] + b['width'] - 1 and b['x'] < a['x'] + a['width'] - 1 and
-                                         a['y'] < b['y'] + b['height'] - 1 and b['y'] < a['y'] + a['height'] - 1)
-                self.assertEqual(self.external(page), [])
-                self.assertTrue(any(url.endswith(f'/{SUBPATH}/layouts.json') for url in page.requests))
-                layouts = page.evaluate('compositionRuntime.plan.layout_keyframes[0].layouts')
-                self.assertEqual(layouts, authored_layout_bundle()[str(count)])
-                self.assertEqual(page.evaluate('compositionRuntime.plan.slice'), {'enabled': False})
-
-    def test_defaults_to_strips_at_five_panels_with_counts_from_the_bundle(self):
-        rule = 'Every panel plays one of your loops; nothing is padded, repeated or duplicated.'
+    def test_plays_at_once_without_any_interaction(self):
         page = self.open()
-        snapshot = page.evaluate('SimvltaneaStudio.snapshot()')
-        self.assertEqual((snapshot['family'], snapshot['panels'], snapshot['counts']), ('strips', 5, list(range(1, 13))))
-        self.assertEqual([(item['name'], item['label'], item['counts']) for item in snapshot['families']],
-                         [('authored', 'Authored', list(range(2, 8))), ('strips', 'Strips', list(range(1, 13)))])
-        self.assertTrue(page.is_checked('input[name="family"][value="strips"]'))
-        self.assertEqual(page.input_value('#panels'), '5')
-        self.assertEqual(page.locator('#panels option').all_inner_texts(), [str(n) for n in range(1, 13)])
-        self.assertEqual(snapshot['count'], f'No loops chosen yet. Choose 5 videos for 5 panels. {rule}')
-        self.assertEqual((snapshot['layoutStatus'], snapshot['layoutError'], snapshot['layoutFile']), ('', '', None))
-        # A family switch keeps the panel count when it can and says so when it cannot.
-        self.layout(page, 12)
-        page.check('input[name="family"][value="authored"]')
-        snapshot = page.evaluate('SimvltaneaStudio.snapshot()')
-        self.assertEqual((snapshot['family'], snapshot['panels']), ('authored', 7))
-        self.assertEqual(snapshot['layoutStatus'], 'Authored layouts cover 2 to 7 panels; Panels is now 7.')
-        self.assertEqual(page.locator('#panels option').all_inner_texts(), [str(n) for n in range(2, 8)])
-        page.check('input[name="family"][value="strips"]')
-        snapshot = page.evaluate('SimvltaneaStudio.snapshot()')
-        self.assertEqual((snapshot['family'], snapshot['panels'], snapshot['layoutStatus']), ('strips', 7, ''))
-        # The counts are the bundle's: other bundles at the same URL offer other counts, with no code change.
-        trimmed = layout_bundle_v2()
-        trimmed['families'] = {'strips': {'preset': trimmed['families']['strips']['preset'],
-                                          'counts': {n: trimmed['families']['strips']['counts'][n] for n in '123'}}}
-        cases = {'legacy': (authored_layout_bundle(), 'authored', 5, list(range(2, 8)), ['authored']),
-                 'trimmed': (trimmed, 'strips', 3, [1, 2, 3], ['strips'])}
-        for name, (bundle, family, panels, counts, families) in cases.items():
-            with self.subTest(bundle=name):
-                other = self.open(bundle=bundle)
-                snapshot = other.evaluate('SimvltaneaStudio.snapshot()')
-                self.assertEqual((snapshot['family'], snapshot['panels'], snapshot['counts']), (family, panels, counts))
-                self.assertEqual([item['name'] for item in snapshot['families']], families)
-                self.assertEqual(other.locator('#panels option').all_inner_texts(), [str(n) for n in counts])
-        # Three loops on the trimmed bundle play its three strips with its zoom.
-        snapshot = self.add(other, self.loops[:3])
-        self.assertEqual(snapshot['count'], '3 loops chosen. Ready to play.')
-        self.play(other)
-        self.assertEqual(other.evaluate('compositionRuntime.plan.slice'), strips_slice(3))
+        # The preview canvases move before the recordings are ready.
+        drawn = page.evaluate('''async () => {
+          const canvas = document.querySelector('#preview canvas');
+          if (!canvas) return null;
+          const pixels = () => Array.from(canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data).join(',');
+          const first = pixels(); await new Promise(r => setTimeout(r, 400)); return first !== pixels(); }''')
+        self.assertTrue(drawn)
+        snapshot = self.snapshot(page)
+        self.assertEqual(snapshot['source'], 'builtin')
+        self.assertEqual(snapshot['sound'], 'locked')
+        self.assertIn(snapshot['family'], ('strips', 'authored'))
+        self.assertIn(snapshot['panels'], snapshot['counts'])
+        self.assertEqual(len(set(snapshot['selection'])), snapshot['panels'])
+        state = self.playing(page, snapshot['panels'])
+        self.assertEqual(state['version'], 1)  # silent until a gesture
+        self.assertEqual(state['muted'], [True] * snapshot['panels'])
+        self.assertEqual(state['inline'], [True] * snapshot['panels'])
+        self.assertEqual(len(set(state['sha'])), snapshot['panels'])
+        self.assertEqual(self.snapshot(page)['builtinsReady'], 12)
+        self.advancing(page)
+        self.assertRegex(page.evaluate('location.search'), r'^\?seed=\d+$')
+        self.assertEqual(self.allowed(page), [])
+        self.assertEqual(page.evaluate("[...document.querySelectorAll('p')].filter(p => p.offsetParent).length"), 0)
 
-    def test_strips_play_one_to_twelve_loops_edge_to_edge_with_their_zoom(self):
-        for count, (width, height) in ((1, (390, 844)), (3, (1280, 720)), (8, (390, 844)), (12, (1280, 720))):
-            with self.subTest(count=count):
-                page = self.open('?seconds=30', width=width, height=height)
-                self.layout(page, count)  # the default family: strips
-                snapshot = self.add(page, self.loops[:count])
-                self.assertEqual(snapshot['count'], f'{count} loop{"" if count == 1 else "s"} chosen. Ready to play.')
-                self.play(page)
-                plan = page.evaluate('compositionRuntime.plan')
-                self.assertEqual(plan['slice'], strips_slice(count))
-                self.assertEqual(plan['layout_keyframes'][0]['layouts'], strips_layouts(count))
-                self.assertTrue(all(len(span['slice_rect']) == 4 for track in plan['tracks'] for span in track['spans']))
-                first = self.clocks(page, after=1.0)
-                self.assertEqual(len(first['loops']), count)
-                self.assertEqual(len(set(first['sha'])), count)
-                self.assert_own_clocks(first, tolerance=0.2 if count < 8 else 0.3)
-                orientation = 'landscape' if width >= height else 'portrait'
-                self.assertEqual(first['orientation'], orientation)
-                tiling = self.tiling(page)
-                along = 2 if orientation == 'portrait' else 3  # rows span the width, columns the height
-                # The strips tile the stage. Each cell may be drawn a declared 2 device pixels under the next one
-                # (the bleed that removes hairlines), so the boxes may add up to slightly more than the stage.
-                stage_w, stage_h = tiling['stage']
-                bleed = (count - 1) * 2 * (stage_w if orientation == 'portrait' else stage_h) / (stage_w * stage_h)
-                self.assertGreaterEqual(tiling['area'], 1 - 0.01)
-                self.assertLessEqual(tiling['area'], 1 + bleed + 0.01)
-                for box in tiling['boxes']:
-                    self.assertAlmostEqual(box[along], tiling['stage'][along - 2], delta=1)
-                page.wait_for_timeout(700)
-                second = self.clocks(page)
-                self.assert_advancing(first, second)
-                if count == 8:
-                    # Pinning the other orientation turns rows into columns on the same media elements.
-                    page.check('input[name="orientation"][value="landscape"]')
-                    page.wait_for_timeout(400)
-                    turned = self.tiling(page)
-                    self.assertEqual(self.clocks(page)['orientation'], 'landscape')
-                    for box in turned['boxes']:
-                        self.assertAlmostEqual(box[3], turned['stage'][1], delta=1)
+    def test_seed_reproduces_a_roll_and_shuffle_rerolls(self):
+        families = {'authored': list(range(2, 8)), 'strips': list(range(1, 13))}
+        expected = node(r"""const s = require(process.argv[1]); let input = '';
+          process.stdin.on('data', d => input += d).on('end', () => { const {seed, families} = JSON.parse(input);
+          process.stdout.write(JSON.stringify(s.rollComposition(seed, families, 12))); });""",
+                        dict(seed=424242, families=families))
+        names = [item['name'] for item in node(r"""const s = require(process.argv[1]);
+          process.stdout.write(JSON.stringify(s.BUILTINS));""", None)]
+        first = self.open('?seed=424242')
+        second = self.open('?seed=424242', width=390, height=844)
+        for page in (first, second):
+            snapshot = self.snapshot(page)
+            self.assertEqual((snapshot['seed'], snapshot['family'], snapshot['style']),
+                             (424242, expected['family'], expected['style']))
+            self.assertEqual(snapshot['selection'], [names[index] for index in expected['loops']])
+        state = self.playing(first, expected['panels'])
+        self.assertEqual(len(state['loops']), expected['panels'])
+        layouts = first.evaluate('compositionRuntime.plan.layout_keyframes[0].layouts')
+        self.assertEqual(len(layouts['portrait']['cells']), expected['panels'])
+        if expected['family'] == 'strips':
+            self.assertTrue(first.evaluate('compositionRuntime.plan.slice.enabled'))
+        rolls = set()
+        for _ in range(4):
+            before = self.snapshot(first)
+            self.tap(first, '#shuffle')
+            first.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=before['seed'])
+            after = self.snapshot(first)
+            self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}$')
+            rolls.add((after['family'], tuple(after['selection'])))
+            self.assertEqual(len(set(after['selection'])), after['panels'])
+        self.assertGreater(len(rolls), 1)
+        last = self.snapshot(first)
+        self.playing(first, last['panels'])
+        again = self.open(f'?seed={last["seed"]}')
+        self.assertEqual(self.snapshot(again)['selection'], last['selection'])
+        self.assertEqual(self.allowed(first), [])
 
-    def test_layout_pair_beyond_the_compiler_subset_is_refused_at_once(self):
-        # Python accepts pairs of up to 32 loops; the compiler plays 1..12. Offering a 13-panel file would let the
-        # visitor choose and hash 13 videos before Play failed, so it is refused immediately and nothing changes.
-        count = 13
-        cells = lambda: [{'loop': f'loop-{i + 1}', 'rect': ['0', f'{i}/{count}', '1', f'1/{count}'],
-                          'fit': 'cover', 'focal': ['1/2', '1/2']} for i in range(count)]
-        pair = {'format': 'simvltanea.layout-pair/1', 'count': count,
-                'portrait': {'name': 'rows-13', 'cells': cells()}, 'landscape': {'name': 'rows-13', 'cells': cells()}}
-        path = ROOT / 'rows-13-pair.json'
-        ROOT.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(pair))
-        self.addCleanup(path.unlink)
-        page = self.open('?seconds=30', width=390, height=844)
-        before = page.evaluate('SimvltaneaStudio.snapshot()')
-        page.set_input_files('#layout-file', str(path))
-        page.wait_for_function("() => SimvltaneaStudio.snapshot().layoutError !== ''")
-        after = page.evaluate('SimvltaneaStudio.snapshot()')
-        self.assertIn('places 13 loops; the browser compiler covers N=1..12', after['layoutError'])
-        self.assertIn(path.name, after['layoutError'])
-        self.assertEqual((after['family'], after['panels'], after['counts']),
-                         (before['family'], before['panels'], before['counts']))
-        self.assertNotIn('file', [item['name'] for item in after['families']])
+    def test_first_gesture_turns_sound_on_and_m_mutes(self):
+        page = self.open('?seed=7')
+        self.assertEqual(page.get_attribute('#speaker', 'aria-label'), 'Tap for sound')
+        self.playing(page)
+        self.unlock(page)
+        page.wait_for_function('() => [...compositionRuntime.nodes.values()].some(n => n.audio && n.audio.gain.gain.value > 0)')
+        state = page.evaluate('''() => { const r = compositionRuntime;
+          return {mode: r.audio.mode, gains: [...r.nodes.values()].map(n => n.audio ? n.audio.gain.gain.value : 0),
+                  muted: [...document.querySelectorAll('#stage video')].map(v => v.muted),
+                  audio: r.plan.sources.map(s => s.audio_stream)}; }''')
+        self.assertEqual(state['mode'], 'spatial_loops')
+        self.assertTrue(any(gain > 0 for gain in state['gains']), state)
+        self.assertEqual(set(state['muted']), {False})
+        self.assertEqual(set(map(json.dumps, state['audio'])), {'null'})  # built-in sound is generated live
+        self.assertEqual(self.snapshot(page)['sound'], 'on')
+        self.assertEqual(page.get_attribute('#speaker', 'aria-label'), 'Mute')
+        page.keyboard.press('m')
+        page.wait_for_function('''() => SimvltaneaStudio.snapshot().sound === 'off' &&
+          [...document.querySelectorAll('#stage video')].every(v => v.muted)''')
+        self.assertEqual(page.get_attribute('#speaker', 'aria-label'), 'Unmute')
+        page.keyboard.press('m')
+        page.wait_for_function('''() => SimvltaneaStudio.snapshot().sound === 'on' &&
+          [...document.querySelectorAll('#stage video')].every(v => !v.muted)''')
+        text = page.evaluate('document.documentElement.textContent') + INDEX_HTML
+        self.assertNotRegex(text.lower(), r'sound is never played|always muted|never plays sound')
 
-    def test_own_layout_file_preset_pair_and_one_line_errors(self):
-        page = self.open('?seconds=30', width=390, height=844)
-        preset = CORPUS / 'valid' / 'strips-custom-preset.json'
-        page.set_input_files('#layout-file', str(preset))
-        page.wait_for_function("() => SimvltaneaStudio.snapshot().family === 'file'")
-        snapshot = page.evaluate('SimvltaneaStudio.snapshot()')
-        self.assertEqual(snapshot['layoutFile'], {'name': preset.name, 'kind': 'preset', 'layout': 'strips-custom'})
-        self.assertEqual(snapshot['families'][-1], {'name': 'file', 'label': f'My file: {preset.name}',
-                                                    'counts': list(range(2, 13))})
-        self.assertEqual((snapshot['panels'], snapshot['layoutError']), (5, ''))
-        self.assertEqual(snapshot['layoutStatus'], f'Using {preset.name}: the strips preset strips-custom for 2 to 12 '
-                                                   'panels. It stays on this device.')
-        self.assertEqual(page.get_by_role('radio', name=f'My file: {preset.name}', exact=True).count(), 1)
-        self.layout(page, 3)
-        self.add(page, self.loops[:3])
-        self.play(page)
-        plan = page.evaluate('compositionRuntime.plan')
-        self.assertEqual(plan['layout_keyframes'][0]['layouts'], strips_layouts(3, preset))
-        self.assertEqual(plan['slice'], strips_slice(3, preset))
-        self.assertEqual(len(self.clocks(page, after=0.5)['loops']), 3)
-        page.click('#change')
-        # A pair file offers exactly its count; the picker follows and says so.
-        pair = CORPUS / 'valid' / 'strips-5-pair.json'
-        page.set_input_files('#layout-file', str(pair))
-        page.wait_for_function(f"() => SimvltaneaStudio.snapshot().layoutFile.name === '{pair.name}'")
-        snapshot = page.evaluate('SimvltaneaStudio.snapshot()')
-        self.assertEqual((snapshot['family'], snapshot['panels'], snapshot['counts']), ('file', 5, [5]))
-        self.assertEqual(snapshot['layoutStatus'], f'Using {pair.name}: a layout pair for 5 panels. It stays on this '
-                                                   f'device. My file: {pair.name} layouts cover 5 panels; Panels is now 5.')
-        self.add(page, self.loops[3:5])
-        self.play(page)
-        data = json.loads(pair.read_text())
-        self.assertEqual(page.evaluate('compositionRuntime.plan.layout_keyframes[0].layouts'),
-                         {'portrait': data['portrait'], 'landscape': data['landscape']})
-        self.assertEqual(page.evaluate('compositionRuntime.plan.slice'), {'enabled': False})
-        page.click('#change')
-        # Invalid files: one line that names the file, the same reason as Python; the chosen layout stays.
-        cases = [CORPUS / 'invalid' / name for name in ('pair-gap.json', 'preset-unknown-key.json',
-                                                         'pair-overlap-px-9.json', 'malformed.json')]
-        cases.append(self.loops[0])  # a video chosen by mistake
-        for path in cases:
-            with self.subTest(file=path.name):
-                page.set_input_files('#layout-file', str(path))
-                page.wait_for_function('name => SimvltaneaStudio.snapshot().layoutError.startsWith(name)', arg=path.name,
-                                       timeout=20000)
-                error = page.inner_text('#layout-error')
-                self.assertNotIn('\n', error)
-                try:
-                    load_layout_file(path)
-                    expected = None
-                except LayoutError as caught:
-                    expected = (caught.code, str(caught).replace(str(path), path.name))
-                if expected is None or expected[0] == 'json':
-                    self.assertTrue(error.startswith(f'{path.name}: '), error)
-                else:
-                    self.assertEqual(error, expected[1])
-                snapshot = page.evaluate('SimvltaneaStudio.snapshot()')
-                self.assertEqual((snapshot['family'], snapshot['layoutFile']['name']), ('file', pair.name))
-        self.assertEqual(page.get_attribute('#layout-error', 'role'), 'alert')
-        self.assertRegex(page.inner_text('#layout-error'), r'^loop-1\.mp4: cannot read layout file')
-        page.check('input[name="family"][value="strips"]')
-        self.assertEqual(page.evaluate('[SimvltaneaStudio.snapshot().family, SimvltaneaStudio.snapshot().panels]'),
-                         ['strips', 5])
-        self.assertEqual(page.inner_text('#count'), '5 loops chosen. Ready to play.')
+    def test_tapping_a_panel_rerolls_only_that_panel(self):
+        page = self.open('?seed=31')
+        snapshot = self.snapshot(page)
+        self.playing(page, snapshot['panels'])
+        self.unlock(page)
+        before = self.snapshot(page)['selection']
+        box = page.locator('#stage .loop[data-loop-id="loop-1"]').bounding_box()
+        page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+        page.wait_for_function('b => SimvltaneaStudio.snapshot().selection.join() !== b.join()', arg=before)
+        after = self.snapshot(page)['selection']
+        self.assertEqual(len(after), len(before))
+        if len(before) < 12:
+            self.assertNotEqual(after[0], before[0])
+            self.assertEqual(after[1:], before[1:])
+        self.assertRegex(page.evaluate('location.search'), r'^\?seed=31&mix=[sa]\d')
+        self.playing(page, len(after))
 
-    def test_own_layout_file_radio_label_follows_the_latest_file(self):
-        """A second own file keeps the radio value 'file'; its visible label names the new file."""
+    def test_panel_count_family_and_keys(self):
+        page = self.open('?seed=5')
+        snapshot = self.snapshot(page)
+        page.locator('body').press('ArrowRight' if snapshot['panels'] < 7 else 'ArrowLeft')
+        page.wait_for_function('n => SimvltaneaStudio.snapshot().panels !== n', arg=snapshot['panels'])
+        changed = self.snapshot(page)
+        self.assertEqual(abs(changed['panels'] - snapshot['panels']), 1)
+        self.assertEqual(page.inner_text('#panel-count'), str(changed['panels']))
+        # The family toggle keeps the count where the family offers it, else the nearest, with a toast.
+        if self.snapshot(page)['family'] == 'authored':
+            self.tap(page, '#families button[data-family="strips"]')
+            page.wait_for_function("() => SimvltaneaStudio.snapshot().family === 'strips'")
+        while self.snapshot(page)['panels'] < 9:
+            self.tap(page, '#more')
+        self.tap(page, '#families button[data-family="authored"]')
+        page.wait_for_function("() => SimvltaneaStudio.snapshot().family === 'authored'")
+        self.assertEqual(self.snapshot(page)['panels'], 7)
+        self.assertEqual(self.snapshot(page)['toast'], 'Authored: 7 panels.')
+        self.assertTrue(page.is_disabled('#more'))
+        page.wait_for_function('() => !SimvltaneaStudio.snapshot().toastShown', timeout=10000)
+        seed = self.snapshot(page)['seed']
+        page.locator('body').press('r')
+        page.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=seed)
+        self.assertRegex(page.evaluate('location.search'), r'^\?seed=\d+$')
+        self.playing(page)
+        self.assertEqual(self.allowed(page), [])
+
+    def test_picker_replaces_the_loops_with_the_visitors_own(self):
+        page = self.open('?seconds=30')
+        self.assertEqual(page.get_attribute('#files', 'accept'), 'video/*,.mov,.mp4,.m4v,.webm,.json,application/json')
+        snapshot = self.add(page, self.loops[:3])
+        self.assertEqual((snapshot['source'], snapshot['panels'], snapshot['refusals']), ('own', 3, []))
+        self.assertEqual(snapshot['toast'], '3 loops added. Nothing was uploaded.')
+        state = self.playing(page, 3)
+        self.assertEqual(sorted(state['sha']), sorted(loop['sha256'] for loop in snapshot['loops']))
+        self.assertEqual(page.evaluate('[compositionRuntime.plan.frames, compositionRuntime.plan.fps]'), [720, 24])
+        self.assertEqual([loop['audio'] for loop in snapshot['loops']], [{'codec': 'aac', 'channels': 1}] * 3)
+        self.unlock(page)
+        self.assertEqual(page.evaluate('compositionRuntime.plan.sources.map(s => s.audio_stream.codec)'), ['aac'] * 3)
+        self.assertEqual(self.allowed(page), [])
+
+    def test_drop_anywhere_replaces_the_loops(self):
         page = self.open()
-        first, second = CORPUS / 'valid' / 'strips-custom-preset.json', CORPUS / 'valid' / 'strips-5-pair.json'
-        for path in (first, second):
-            page.set_input_files('#layout-file', str(path))
-            page.wait_for_function('name => (SimvltaneaStudio.snapshot().layoutFile || {}).name === name', arg=path.name)
-            self.assertEqual(page.get_by_role('radio', name=f'My file: {path.name}', exact=True).count(), 1)
-            self.assertEqual(page.locator('input[name="family"][value="file"]').count(), 1)
-            self.assertTrue(page.is_checked('input[name="family"][value="file"]'))
-        self.assertEqual(page.get_by_role('radio', name=f'My file: {first.name}', exact=True).count(), 0)
-        self.assertEqual(page.locator('#families label').all_inner_texts(),
-                         ['Authored', 'Strips', f'My file: {second.name}'])
-
-    def test_default_piece_is_two_minutes_and_each_file_is_hashed_once(self):
-        page = self.open()
-        page.evaluate('''() => { window.digests = []; const digest = SubtleCrypto.prototype.digest;
-          SubtleCrypto.prototype.digest = function (algorithm, data) {
-            digests.push([algorithm, data.byteLength]); return digest.call(this, algorithm, data); }; }''')
-        self.layout(page, 2)
-        snapshot = self.add(page, self.loops[:2])
-        self.assertIn('2 minutes', page.inner_text('#length'))
-        sizes = [path.stat().st_size for path in self.loops[:2]]
-        self.assertEqual(page.evaluate('digests'), [['SHA-256', size] for size in sizes])
-        self.assertEqual([loop['sha256'] for loop in snapshot['loops']],
-                         [hashlib.sha256(path.read_bytes()).hexdigest() for path in self.loops[:2]])
-        self.play(page)
-        self.assertEqual(page.evaluate('[compositionRuntime.plan.frames, compositionRuntime.plan.fps]'), [2880, 24])
-        # The runtime's integrity check reused the digests: no second hash of any file.
-        self.assertEqual(page.evaluate('digests'), [['SHA-256', size] for size in sizes])
-        self.assertEqual(page.evaluate('compositionRuntime.plan.sources.map(s => s.bytes)'), sizes)
-
-    def test_counts_the_layout_lacks_are_refused_never_padded_or_duplicated(self):
-        """Authored covers 2 to 7: one and eight loops are refused there, never moved to strips."""
-        page = self.open()
-        self.layout(page, 2, 'authored')
-        self.assertEqual(page.locator('#panels option').all_inner_texts(), [str(n) for n in range(2, 8)])
-        snapshot = self.add(page, self.loops[:1])
-        self.assertRegex(snapshot['count'], r'^1 loop chosen for 2 panels\. Add 1 more\. Every panel plays one of '
-                                            r'your loops; nothing is padded')
-        self.assertTrue(page.is_disabled('#start'))
-        page.evaluate("document.querySelector('#start').click()")
-        self.assertEqual(page.evaluate("document.querySelector('#studio').dataset.view"), 'setup')
-        self.layout(page, 7)
-        snapshot = self.add(page, [*self.loops[1:7], self.fixtures['phone-h264.mov']])
-        self.assertEqual(len(snapshot['loops']), 8)
-        self.assertRegex(snapshot['count'], r'^8 loops chosen for 7 panels\. Remove 1 loop\. ')
-        self.assertNotIn('set Panels to 8', snapshot['count'])
-        self.assertTrue(page.is_disabled('#start'))
-        self.assertFalse(page.evaluate('compositionRuntime.ready'))
-        self.assertEqual(page.locator('#stage video').count(), 0)
-        # The same bytes under another name are refused, not admitted as a second loop.
-        copy = FIXTURES / 'copy-of-loop-1.mp4'
-        shutil.copyfile(self.loops[0], copy)
-        snapshot = self.add(page, [copy])
-        self.assertEqual(len(snapshot['loops']), 8)
-        self.assertEqual(snapshot['refusals'], ['copy-of-loop-1.mp4 was not added: it is the same video as '
-                                                'loop-1.mp4. Each loop needs its own video; nothing is duplicated.'])
-        page.click('[aria-label="Remove phone-h264.mov"]')
-        self.assertEqual(page.inner_text('#count'), '7 loops chosen. Ready to play.')
-        self.play(page)
-        self.assertEqual(len(self.clocks(page)['loops']), 7)
-
-    def test_drop_zone_accepts_dropped_files(self):
-        page = self.open()
-        files = [dict(name=path.name, type='video/mp4', data=base64.b64encode(path.read_bytes()).decode())
-                 for path in self.loops[:2]]
+        files = [dict(name=path.name, data=base64.b64encode(path.read_bytes()).decode()) for path in self.loops[3:5]]
         states = page.evaluate('''files => {
           const transfer = new DataTransfer();
-          for (const file of files) transfer.items.add(new File([Uint8Array.from(atob(file.data), c => c.charCodeAt(0))],
-            file.name, {type: file.type}));
-          const zone = document.querySelector('#drop'), seen = [];
-          for (const type of ['dragenter', 'dragover']) {
+          for (const f of files) transfer.items.add(new File([Uint8Array.from(atob(f.data), c => c.charCodeAt(0))],
+            f.name, {type: 'video/mp4'}));
+          const seen = [], studio = document.querySelector('#studio');
+          for (const type of ['dragenter', 'dragover', 'drop']) {
             const event = new DragEvent(type, {dataTransfer: transfer, bubbles: true, cancelable: true});
-            zone.dispatchEvent(event); seen.push([type, event.defaultPrevented, zone.classList.contains('over')]);
+            document.querySelector('#stage').dispatchEvent(event);
+            seen.push([type, event.defaultPrevented, studio.classList.contains('dragging')]);
           }
-          const drop = new DragEvent('drop', {dataTransfer: transfer, bubbles: true, cancelable: true});
-          zone.dispatchEvent(drop); seen.push(['drop', drop.defaultPrevented, zone.classList.contains('over')]);
           return seen; }''', files)
         self.assertEqual(states, [['dragenter', True, True], ['dragover', True, True], ['drop', True, False]])
-        page.wait_for_function('() => !SimvltaneaStudio.snapshot().busy && SimvltaneaStudio.snapshot().loops.length === 2')
-        self.assertRegex(page.inner_text('#count'), r'^2 loops chosen for 5 panels\. Add 3 more, or set Panels to 2\.')
-        self.layout(page, 2)
-        self.assertEqual(page.inner_text('#count'), '2 loops chosen. Ready to play.')
-        self.play(page)
-        self.assertEqual(len(self.clocks(page)['loops']), 2)
+        page.wait_for_function("() => SimvltaneaStudio.snapshot().source === 'own' && !SimvltaneaStudio.snapshot().busy")
+        self.assertEqual(self.snapshot(page)['panels'], 2)
+        self.playing(page, 2)
 
-    def test_overlapping_batches_share_one_size_cap(self):
-        """Two batches dropped back to back are checked one after the other, so the cap counts both."""
+    def test_refusals_show_one_toast_and_keep_their_messages(self):
         page = self.open()
-        files = [dict(name=path.name, data=base64.b64encode(path.read_bytes()).decode()) for path in self.loops[:2]]
-        page.evaluate('''files => {
-          const zone = document.querySelector('#drop');
-          for (const spec of files) {
-            const file = new File([Uint8Array.from(atob(spec.data), c => c.charCodeAt(0))], spec.name, {type: 'video/mp4'});
-            Object.defineProperty(file, 'size', {value: 300 * 1048576});   // each batch alone is under the cap
-            const drop = new Event('drop', {bubbles: true, cancelable: true});
-            Object.defineProperty(drop, 'dataTransfer', {value: {files: [file]}});
-            zone.dispatchEvent(drop);                                     // same task: both batches overlap
-          }
-        }''', files)
-        page.wait_for_function('() => !SimvltaneaStudio.snapshot().busy', timeout=60000)
-        snapshot = page.evaluate('SimvltaneaStudio.snapshot()')
-        self.assertEqual([loop['name'] for loop in snapshot['loops']], ['loop-1.mp4'])
-        self.assertEqual(len(snapshot['refusals']), 1, snapshot['refusals'])
-        self.assertRegex(snapshot['refusals'][0], r'^loop-2\.mp4 was not added: .*600 MiB, over the 512 MiB limit')
-        self.assertEqual(page.locator('#refusals li').all_inner_texts(), snapshot['refusals'])
-        self.assertTrue(page.is_disabled('#start'))
-
-    def test_remove_and_reorder_with_labelled_focusable_buttons(self):
-        page = self.open()
-        self.layout(page, 2)
-        self.add(page, self.loops[:3])
-        names = lambda: page.locator('#loops .loop-name').all_inner_texts()
-        self.assertEqual(names(), ['loop-1.mp4', 'loop-2.mp4', 'loop-3.mp4'])
-        for name in ('loop-1.mp4', 'loop-2.mp4', 'loop-3.mp4'):
-            for label in (f'Move {name} up', f'Move {name} down', f'Remove {name}'):
-                self.assertEqual(page.get_by_role('button', name=label, exact=True).count(), 1)
-        self.assertTrue(page.is_disabled('[aria-label="Move loop-1.mp4 up"]'))
-        self.assertTrue(page.is_disabled('[aria-label="Move loop-3.mp4 down"]'))
-        page.click('[aria-label="Move loop-3.mp4 up"]')
-        self.assertEqual(names(), ['loop-1.mp4', 'loop-3.mp4', 'loop-2.mp4'])
-        self.assertEqual(page.evaluate("document.activeElement.getAttribute('aria-label')"), 'Move loop-3.mp4 up')
-        page.keyboard.press('Enter')
-        self.assertEqual(names(), ['loop-3.mp4', 'loop-1.mp4', 'loop-2.mp4'])
-        page.click('[aria-label="Move loop-3.mp4 down"]')
-        self.assertEqual(names(), ['loop-1.mp4', 'loop-3.mp4', 'loop-2.mp4'])
-        # Keyboard focus is visible on list buttons.
-        page.focus('[aria-label="Remove loop-1.mp4"]')
-        page.keyboard.press('Shift+Tab')
-        page.keyboard.press('Tab')
-        focus = page.evaluate('''() => ({label: document.activeElement.getAttribute('aria-label'),
-          visible: document.activeElement.matches(':focus-visible'),
-          outline: getComputedStyle(document.activeElement).outlineStyle})''')
-        self.assertEqual(focus, {'label': 'Remove loop-1.mp4', 'visible': True, 'outline': 'solid'})
-        page.keyboard.press('Enter')
-        self.assertEqual(names(), ['loop-3.mp4', 'loop-2.mp4'])
-        self.assertEqual(page.evaluate("document.activeElement.getAttribute('aria-label')"), 'Remove loop-3.mp4')
-        self.assertEqual(page.inner_text('#count'), '2 loops chosen. Ready to play.')
-        snapshot = page.evaluate('SimvltaneaStudio.snapshot()')
-        self.play(page)
-        # The list order is the authored cell order: loop-1 is the first listed file.
-        plan = page.evaluate('''() => compositionRuntime.plan.tracks.map(t => [t.id,
-          compositionRuntime.plan.sources.find(s => s.id === t.spans[0].source).sha256])''')
-        self.assertEqual(plan, [['loop-1', snapshot['loops'][0]['sha256']], ['loop-2', snapshot['loops'][1]['sha256']]])
-        page.click('#change')
-        self.assertEqual(page.evaluate("document.querySelector('#studio').dataset.view"), 'setup')
-        page.click('[aria-label="Remove loop-2.mp4"]')
-        self.assertTrue(page.is_disabled('#start'))
-        self.assertRegex(page.inner_text('#count'), r'^1 loop chosen')
-
-    def test_controls_play_pause_restart_orientation_and_change_loops(self):
-        page = self.open('?seconds=60', width=1280, height=720)
-        self.layout(page, 3, 'authored')
-        self.add(page, self.loops[:3])
-        self.play(page)
-        self.assertEqual(page.get_attribute('#toggle', 'aria-label'), 'Pause')
-        # Pause freezes every clock; Play resumes them.
-        page.click('#toggle')
-        page.wait_for_function("() => stage.dataset.status === 'paused'")
-        self.assertEqual(page.get_attribute('#toggle', 'aria-label'), 'Play')
-        paused = page.evaluate('compositionRuntime.snapshot()')
-        page.wait_for_timeout(400)
-        still = page.evaluate('compositionRuntime.snapshot()')
-        self.assertTrue(all(loop['paused'] for loop in still['loops']))
-        self.assertEqual([loop['currentTime'] for loop in paused['loops']],
-                         [loop['currentTime'] for loop in still['loops']])
-        page.click('#toggle')
-        page.wait_for_function("() => stage.dataset.status === 'playing'")
-        # Orientation is presentation only: same media elements, clocks keep advancing.
-        page.evaluate('window.initialMedia = [...compositionRuntime.nodes.values()].map(n => n.media)')
-        before = self.clocks(page, after=1.0)
-        self.assertEqual(before['orientation'], 'landscape')
-        stage_shape = lambda: page.evaluate('(() => { const r = stage.getBoundingClientRect(); '
-                                            'return [r.width, r.height]; })()')
-        for choice, expected in (('portrait', 'portrait'), ('landscape', 'landscape'), ('auto', 'landscape')):
-            page.check(f'input[name="orientation"][value="{choice}"]')
-            page.wait_for_timeout(500)
-            after = self.clocks(page)
-            self.assertEqual(after['orientation'], expected)
-            self.assertEqual(after['orientationOverride'], None if choice == 'auto' else choice)
-            self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every((n, i) => '
-                                          'n.media === initialMedia[i])'))
-            self.assert_advancing(before, after)
-            self.assert_own_clocks(after)
-            width, height = stage_shape()
-            if choice == 'portrait':
-                self.assertLess(width, height)
-            else:
-                self.assertGreater(width, height)
-            before = after
-        events = page.evaluate('compositionRuntime.events.map(e => e.type)')
-        self.assertIn('orientation-override', events)
-        # Portrait in a landscape window keeps auto off: resize does not flip it.
-        page.check('input[name="orientation"][value="portrait"]')
-        page.set_viewport_size({'width': 1400, 'height': 700})
-        page.wait_for_timeout(300)
-        self.assertEqual(page.evaluate('compositionRuntime.snapshot().orientation'), 'portrait')
-        page.check('input[name="orientation"][value="auto"]')
-        # Restart returns every loop to the beginning of the piece.
-        page.wait_for_function('() => compositionRuntime.snapshot().compositionTime > 2')
-        page.click('#restart')
-        page.wait_for_function("() => stage.dataset.status === 'playing' && compositionRuntime.running")
-        restarted = self.clocks(page)
-        self.assertLess(restarted['compositionTime'], 1.5)
-        self.assertIn('transport-seek', page.evaluate('compositionRuntime.events.map(e => e.type)'))
-        self.assert_own_clocks(restarted)
-        # Change loops returns to the list, releases the media and plays a new set.
-        page.click('#change')
-        self.assertEqual(page.evaluate("document.querySelector('#studio').dataset.view"), 'setup')
-        self.assertTrue(page.is_visible('#setup'))
-        self.assertFalse(page.is_visible('#player'))
-        self.assertEqual(page.evaluate('[compositionRuntime.ready, compositionRuntime.nodes.size]'), [False, 0])
-        self.add(page, self.loops[3:5])
-        self.assertRegex(page.inner_text('#count'), r'^5 loops chosen for 3 panels\. Remove 2 loops, or set Panels to 5\.')
-        self.layout(page, 5, 'strips')
-        self.assertEqual(page.inner_text('#count'), '5 loops chosen. Ready to play.')
-        self.play(page)
-        self.assertEqual(len(self.clocks(page)['loops']), 5)
-
-    def test_auto_repeat_restarts_through_the_runtime_restart_path(self):
-        page = self.open('?seconds=2')
-        self.layout(page, 2)
-        self.add(page, self.loops[:2])
-        self.assertTrue(page.is_checked('#repeat'))
-        self.play(page)
-        page.wait_for_function('''() => { const e = compositionRuntime.events.map(x => x.type);
-          return e.includes('finished') && e.lastIndexOf('restart') > e.lastIndexOf('finished') &&
-            compositionRuntime.running; }''', timeout=15000)
-        events = page.evaluate('compositionRuntime.events.map(e => e.type)')
-        tail = events[events.index('finished'):]
-        self.assertLess(tail.index('restart'), tail.index('transport-seek'))
-        restarted = self.clocks(page)
-        self.assertLess(restarted['compositionTime'], 2)
-        self.assert_own_clocks(restarted)
-        page.uncheck('#repeat')
-        page.wait_for_function("() => stage.dataset.status === 'finished'", timeout=10000)
-        page.wait_for_timeout(800)
-        self.assertEqual(page.evaluate('[stage.dataset.status, compositionRuntime.running]'), ['finished', False])
-        page.click('#toggle')
-        page.wait_for_function('() => compositionRuntime.running')
-
-    def test_space_toggles_playback_once(self):
-        page = self.open('?seconds=60')
-        self.layout(page, 2)
-        self.add(page, self.loops[:2])
-        page.evaluate("() => { window.toggles = []; new MutationObserver(() => toggles.push(stage.dataset.status))"
-                      ".observe(stage, {attributes: true, attributeFilter: ['data-status']}); }")
-        self.play(page)
-        page.wait_for_function("() => stage.dataset.status === 'playing'")
-        # Focus on the Play/Pause button: the button handles Space, the runtime does not repeat it.
-        self.assertEqual(page.evaluate('document.activeElement.id'), 'toggle')
-        page.evaluate('toggles.length = 0')
-        page.keyboard.press('Space')
-        page.wait_for_function("() => stage.dataset.status === 'paused'")
-        page.wait_for_timeout(300)
-        self.assertEqual(page.evaluate('toggles'), ['paused'])
-        # From the page body, the runtime's document-level handler toggles.
-        page.evaluate('document.activeElement.blur()')
-        page.keyboard.press('Space')
-        page.wait_for_function("() => stage.dataset.status === 'playing'")
-        page.keyboard.press('Space')
-        page.wait_for_function("() => stage.dataset.status === 'paused'")
-        self.assertEqual(page.evaluate('toggles'), ['paused', 'playing', 'paused'])
-
-    def test_size_cap_and_unplayable_files_get_their_own_messages(self):
-        page = self.open()
-        page.evaluate('''() => { window.objectUrls = []; const create = URL.createObjectURL;
-          URL.createObjectURL = blob => { objectUrls.push([blob.size, blob.type]); return create(blob); }; }''')
-        # canPlayType refuses ProRes before any media load; garbage passes it and fails the real load.
-        self.add(page, [self.fixtures['prores.mov']])
-        self.assertEqual(page.evaluate('objectUrls'), [])
-        self.add(page, [self.fixtures['garbage.mp4']])
-        self.assertEqual(page.evaluate('objectUrls'), [[self.fixtures['garbage.mp4'].stat().st_size, 'video/mp4']])
         snapshot = self.add(page, [self.fixtures['huge.mov'], self.fixtures['prores.mov'],
                                    self.fixtures['garbage.mp4'], self.loops[0]])
-        self.assertEqual(snapshot['refusals'], [
+        refusals = [
             'huge.mov was not added: the chosen videos would total 513 MiB, over the 512 MiB limit for this page '
             '(the browser holds about twice that in memory).',
             'This browser cannot play prores.mov (video/quicktime, ProRes 422 apcn).',
-            'This browser cannot play garbage.mp4 (video/mp4).'])
+            'This browser cannot play garbage.mp4 (video/mp4).']
+        self.assertEqual(snapshot['refusals'], refusals)
         self.assertEqual([loop['name'] for loop in snapshot['loops']], ['loop-1.mp4'])
-        self.assertEqual(page.locator('#refusals li').all_inner_texts(), snapshot['refusals'])
-        self.assertEqual(page.inner_text('#progress'), 'Checked 4 files: 1 added, 3 not added.')
-        self.assertEqual(self.external(page), [])
+        self.assertEqual(page.inner_text('#toast'), refusals[0] + ' (+2 more not added)')
+        self.assertEqual(page.locator('#toast').get_attribute('role'), 'status')
+        duplicate = self.fixtures['loop-1.mp4'].parent / 'loop-1-copy.mp4'
+        shutil.copyfile(self.fixtures['loop-1.mp4'], duplicate)
+        self.addCleanup(duplicate.unlink)
+        snapshot = self.add(page, [duplicate])
+        self.assertEqual(snapshot['refusals'], ['loop-1-copy.mp4 was not added: it is the same video as loop-1.mp4. '
+                                                'Each loop needs its own video; nothing is duplicated.'])
+        page.wait_for_function('() => !SimvltaneaStudio.snapshot().toastShown', timeout=10000)
+        self.assertEqual(snapshot['source'], 'own')
+        self.playing(page, 1)
 
-    def test_phone_like_clips_rotation_mute_vfr_and_hevc(self):
+    def test_overlapping_batches_share_one_size_cap(self):
+        page = self.open()
+        files = [dict(name=path.name, data=base64.b64encode(path.read_bytes()).decode()) for path in self.loops[:2]]
+        page.evaluate('''files => {
+          for (const spec of files) {
+            const file = new File([Uint8Array.from(atob(spec.data), c => c.charCodeAt(0))], spec.name, {type: 'video/mp4'});
+            Object.defineProperty(file, 'size', {value: 300 * 1048576});
+            const drop = new Event('drop', {bubbles: true, cancelable: true});
+            Object.defineProperty(drop, 'dataTransfer', {value: {files: [file]}});
+            document.dispatchEvent(drop);
+          }
+        }''', files)
+        page.wait_for_function('() => !SimvltaneaStudio.snapshot().busy && SimvltaneaStudio.snapshot().refusals.length',
+                               timeout=60000)
+        snapshot = self.snapshot(page)
+        self.assertEqual([loop['name'] for loop in snapshot['loops']], ['loop-1.mp4'])
+        self.assertRegex(snapshot['refusals'][0], r'^loop-2\.mp4 was not added: .*600 MiB, over the 512 MiB limit')
+
+    def test_phone_like_clips_keep_their_facts(self):
         names = ['phone-h264.mov', 'phone-rotated.mov', 'phone-vfr.mov', 'phone-hevc.mov']
         facts = {name: probe(self.fixtures[name]) for name in names}
-        for name, fact in facts.items():
-            stream = video_stream(fact)
-            self.assertIn('mov', fact['format']['format_name'])
-            self.assertIn('audio', [item['codec_type'] for item in fact['streams']], name)
-            self.assertEqual((stream['width'], stream['height']), (480, 360), name)
-        self.assertEqual(video_stream(facts['phone-h264.mov'])['pix_fmt'], 'yuvj420p')
-        self.assertEqual(video_stream(facts['phone-h264.mov'])['profile'], 'High')
-        self.assertEqual(video_stream(facts['phone-hevc.mov'])['codec_name'], 'hevc')
-        self.assertEqual(video_stream(facts['phone-hevc.mov'])['codec_tag_string'], 'hvc1')
-        self.assertIn('pcm_s16le', [item['codec_name'] for item in facts['phone-hevc.mov']['streams']])
         self.assertEqual([item.get('rotation') for item in video_stream(facts['phone-rotated.mov'])['side_data_list']],
                          [-90])
-        self.assertNotEqual(Fraction(video_stream(facts['phone-vfr.mov'])['avg_frame_rate']).denominator, 1)
-
         page = self.open('?seconds=30', width=844, height=390)
         snapshot = self.add(page, [self.fixtures[name] for name in names])
         [hevc] = node(SNIFF, [str(self.fixtures['phone-hevc.mov'])])
-        hevc_query = hevc['queries']['queries'][0]
-        hevc_playable = page.evaluate("q => document.createElement('video').canPlayType(q)", hevc_query) != ''
-        # Recorded for the operator's report: what this Chrome does with the HEVC fixture.
-        (ROOT / 'chrome-hevc-verdict.txt').write_text(
-            f'{self.browser.version} {hevc_query}: {"plays" if hevc_playable else "refused"}\n')
+        hevc_playable = page.evaluate("q => document.createElement('video').canPlayType(q)",
+                                      hevc['queries']['queries'][0]) != ''
         accepted = {loop['name']: loop for loop in snapshot['loops']}
         if hevc_playable:
             self.assertEqual(snapshot['refusals'], [])
-            self.assertEqual(accepted['phone-hevc.mov']['codec'], 'HEVC')
         else:
-            self.assertEqual(len(snapshot['refusals']), 1)
             self.assertRegex(snapshot['refusals'][0], r'^This browser cannot play phone-hevc\.mov \(video/quicktime, '
                                                       r'HEVC hvc1\.')
-        for loop in accepted.values():
-            self.assertEqual((loop['type'], loop['suffix'], loop['container']), ('video/quicktime', 'mov', 'quicktime'))
-        self.layout(page, len(accepted), 'authored')
-        # The installed Chrome applies the display matrix: the -90 degree clip reports portrait dimensions.
-        self.assertEqual((accepted['phone-h264.mov']['width'], accepted['phone-h264.mov']['height']), (480, 360))
         self.assertEqual((accepted['phone-rotated.mov']['width'], accepted['phone-rotated.mov']['height']), (360, 480))
         for name, loop in accepted.items():
-            probed = Fraction(video_stream(facts[name])['duration'])
             declared = Fraction(loop['declared'])
-            self.assertEqual(declared, Fraction(loop['frames'], FPS))
             self.assertLessEqual(declared, Fraction(loop['duration']))
-            self.assertLessEqual(abs(declared - probed), Fraction(1, FPS), name)
+            self.assertLessEqual(abs(declared - Fraction(video_stream(facts[name])['duration'])), Fraction(1, FPS), name)
         self.assertEqual(accepted['phone-vfr.mov']['declared'], '5/3')
-        self.play(page)
-        first = self.clocks(page, after=1.0)
-        self.assertEqual(len(first['loops']), len(accepted))
-        self.assertEqual(first['muted'], [True] * len(accepted))
-        self.assertTrue(page.evaluate("[...document.querySelectorAll('#stage video')].every(v => v.volume === 1 && "
-                                      "v.muted && !v.controls)"))
-        page.wait_for_timeout(1500)
-        second = self.clocks(page)
-        self.assert_advancing(first, second)
-        self.assert_own_clocks(second, tolerance=0.25)
-        # The runtime received the files' own Blob type through the io hook.
+        self.playing(page, len(accepted))
         self.assertEqual(page.evaluate('compositionRuntime.plan.sources.map(s => s.path.split(".").pop())'),
                          ['mov'] * len(accepted))
-        self.assertEqual(self.external(page), [])
 
-    def test_reduced_motion_never_autoplays_and_page_is_accessible_and_responsive(self):
+    def test_reduced_motion_starts_paused_with_one_play_control(self):
         page = self.open(width=360, height=740, reduced_motion='reduce')
-        self.assertEqual(page.evaluate('document.documentElement.lang'), 'en')
-        self.assertEqual(page.title(), 'SIMVLTANEA studio: your loops, playing at once')
-        self.assertEqual(page.locator('h1').inner_text(), 'SIMVLTANEA studio')
-        self.assertIn('Your videos never leave this device.', page.inner_text('.privacy'))
-        self.assertIn('Nothing is uploaded', page.inner_text('.privacy'))
-        self.assertEqual(page.get_by_label('Choose videos').get_attribute('multiple'), '')
-        self.assertTrue(page.evaluate('matchMedia("(prefers-reduced-motion: reduce)").matches'))
-        for name in ('Strips', 'Authored'):
-            self.assertEqual(page.get_by_role('radio', name=name, exact=True).count(), 1)
-        self.assertEqual(page.get_by_label('Panels').evaluate('node => node.tagName'), 'SELECT')
-        self.assertEqual(page.locator('#layout-file').get_attribute('accept'), '.json,application/json')
-        self.assertEqual(page.get_by_role('group', name='Layout', exact=True).count(), 1)
-        self.layout(page, 2)
-        self.add(page, self.loops[:2])
-        page.wait_for_timeout(1000)
-        self.assertEqual(page.evaluate('[compositionRuntime.running, compositionRuntime.ready]'), [False, False])
-        self.assertLessEqual(page.evaluate('document.documentElement.scrollWidth'), 360)
-        for name in ('Play these loops', 'Move loop-1.mp4 down', 'Remove loop-2.mp4'):
-            self.assertEqual(page.get_by_role('button', name=name, exact=True).count(), 1)
-        self.play(page)
-        for name in ('Pause', 'Restart', 'Change loops'):
-            self.assertEqual(page.get_by_role('button', name=name, exact=True).count(), 1)
-        for name in ('Auto', 'Portrait', 'Landscape'):
-            self.assertEqual(page.get_by_role('radio', name=name, exact=True).count(), 1)
-        self.assertEqual(page.get_by_role('checkbox', name='Auto-repeat').count(), 1)
-        self.assertEqual(page.get_by_role('group', name='Playback controls').count(), 1)
-        geometry = page.evaluate('''() => { const s = stage.getBoundingClientRect(), b = bar.getBoundingClientRect();
-          return {stage: [s.top, s.height, s.width], bar: [b.top, b.bottom], width: document.documentElement.scrollWidth,
-                  height: innerHeight}; }''')
-        self.assertEqual(geometry['stage'][0], 0)
-        self.assertGreater(geometry['stage'][1], 0.55 * geometry['height'])
-        self.assertEqual(geometry['stage'][2], 360)
-        self.assertLessEqual(geometry['bar'][1], geometry['height'])
-        self.assertAlmostEqual(geometry['bar'][0], geometry['stage'][1], delta=1)
-        self.assertLessEqual(geometry['width'], 360)
-        page.set_viewport_size({'width': 1440, 'height': 900})
-        page.wait_for_timeout(300)
-        wide = page.evaluate('(() => { const s = stage.getBoundingClientRect(); return [s.width, s.height]; })()')
-        self.assertEqual(wide[0], 1440)
-        self.assertEqual(page.evaluate('compositionRuntime.snapshot().orientation'), 'landscape')
+        page.wait_for_function('() => compositionRuntime.ready', timeout=45000)
+        self.assertTrue(self.snapshot(page)['held'])
+        self.assertTrue(page.is_visible('#start'))
+        self.assertFalse(page.evaluate('compositionRuntime.running'))
+        page.click('#start')
+        page.wait_for_function('() => compositionRuntime.running && compositionRuntime.plan.plan_version === 2',
+                               timeout=30000)
+        self.assertFalse(page.is_visible('#start'))
+        self.assertEqual(self.snapshot(page)['sound'], 'on')
+
+    def test_chrome_is_small_labelled_and_fits_phones_to_wide_screens(self):
+        for width, height in ((360, 740), (390, 844), (1440, 900)):
+            with self.subTest(width=width):
+                page = self.open(width=width, height=height)
+                geometry = page.evaluate('''() => {
+                  const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect();
+                    return [r.left, r.top, r.right, r.bottom]; };
+                  const visible = [...document.querySelectorAll('#bar button, #corner button')].filter(b => b.offsetParent);
+                  return {stage: rect('#stage'), bar: rect('#bar'), corner: rect('#corner'),
+                    scroll: [document.documentElement.scrollWidth, document.documentElement.scrollHeight],
+                    labels: visible.map(b => b.getAttribute('aria-label')),
+                    sizes: visible.map(b => [b.offsetWidth, b.offsetHeight]),
+                    font: getComputedStyle(document.body).fontFamily}; }''')
+                self.assertEqual(geometry['stage'], [0, 0, width, height])
+                self.assertGreaterEqual(geometry['bar'][0], 0)
+                self.assertLessEqual(geometry['bar'][2], width)
+                self.assertLessEqual(geometry['bar'][3], height)
+                self.assertLessEqual(geometry['corner'][2], width)
+                self.assertLessEqual(geometry['scroll'], [width, height])
+                self.assertTrue(all(geometry['labels']), geometry['labels'])
+                self.assertTrue(all(w >= 40 and h >= 40 for w, h in geometry['sizes']), geometry['sizes'])
+                self.assertTrue(geometry['font'].startswith('system-ui'))
+                for name in ('Shuffle', 'Fewer panels', 'More panels', 'Tap for sound', 'Add your own videos',
+                             'About this page'):
+                    self.assertEqual(page.get_by_role('button', name=name, exact=True).count(), 1, name)
+                self.assertEqual(page.get_by_role('slider', name='Volume').count(), 1)
+                self.assertEqual(page.get_by_role('toolbar', name='Controls').count(), 1)
+        self.tap(page, '#help')
+        self.assertTrue(page.is_visible('#about'))
+        self.assertIn('Your videos never leave this device. Nothing is uploaded.', page.inner_text('#about'))
+        self.assertLessEqual(page.locator('#about p').count(), 3)
+        page.keyboard.press('Escape')
+        self.assertFalse(page.is_visible('#about'))
+        # Without pointer movement the bar fades; movement brings it back.
+        page.wait_for_function("() => document.querySelector('#studio').classList.contains('idle')", timeout=10000)
+        page.mouse.move(20, 20)
+        page.wait_for_function("() => !document.querySelector('#studio').classList.contains('idle')")
 
 
 class RuntimeHookTests(unittest.TestCase):

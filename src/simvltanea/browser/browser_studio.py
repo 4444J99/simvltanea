@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Stage the SIMVLTANEA web studio: a static page that plays a visitor's own loops.
+"""Stage the SIMVLTANEA web studio: a static page of loops on their own clocks.
 
-The studio is client-only. A visitor picks a layout family (strips by default,
-authored, or their own layout file) and a panel count, then drops one video loop
-per panel; the page checks, hashes and compiles them in the browser and plays them
-at once on independent clocks in the family's portrait or landscape layout. The
-families and the counts each offers come from ``layouts.json``, the
-``simvltanea.layout-bundle/2`` that ``layout_bundle_v2()`` builds. Files never leave
-the device. ``stage_studio(output)`` writes the flat, relative-URL site::
+The studio is client-only and plays on load: built-in generative loops, recorded
+in the browser, in a random family, panel count and order (``?seed=`` repeats a
+roll), with each loop's own sound once the visitor first touches the page. A
+visitor may drop their own videos (or a layout file); the page checks, hashes and
+compiles them in the browser. The families and the counts each offers come from
+``layouts.json``, the ``simvltanea.layout-bundle/2`` that ``layout_bundle_v2()``
+builds. Files never leave the device. ``stage_studio(output)`` writes the flat, relative-URL site::
 
     index.html  runtime.js  compiler.js  studio.js  layouts.json
 
@@ -28,75 +28,118 @@ from pathlib import Path
 from simvltanea.browser.layout_bundle import layout_bundle_v2
 
 HERE = Path(__file__).resolve().parent
-STUDIO_TITLE = 'SIMVLTANEA studio: your loops, playing at once'
+STUDIO_TITLE = 'SIMVLTANEA studio: loops on their own clocks'
 STUDIO_FILES = ('index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json')
 
 STYLE = '''
-:root{color-scheme:dark;--bg:#0d0d0d;--fg:#f2f2f2;--muted:#bdbdbd;--line:#4a4a4a;--accent:#ffd54a;--panel:#1b1b1b}
+:root{color-scheme:dark;--bg:#0a0a0b;--fg:rgba(255,255,255,.88);--dim:rgba(255,255,255,.55);
+--glass:rgba(20,20,23,.52);--edge:rgba(255,255,255,.09);--ease:cubic-bezier(.2,.7,.2,1)}
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);
+font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 [hidden]{display:none!important}
-#setup{max-width:46rem;margin:0 auto;padding:1.25rem 1rem 3rem}
-h1{font-size:1.65rem;line-height:1.2;margin:.5rem 0 .75rem;letter-spacing:.03em}
-h2{font-size:1.15rem;margin:1.75rem 0 .25rem}
-p{margin:.5rem 0}
-.privacy{border-left:4px solid var(--accent);padding:.5rem .75rem;background:var(--panel)}
-.drop{margin:1.25rem 0;padding:1.5rem 1rem;border:2px dashed var(--line);border-radius:.75rem;text-align:center}
-.drop.over{border-color:var(--accent);background:#262626}
-button,.button{font:inherit;color:#111;background:var(--fg);border:2px solid var(--fg);border-radius:.4rem;
-padding:.5rem 1rem;min-height:44px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
-button:disabled{opacity:.45;cursor:not-allowed}
-:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
-#files:focus-visible+label{outline:3px solid var(--accent);outline-offset:3px}
-#files:disabled+label{opacity:.45;cursor:not-allowed}
 .visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
 clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
-.hint{color:var(--muted);font-size:.9rem}
-#refusals{color:#ffb8ab;padding-left:1.25rem}
-#refusals:empty{display:none}
-#loops{padding-left:1.75rem;margin:.5rem 0}
-#loops li{padding:.6rem 0;border-bottom:1px solid var(--line)}
-.loop-name{display:block;font-weight:600;overflow-wrap:anywhere}
-.loop-facts{display:block;color:var(--muted);font-size:.9rem}
-.loop-actions{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem}
-.loop-actions button{min-height:40px;padding:.25rem .75rem;color:var(--fg);background:transparent;border-color:var(--line)}
-#start{margin-top:1rem;font-weight:700;background:var(--accent);border-color:var(--accent)}
-#player{position:fixed;inset:0;display:flex;flex-direction:column;background:#000}
-#frame{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;container-type:size}
-#stage{position:relative;width:100%;height:100%;overflow:hidden;background:#000}
-#player[data-orientation=portrait] #stage{width:min(100cqw,calc(100cqh * 9 / 16));height:min(100cqh,calc(100cqw * 16 / 9))}
-#player[data-orientation=landscape] #stage{width:min(100cqw,calc(100cqh * 16 / 9));height:min(100cqh,calc(100cqw * 9 / 16))}
-#stage:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
+#studio{position:fixed;inset:0}
+#studio.idle{cursor:none}
+#frame,#stage,#preview,#ghost{position:absolute;inset:0}
+#frame{z-index:0}
+#bar,#corner,#start,#toast,#about,#drop{z-index:2}
+#stage{overflow:hidden;background:#000}
+#stage:focus-visible{outline:none}
+#preview,#ghost{pointer-events:none;opacity:0;transition:opacity 220ms var(--ease)}
+#preview.on,#ghost.on{opacity:1}
+#ghost.on{transition:none}
 .loop{position:absolute;overflow:hidden;background:#000}
-.loop video,.loop img{width:100%;height:100%;display:block}
-#bar{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem .6rem;background:#111;border-top:1px solid #333;
-padding:.4rem .6rem calc(.4rem + env(safe-area-inset-bottom))}
-#bar button{min-height:40px;padding:.25rem .8rem}
-#bar fieldset{display:flex;flex-wrap:wrap;align-items:center;gap:.1rem .6rem;border:0;margin:0;padding:0}
-#bar legend{float:left;padding:0;margin-right:.2rem;color:var(--muted)}
-#bar label{display:inline-flex;align-items:center;gap:.3rem;min-height:40px}
-#bar input{width:1.1rem;height:1.1rem;margin:0;accent-color:var(--accent)}
-#runtime-status{flex:1 1 14rem;margin:0;font-size:.85rem;color:var(--muted)}
-#layout{border:1px solid var(--line);border-radius:.75rem;margin:1.25rem 0 0;padding:.5rem 1rem 1rem}
-#layout legend{padding:0 .35rem;font-weight:600}
-#families{display:flex;flex-wrap:wrap;gap:.25rem 1.25rem}
-#families label,.panels{display:inline-flex;align-items:center;gap:.45rem;min-height:44px}
-#families input{width:1.15rem;height:1.15rem;margin:0;accent-color:var(--accent)}
-#panels{font:inherit;min-height:44px;min-width:4.5rem;padding:.25rem .5rem;color:var(--fg);background:var(--panel);
-border:2px solid var(--line);border-radius:.4rem}
-.layout-file{margin-top:.5rem}
-#layout-file:focus-visible+label{outline:3px solid var(--accent);outline-offset:3px}
-.layout-file label.button{color:var(--fg);background:transparent;border-color:var(--line)}
-#layout-error{color:#ffb8ab}
-#layout-error:empty,#layout-status:empty{display:none}
-@media (max-width:30rem){#setup{padding-top:.75rem}h1{font-size:1.4rem}#bar{gap:.25rem .45rem}}
-@media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important;
-scroll-behavior:auto!important}}
+.loop video,.loop img,.loop canvas{width:100%;height:100%;display:block}
+#preview canvas{object-fit:cover}
+#bar,#corner{position:fixed;display:flex;align-items:center;gap:2px;padding:5px;border-radius:999px;
+background:var(--glass);border:1px solid var(--edge);box-shadow:0 10px 40px rgba(0,0,0,.35);
+-webkit-backdrop-filter:blur(18px) saturate(150%);backdrop-filter:blur(18px) saturate(150%);
+transition:opacity 240ms var(--ease),transform 240ms var(--ease)}
+#bar{left:50%;bottom:calc(16px + env(safe-area-inset-bottom));transform:translateX(-50%);width:max-content;
+max-width:calc(100vw - 12px)}
+#corner{top:calc(14px + env(safe-area-inset-top));right:calc(14px + env(safe-area-inset-right))}
+.idle #bar{opacity:0;transform:translate(-50%,10px);pointer-events:none}
+.idle #corner{opacity:0;transform:translateY(-10px);pointer-events:none}
+.sep{width:1px;height:22px;margin:0 4px;background:var(--edge)}
+button{font:inherit;color:var(--fg);background:transparent;border:0;border-radius:999px;width:44px;height:44px;flex:none;
+padding:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;position:relative;
+transition:background-color 160ms var(--ease),color 160ms var(--ease),opacity 160ms var(--ease)}
+button:hover{background:rgba(255,255,255,.1);color:#fff}
+button:active{background:rgba(255,255,255,.16)}
+button:disabled{opacity:.3;cursor:default;background:transparent}
+button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+:focus-visible{outline:2px solid #fff;outline-offset:2px}
+#play svg .fill,#start svg .fill{fill:currentColor;stroke:none}
+#play[data-state=playing] .when-paused,#play[data-state=paused] .when-playing{display:none}
+#panel-count{min-width:1.5em;text-align:center;font-variant-numeric:tabular-nums;font-weight:500;color:#fff}
+#families{display:flex}
+#families button[aria-checked=true]{background:rgba(255,255,255,.17);color:#fff}
+#families button[aria-checked=false]{color:var(--dim)}
+#sound{display:flex;align-items:center}
+#volume{width:0;opacity:0;margin:0;height:44px;accent-color:#fff;cursor:pointer;
+transition:width 200ms var(--ease),opacity 200ms var(--ease),margin 200ms var(--ease)}
+#sound:hover #volume,#sound:focus-within #volume{width:84px;opacity:1;margin:0 8px 0 2px}
+[data-sound=on] .s-off,[data-sound=on] .s-lock,[data-sound=off] .s-on,[data-sound=off] .s-lock,
+[data-sound=locked] .s-on,[data-sound=locked] .s-off{display:none}
+[data-sound=locked] #speaker::after{content:"";position:absolute;inset:6px;border-radius:999px;
+border:1.5px solid rgba(255,255,255,.7);animation:pulse 2.4s var(--ease) infinite}
+@keyframes pulse{0%{transform:scale(.8);opacity:.9}70%,100%{transform:scale(1.35);opacity:0}}
+#help{font-weight:600;font-size:17px}
+#start{position:fixed;left:50%;top:50%;width:88px;height:88px;transform:translate(-50%,-50%);display:none;
+background:var(--glass);border:1px solid var(--edge);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px)}
+#start svg{width:34px;height:34px}
+.held #start{display:inline-flex}
+#toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translate(-50%,6px);
+max-width:min(92vw,32rem);padding:10px 16px;border-radius:14px;background:var(--glass);border:1px solid var(--edge);
+-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);text-align:center;font-size:14px;opacity:0;
+pointer-events:none;transition:opacity 200ms var(--ease),transform 200ms var(--ease)}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+#about{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(88vw,22rem);margin:0;
+padding:18px 20px;border-radius:18px;background:rgba(16,16,18,.72);border:1px solid var(--edge);
+-webkit-backdrop-filter:blur(22px);backdrop-filter:blur(22px);box-shadow:0 20px 60px rgba(0,0,0,.5)}
+#about p{margin:0 0 8px}#about p:last-child{margin:0;color:var(--dim);font-size:13px}
+#about:focus-visible{outline-offset:-2px}
+#drop{position:fixed;inset:12px;border:1.5px dashed rgba(255,255,255,.6);border-radius:22px;display:none;
+align-items:center;justify-content:center;background:rgba(0,0,0,.35);pointer-events:none}
+#drop svg{width:56px;height:56px;fill:none;stroke:#fff;stroke-width:1.2;stroke-linecap:round}
+.dragging #drop{display:flex}
+@media (max-width:480px){button{width:40px;height:40px}#bar{padding:4px;gap:0}.sep{margin:0 2px}
+#families button[aria-checked=false]{display:none}#sound:hover #volume{width:0;opacity:0;margin:0}
+#sound:focus-within #volume{width:72px;opacity:1;margin:0 6px 0 0}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
 '''
 STYLE_HASH = base64.b64encode(hashlib.sha256(STYLE.encode()).digest()).decode()
-# Same-origin scripts and layouts.json only; the chosen files play from blob: URLs.
+# Same-origin scripts and layouts.json only; every loop plays from a blob: URL made on this device.
 CONTENT_SECURITY_POLICY = ("default-src 'none'; script-src 'self'; connect-src 'self'; media-src blob:; "
                            f"img-src blob:; style-src 'sha256-{STYLE_HASH}'; base-uri 'none'; form-action 'none'")
+
+
+def _icon(body: str) -> str:
+    return f'<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{body}</svg>'
+
+
+PLAY_ICON = ('<path class="fill when-paused" d="M8 5.5v13l10.5-6.5z"/>'
+             '<rect class="fill when-playing" x="7" y="5.5" width="3.6" height="13" rx="1"/>'
+             '<rect class="fill when-playing" x="13.4" y="5.5" width="3.6" height="13" rx="1"/>')
+ICONS = {
+    'play': _icon(PLAY_ICON),
+    'start': _icon('<path class="fill" d="M8 5.5v13l10.5-6.5z"/>'),
+    'shuffle': _icon('<path d="M3 7h3.2c2.4 0 3.7 1.2 5 3.5l1.6 3c1.3 2.3 2.6 3.5 5 3.5H21"/>'
+                     '<path d="M3 17h3.2c1.5 0 2.6-.5 3.5-1.4M14.3 8.4c.9-.9 2-1.4 3.5-1.4H21"/>'
+                     '<path d="M18 4l3 3-3 3M18 14l3 3-3 3"/>'),
+    'fewer': _icon('<path d="M6 12h12"/>'),
+    'more': _icon('<path d="M12 6v12M6 12h12"/>'),
+    'speaker': _icon('<path d="M4 9.5h3l5-4v13l-5-4H4z"/>'
+                     '<path class="s-on" d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11"/>'
+                     '<path class="s-off" d="M16 9.5l5 5M21 9.5l-5 5"/>'
+                     '<path class="s-lock" d="M16.5 12h.01M19.5 12h.01"/>'),
+    'add': _icon('<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10.5l5-3v9l-5-3"/>'
+                 '<path d="M9.5 9.5v5M7 12h5"/>'),
+    'fullscreen': _icon('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
+    'drop': _icon('<path d="M12 5v14M5 12h14"/>'),
+}
 
 INDEX_HTML = '''<!doctype html>
 <html lang="en">
@@ -105,63 +148,52 @@ INDEX_HTML = '''<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="''' + CONTENT_SECURITY_POLICY + '''">
 <meta name="referrer" content="no-referrer">
-<meta name="description" content="Play your own video loops at once, one per panel, on this device.">
+<meta name="theme-color" content="#0a0a0b">
+<meta name="description" content="Loops on their own clocks, colliding by accident. Add your own videos; they never leave this device.">
 <title>''' + STUDIO_TITLE + '''</title>
 <style>''' + STYLE + '''</style>
 </head>
 <body>
-<main id="studio" data-view="setup">
-<section id="setup" aria-labelledby="studio-title">
-<h1 id="studio-title">SIMVLTANEA studio</h1>
-<p>Pick a layout and a number of panels, then choose one short video loop per panel and watch them play at the
-same time, each repeating on its own clock. Every panel is one of your loops, never filler or a copy.</p>
-<p class="privacy"><strong>Your videos never leave this device.</strong> Nothing is uploaded: this page reads, checks and
-plays the files inside your browser.</p>
-<fieldset id="layout">
-<legend>Layout</legend>
-<div id="families" role="radiogroup" aria-label="Layout family"></div>
-<label class="panels" for="panels">Panels <select id="panels"></select></label>
-<p class="hint">Strips fill the screen edge to edge with one band per loop, zoomed in more the fewer
-panels there are. Authored layouts are the hand-placed engineering pairs.</p>
-<div class="layout-file">
-<input id="layout-file" class="visually-hidden" type="file" accept=".json,application/json">
-<label for="layout-file" class="button">Use my own layout file</label>
-<p class="hint">A layout preset or layout pair JSON file. It is read on this device and never uploaded.</p>
+<main id="studio">
+<h1 class="visually-hidden">SIMVLTANEA studio</h1>
+<div id="frame">
+<div id="stage" role="region" aria-label="Loops playing at once"></div>
+<div id="preview" aria-hidden="true"></div>
+<div id="ghost" aria-hidden="true"></div>
 </div>
-<p id="layout-status" role="status" aria-live="polite"></p>
-<p id="layout-error" role="alert"></p>
-</fieldset>
-<div id="drop" class="drop">
-<p>Drop video files here, or</p>
-<input id="files" class="visually-hidden" type="file" multiple accept="video/*,.mov,.mp4,.m4v,.webm">
-<label for="files" class="button">Choose videos</label>
-<p class="hint">MP4 or QuickTime MOV with H.264, or HEVC where this browser can play it.
-Sound is never played. Up to 512 MiB in total.</p>
+<button id="start" type="button" aria-label="Play">''' + ICONS['start'] + '''</button>
+<div id="bar" role="toolbar" aria-label="Controls">
+<button id="play" type="button" aria-label="Pause" data-state="playing">''' + ICONS['play'] + '''</button>
+<button id="shuffle" type="button" aria-label="Shuffle" aria-keyshortcuts="R">''' + ICONS['shuffle'] + '''</button>
+<span class="sep" aria-hidden="true"></span>
+<div role="group" aria-label="Panels">
+<button id="fewer" type="button" aria-label="Fewer panels">''' + ICONS['fewer'] + '''</button>
+<output id="panel-count" aria-live="polite"></output>
+<button id="more" type="button" aria-label="More panels">''' + ICONS['more'] + '''</button>
 </div>
-<p id="progress" role="status" aria-live="polite"></p>
-<ul id="refusals" aria-label="Files not added" aria-live="polite"></ul>
-<h2 id="loops-title">Your loops</h2>
-<p id="count" role="status" aria-live="polite">No loops chosen yet.</p>
-<ol id="loops" aria-labelledby="loops-title"></ol>
-<button id="start" type="button" disabled>Play these loops</button>
-<p id="length" class="hint"></p>
-<p id="runtime-note" class="hint"></p>
-</section>
-<section id="player" aria-label="Playback" data-orientation="auto" hidden>
-<div id="frame"><div id="stage" role="region" aria-label="Your loops, playing at once"></div></div>
-<div id="bar" role="group" aria-label="Playback controls">
-<button id="toggle" type="button" aria-label="Play">Play</button>
-<button id="restart" type="button">Restart</button>
-<fieldset id="orientation"><legend>Layout</legend>
-<label><input type="radio" name="orientation" value="auto" checked>Auto</label>
-<label><input type="radio" name="orientation" value="portrait">Portrait</label>
-<label><input type="radio" name="orientation" value="landscape">Landscape</label>
-</fieldset>
-<label><input id="repeat" type="checkbox" checked>Auto-repeat</label>
-<button id="change" type="button">Change loops</button>
-<p id="runtime-status" role="status" aria-live="polite">Choose loops to begin.</p>
+<span class="sep" aria-hidden="true"></span>
+<div id="families" role="radiogroup" aria-label="Layout"></div>
+<span class="sep" aria-hidden="true"></span>
+<div id="sound">
+<button id="speaker" type="button" aria-label="Tap for sound" aria-keyshortcuts="M">''' + ICONS['speaker'] + '''</button>
+<input id="volume" type="range" min="0" max="100" step="1" value="70" aria-label="Volume">
 </div>
-</section>
+<button id="add" type="button" aria-label="Add your own videos">''' + ICONS['add'] + '''</button>
+<input id="files" class="visually-hidden" type="file" multiple tabindex="-1" aria-hidden="true"
+accept="video/*,.mov,.mp4,.m4v,.webm,.json,application/json">
+</div>
+<div id="corner" role="toolbar" aria-label="Page">
+<button id="fullscreen" type="button" aria-label="Full screen" aria-keyshortcuts="F">''' + ICONS['fullscreen'] + '''</button>
+<button id="help" type="button" aria-label="About this page" aria-expanded="false" aria-controls="about">?</button>
+</div>
+<div id="about" role="dialog" aria-label="About" tabindex="-1" hidden>
+<p>Loops on their own clocks, colliding by accident.</p>
+<p>Your videos never leave this device. Nothing is uploaded.</p>
+<p>Space play · R shuffle · M sound · F full screen · ← → panels</p>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+<p id="runtime-note" hidden></p>
+<div id="drop" aria-hidden="true">''' + ICONS['drop'] + '''</div>
 </main>
 <script src="compiler.js" defer></script>
 <script src="studio.js" defer></script>
