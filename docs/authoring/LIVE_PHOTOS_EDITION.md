@@ -93,7 +93,9 @@ the folder.
     ├── batches/<batch>.json       which clips went into which batch
     ├── tags/<uuid>.json           final per-clip record (the authoritative one)
     ├── tags.jsonl                 append-only copy as of collection time (historical)
-    └── ledger.jsonl               cost estimate per collected batch
+    ├── ledger.jsonl               cost estimate per collected batch
+    ├── audio/<uuid>.json|.txt     written by screen_audio.py (mode 0600; the .txt is a transcript)
+    └── lab-id-salt                written by build_lab_dataset.py (mode 0600; the secret behind the lab ids)
 ```
 
 A `.done` receipt marks an item as finished. Items without one are exported
@@ -172,7 +174,16 @@ python3 -m tools.media.export_photos_album --root "$LIVE_ROOT" --limit 12   # tr
 python3 -m tools.media.export_photos_album --root "$LIVE_ROOT"              # whole album
 touch "$LIVE_ROOT/STOP"                                                      # stop after in-flight items
 rm "$LIVE_ROOT/STOP"                                                         # then re-run to resume
+python3 -m tools.media.export_photos_album --root "$LIVE_ROOT" --stop-after 500   # stop by itself at 500
 ```
+
+`--stop-after N` creates `STOP` for you once `export-manifest.jsonl` holds N
+items. It counts the whole root, so a resumed run counts earlier work, and a
+run that starts with N or more receipts exports nothing new. The per-item `STOP`
+check does the stopping, so items already in flight still finish: with several
+workers, up to `--workers` minus 1 more items can land. Exit code 2, resume
+rules and receipts are the same as for a `STOP` file you create yourself. Remove
+`STOP` and re-run without the option to continue.
 
 Useful options: `--album NAME` (exact name, default `simvl-live`), `--workers`,
 `--offset`, `--limit`, `--rounds` (retry rounds for failures, default 3),
@@ -349,3 +360,117 @@ python3 -m tools.media.export_photos_album --root "$LIVE_ROOT" --hotspot-budget-
 Prefer Wi-Fi or Ethernet for the first export. A rerun costs nothing for
 finished items. The tagger uploads about 3 small JPEGs per clip, so a hotspot
 is a poor fit for it as well; check the projected cost first.
+
+## Screening audio and building the lab dataset
+
+Three more local tools prepare the playable lab's private data. None of them
+sends anything off the Mac: the speech model runs locally, and the model
+download fetches a public file and carries no media or metadata. Their paths
+have no built-in default. Each takes an option and falls back to an
+environment variable, so nothing machine-specific lives in the repository:
+
+| Tool | Option | Environment fallback |
+| --- | --- | --- |
+| `screen_audio` | `--root`, `--model` | `SIMVLTANEA_LIVE_PHOTOS_ROOT`, `SIMVLTANEA_WHISPER_MODEL` |
+| `build_lab_dataset` | `--root`, `--dest` | `SIMVLTANEA_LIVE_PHOTOS_ROOT`, `SIMVLTANEA_LAB_DATA_DIR` |
+| `fetch_speech_model` | `--dest` | `SIMVLTANEA_WHISPER_MODEL_DIR` |
+
+Every `--root` and `--dest` goes through the same private-root guard as the
+exporter: a path inside a `.photoslibrary` package (any letter case, directly or
+through a symlink) or inside the checkout outside `var/` is refused. A missing
+`ffmpeg`, `ffprobe`, `whisper-cli` or model file prints one line and exits
+non-zero, without a traceback. `--help` works with nothing installed.
+
+### Fetch the speech model
+
+```sh
+python3 -m tools.media.fetch_speech_model --dest /path/outside/the/checkout/models/whisper
+```
+
+This downloads `ggml-base.en.bin` (about 148 MB) from the whisper.cpp
+repository on Hugging Face, resumes a partial download, and checks the size and
+SHA-256 against the publisher's Git LFS metadata. On a mismatch it deletes the
+file and exits 1. It is the only one of these tools that uses the network.
+`whisper-cli` itself comes from whisper.cpp (`brew install whisper-cpp` on
+macOS).
+
+### Screen the audio for speech
+
+```sh
+export SIMVLTANEA_LIVE_PHOTOS_ROOT=/path/outside/the/checkout/live-photos
+export SIMVLTANEA_WHISPER_MODEL=/path/outside/the/checkout/models/whisper/ggml-base.en.bin
+python3 -m tools.media.screen_audio --limit 20     # trial
+python3 -m tools.media.screen_audio                # every tagged clip not yet screened
+python3 -m tools.media.screen_audio --force        # screen everything again
+```
+
+For each tagged clip it extracts the audio, runs `whisper-cli`, and writes two
+files under `analysis/audio/` with mode 0600 (the folder is 0700):
+
+- `<uuid>.json` holds derived fields only: `screened`, `has_audio`, `speech`,
+  `words`, `flags` and `low_confidence`. This is what other tools may read.
+- `<uuid>.txt` holds the raw transcript for the owner's own review. No other
+  tool reads it, it is never printed, never served and never committed.
+
+The log prints counts only. A clip without an audio stream is recorded as
+`has_audio: false` and never transcribed. Whisper invents text on silence and
+music, so known filler such as "Thank you." counts as no speech and sets
+`low_confidence`. The flags are cheap text heuristics, not a classifier:
+`number_sequence`, `email_like`, `introduces_self`, `possible_name` and
+`long_speech`. A clip whose transcription fails gets no record and is retried
+on the next run.
+
+What is said is deliberately not classified. Judging hate, sexual content or
+threats from transcripts would mean sending the transcripts to an API, which
+needs the owner's separate consent. About a third to 43 percent of the clips
+that have audio contain speech, so the lab's default speech policy is `mute`
+(the picture plays, the sound does not); `play` and `exclude` are choices the
+owner makes in the lab.
+
+### Build the lab dataset
+
+```sh
+export SIMVLTANEA_LAB_DATA_DIR=/path/outside/the/checkout/lab-data
+python3 -m tools.media.build_lab_dataset
+```
+
+The lab loads the result with `/app/?data=/lab-data/`. Only clips whose tag
+record is `clip-analysis/v2`, error-free, not `needs_review`, with a
+`privacy.sharing_sensitivity` and a safety verdict of `clear` are built.
+Unsafe, untagged, v1-tagged and review clips are skipped and counted.
+
+| Output | Content |
+| --- | --- |
+| `media/<id>.mp4` | the `proxy` recipe of `independent_loop_compositor` (full to limited range and the smpte170m to bt709 matrix, rotation baked, constant 24 fps, 540 px short side), H.264 CRF 27, faststart, and the clip's audio kept as AAC mono 64 kb/s |
+| `still/<id>.jpg` | the real still, long side 1280, converted with `sips` |
+| `data/clips.json` | `{"version": 1, "clips": [...]}`: the shape the lab already reads |
+
+- **Opaque ids.** `id` is the first 20 hex digits of an HMAC-SHA256 of the Photos
+  uuid, keyed with a random salt that the tool creates in
+  `<root>/analysis/lab-id-salt` (mode 0600). The same clip gets the same id on
+  every run and every dataset built from that root; the uuid cannot be
+  recovered from it. `clips.json`, `media/<id>.mp4` and `still/<id>.jpg` use
+  that one string, and no uuid appears in any file name or value. Keep the
+  salt private and keep it: deleting it renames every clip. Files in `media/`
+  and `still/` that belong to no built clip any more (for example a clip that
+  was later flagged) are removed.
+- **Date, never place.** `captured_at` is the original container's creation
+  time. No location, GPS key or caption, note or reason is written.
+- **Display geometry.** `width`, `height` and `orientation` describe the clip as
+  it plays (a phone portrait clip is `portrait`), using the same helper as the
+  tagger.
+- **Audio state is always written.** `audio` is `{"screened": false}` when the
+  clip has no record from `screen_audio`, which makes the lab mute it by
+  default. A screened clip carries `screened`, `speech`, `words`, `flags` and
+  `low_confidence`, never a transcript.
+- **Stills need `sips`, which exists only on macOS.** Where it is missing
+  (Ubuntu, CI) the builder prints one line, `stills skipped: sips not found
+  (macOS only) ...`, writes an empty `still` for the affected clips, and exits
+  0; the lab then falls back to the video. Stills are never dropped silently.
+- **Incremental.** A clip whose `media/<id>.mp4` and still already exist is not
+  encoded again. `data/clips.json` is rewritten from everything built.
+- **FFmpeg versions.** The encode uses no option newer than FFmpeg 6.1 and
+  relies on default autorotation; it also runs on FFmpeg 9.
+
+The dataset is private: it holds the owner's media. Do not commit it, and serve
+it only to the owner. Nothing in these three tools leaves the Mac.
