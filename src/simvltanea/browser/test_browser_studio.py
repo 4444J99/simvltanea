@@ -661,8 +661,13 @@ class StudioBrowserTests(unittest.TestCase):
                 orientation = 'landscape' if width >= height else 'portrait'
                 self.assertEqual(first['orientation'], orientation)
                 tiling = self.tiling(page)
-                self.assertAlmostEqual(tiling['area'], 1, delta=0.01)
                 along = 2 if orientation == 'portrait' else 3  # rows span the width, columns the height
+                # The strips tile the stage. Each cell may be drawn a declared 2 device pixels under the next one
+                # (the bleed that removes hairlines), so the boxes may add up to slightly more than the stage.
+                stage_w, stage_h = tiling['stage']
+                bleed = (count - 1) * 2 * (stage_w if orientation == 'portrait' else stage_h) / (stage_w * stage_h)
+                self.assertGreaterEqual(tiling['area'], 1 - 0.01)
+                self.assertLessEqual(tiling['area'], 1 + bleed + 0.01)
                 for box in tiling['boxes']:
                     self.assertAlmostEqual(box[along], tiling['stage'][along - 2], delta=1)
                 page.wait_for_timeout(700)
