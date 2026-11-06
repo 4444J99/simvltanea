@@ -207,9 +207,12 @@ def adjacency(cells: list) -> list[dict[str, Any]]:
     return _shared_edges(boxes)
 
 
-def _corner_rule(boxes: list[tuple[Fraction, ...]], edges: list[dict[str, Any]], where: _Where) -> None:
+def _corner_rule(boxes: list[tuple[Fraction, ...]], edges: list[dict[str, Any]], radius: Fraction,
+                 where: _Where) -> None:
     # Only corners on a side shared with an earlier-drawn neighbour are rounded; each such
-    # corner must have that earlier neighbour's bleed beneath it.
+    # corner must have that earlier neighbour's bleed beneath its whole cutout. Along the side
+    # the earlier spans must run without a gap from the corner for corner_radius (a fraction
+    # of the minor dimension, so at most that fraction of the side's axis) or to the far corner.
     _require(edges, where, "corner-rule",
              "presentation.corner_radius > 0 requires cells that share an edge; no corner can be rounded")
     spans: dict[tuple[int, str], list[tuple[Fraction, Fraction]]] = {}
@@ -219,9 +222,19 @@ def _corner_rule(boxes: list[tuple[Fraction, ...]], edges: list[dict[str, Any]],
     for (index, side), covered in sorted(spans.items()):
         x, y, w, h = boxes[index]
         low, high = (x, x + w) if side in ("top", "bottom") else (y, y + h)
-        for corner in (low, high):
-            _require(any(a <= corner <= b for a, b in covered), where.at(cell=index), "corner-rule",
+        for corner, inward in ((low, True), (high, False)):
+            reach, grew = corner, True
+            while grew:
+                grew = False
+                for a, b in covered:
+                    if (a <= reach < b) if inward else (a < reach <= b):
+                        reach, grew = (b if inward else a), True
+            run = abs(reach - corner)
+            _require(run > 0, where.at(cell=index), "corner-rule",
                      f"rounded {side} corner at {corner} has no earlier-drawn neighbour beneath it")
+            _require(run >= min(radius, high - low), where.at(cell=index), "corner-rule",
+                     f"rounded {side} corner at {corner} has earlier-drawn neighbours beneath only {run} "
+                     f"from it, less than corner_radius {radius}")
 
 
 def _validate_layout(layout: Any, loop_ids: set[str] | None, where: _Where) -> list[str]:
@@ -288,7 +301,7 @@ def _validate_layout(layout: Any, loop_ids: set[str] | None, where: _Where) -> l
         _require(0 <= radius <= STYLE_MAX, where, "corner-radius",
                  "presentation.corner_radius must be in 0..1/20 of the canvas minor dimension")
         if radius:
-            _corner_rule(boxes, edges, where)
+            _corner_rule(boxes, edges, radius, where)
         jitter = _rational(presentation["lateral_jitter"], "presentation.lateral_jitter", where, "lateral-jitter")
         _require(0 <= jitter <= STYLE_MAX, where, "lateral-jitter",
                  "presentation.lateral_jitter must be in 0..1/20 of the canvas extent along the strip")

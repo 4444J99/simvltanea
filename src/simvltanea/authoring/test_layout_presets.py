@@ -232,6 +232,28 @@ class SeamGeometryTests(unittest.TestCase):
         cells[1], cells[2] = cells[2], cells[1]
         validate_layout_pair(layouts, loops)
 
+    def test_corner_rule_needs_earlier_spans_along_the_whole_radius(self):
+        loops = {f"loop-{k + 1}" for k in range(5)}
+
+        def pair(edge):
+            # Two thin upper cells at the corners, then the wide bottom cell, then the upper filling.
+            layouts = strips_layouts(5, preset(style={"corner_radius": "1/20", "lateral_jitter": "0"}))
+            rects = [["0", "0", edge, "1/2"], [str(1 - Fraction(edge)), "0", edge, "1/2"], ["0", "1/2", "1", "1/2"],
+                     [edge, "0", "1/50", "1/2"], [str(Fraction(edge) + Fraction(1, 50)), "0",
+                                                  str(1 - 2 * Fraction(edge) - Fraction(1, 50)), "1/2"]]
+            for cell, rect in zip(layouts["portrait"]["cells"], rects):
+                cell["rect"] = rect
+            return layouts
+
+        # A 1/100 corner cell backs the wide cell's rounded corner for 1/100 of the width, not the 1/20
+        # radius: the rest of the cutout would show the canvas behind the depth-only bleed.
+        message = raises_code(self, "corner-rule", validate_layout_pair, pair("1/100"), loops)
+        self.assertIn("cell 2", message)
+        self.assertIn("rounded top corner at 0 has earlier-drawn neighbours beneath only 1/100 from it, "
+                      "less than corner_radius 1/20", message)
+        # Exactly the radius is enough; so is a whole side shorter than the radius (cell 3's 1/50 bottom).
+        validate_layout_pair(pair("1/20"), loops)
+
 
 class ZoomTests(unittest.TestCase):
     def test_zoom_table(self):
