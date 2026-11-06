@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 from tools.paths import REPO_ROOT, VAR_DIR
@@ -18,8 +19,13 @@ GIT_REDIRECT_VARIABLES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COM
 
 
 def inside_photos_library(path: Path) -> bool:
-    """Return True when any component of ``path`` is a ``.photoslibrary`` package."""
-    return any(part.lower().endswith(PHOTOS_LIBRARY_SUFFIX) for part in path.parts)
+    """Return True when any component of ``path`` is a ``.photoslibrary`` package.
+
+    Names are compared after Unicode normalisation and case folding, because the default macOS volume does the
+    same: ``X.photoſlibrary`` (LATIN SMALL LETTER LONG S) opens ``X.photoslibrary`` although ``str.lower`` leaves it
+    unchanged.
+    """
+    return any(unicodedata.normalize("NFC", part).casefold().endswith(PHOTOS_LIBRARY_SUFFIX) for part in path.parts)
 
 
 def _real(path: Path | str) -> Path:

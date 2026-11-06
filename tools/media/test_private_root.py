@@ -235,6 +235,26 @@ class ExistingRefusalTests(SandboxTestCase):
             self.assertIn("Photos library", str(caught.exception))
         self.assertEqual(list(library.iterdir()), [])
 
+    def test_unicode_case_fold_aliases_of_the_library_suffix_are_refused(self):
+        # U+017F (LATIN SMALL LETTER LONG S) folds to "s" under Unicode case folding, the rule the default macOS
+        # volume applies: "X.photoſlibrary" opens "X.photoslibrary", but str.lower() leaves the character unchanged.
+        for name in ("X.photoſlibrary", "X.PhotoſLibrary", "x.PHOTOſLIBRARY"):
+            self.assertTrue(private_root.inside_photos_library(self.base / name / "inner"), name)
+            with self.assertRaises(SystemExit) as caught:
+                self.resolve(self.base / name / "x")
+            self.assertIn("Photos library", str(caught.exception))
+
+    def test_the_alias_really_reaches_the_library_on_a_volume_that_folds_unicode_case(self):
+        library = self.base / "Real.photoslibrary"
+        library.mkdir()
+        (library / "marker").write_text("x")
+        alias = self.base / "Real.photoſlibrary"
+        if not (alias / "marker").exists():
+            self.skipTest("this volume does not alias Unicode case folds")
+        with self.assertRaises(SystemExit):
+            self.resolve(alias / "new-file")
+        self.assertEqual(sorted(entry.name for entry in library.iterdir()), ["marker"])
+
 
 if __name__ == "__main__":
     unittest.main()
