@@ -171,7 +171,7 @@ class SeedEffectTests(unittest.TestCase):
 
 class EventsAndBanksTests(unittest.TestCase):
     """DOC-F6: the page says a play state usually has events and multi-source banks (which the in-browser client compiler
-    refuses), with one exception: a state with every loop pinned has neither."""
+    now reads too), with one exception: a state with every loop pinned has neither."""
 
     def shape(self, config, n=2):
         state = play(config, n, 20, 1, pool=60)["state"]
