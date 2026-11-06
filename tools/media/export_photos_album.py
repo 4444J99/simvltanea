@@ -16,6 +16,8 @@ Layout under --root (private; never committed; may live outside the checkout):
   export-manifest.jsonl       one line per completed item
   export-failures.jsonl       one line per failed attempt
 Create <root>/STOP to finish in-flight items and exit; remove it and re-run to resume.
+``--stop-after N`` creates <root>/STOP for you once export-manifest.jsonl holds N items (it counts the whole root,
+so a resumed run counts earlier work); with several workers up to workers-1 further in-flight items still finish.
 
 Only UUIDs are logged or recorded: never names, captions or paths of personal media.
 
@@ -263,6 +265,7 @@ class ExportSettings:
     timeout: int = 3600
     launcher: tuple[str, ...] = ()
     guard: MeterGuard = field(default_factory=MeterGuard)
+    stop_after: int = 0  # 0 = never; otherwise create <root>/STOP once the manifest holds this many items
 
 
 _append_lock = threading.Lock()
@@ -271,6 +274,19 @@ _append_lock = threading.Lock()
 def append(path: pathlib.Path, record: dict) -> None:
     with _append_lock, path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def stop_if_enough(settings: ExportSettings) -> None:
+    """Create <root>/STOP once ``export-manifest.jsonl`` has ``settings.stop_after`` lines (the per-item STOP gate does the rest)."""
+    if settings.stop_after < 1:
+        return
+    try:
+        with (settings.root / "export-manifest.jsonl").open("rb") as handle:
+            lines = sum(1 for line in handle if line.strip())
+    except FileNotFoundError:
+        return
+    if lines >= settings.stop_after:
+        (settings.root / "STOP").touch()
 
 
 def uuid_of(photos_id: str) -> str:
@@ -323,6 +339,7 @@ def export_one(settings: ExportSettings, photos_id: str) -> tuple[str, str, str]
     folder = root / "originals" / uuid
     if (folder / ".done").exists():
         return "skip", uuid, ""
+    stop_if_enough(settings)
     gate = settings.guard.gate(root)  # honours STOP and the metered-link rule per item; may wait for hours
     if gate != "go":
         return gate, uuid, ""
@@ -361,6 +378,7 @@ def export_one(settings: ExportSettings, photos_id: str) -> tuple[str, str, str]
     temporary.replace(folder / ".done")  # the receipt is the resume marker: write it last, atomically
     append(root / "export-manifest.jsonl", receipt)
     settings.guard.record(sum(entry["bytes"] for entry in receipt["files"]))
+    stop_if_enough(settings)
     return "ok", uuid, ""
 
 
@@ -456,6 +474,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="GB allowed while on a metered link (phone hotspot). Default 0 = none.")
     parser.add_argument("--wait", action="store_true",
                         help="when blocked by the metered-link rule, sleep and resume on a real network")
+    parser.add_argument("--stop-after", type=int, default=0, metavar="N",
+                        help="create <root>/STOP once N items are in export-manifest.jsonl (0 = never); "
+                             "re-run without it to continue")
     parser.add_argument("--launcher", default="",
                         help="optional command prefix that runs osascript with Photos automation permission "
                              "(for a host process that holds the macOS privacy grant)")
@@ -503,7 +524,8 @@ def export(args, launcher: tuple[str, ...]) -> int:
               flush=True)
         return EXIT_LOCKED
     with lock:
-        settings = ExportSettings(root=root, timeout=args.timeout, launcher=launcher, guard=guard)
+        settings = ExportSettings(root=root, timeout=args.timeout, launcher=launcher, guard=guard,
+                                    stop_after=args.stop_after)
         ids = load_ids(settings, args.album, args.refresh_ids)[args.offset:]
         if args.limit:
             ids = ids[: args.limit]
@@ -532,6 +554,8 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("workers", "rounds"):
         if getattr(args, name) < 1:
             raise SystemExit(f"--{name} must be at least 1")
+    if args.stop_after < 0:
+        raise SystemExit("--stop-after must be >= 0")
     if min(args.offset, args.limit, args.timeout) < 0 or args.timeout == 0:
         raise SystemExit("--offset and --limit must be >= 0 and --timeout must be positive")
     launcher = tuple(shlex.split(args.launcher))

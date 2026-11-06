@@ -563,6 +563,31 @@ class StopTests(ExporterTestCase):
         self.assertEqual(self.host.exports, [pid(1), pid(2)])
 
 
+class StopAfterTests(ExporterTestCase):
+    def test_stop_after_creates_stop_once_n_items_are_in_the_manifest_and_a_rerun_resumes(self):
+        self.seed({n: live_photo(bytes([96 + n])) for n in range(1, 6)})
+        self.assertEqual(self.run_main("--stop-after", "2"), 2)
+        self.assertEqual(self.host.exports, [pid(1), pid(2)])
+        self.assertEqual(len(self.log_lines("export-manifest.jsonl")), 2)
+        self.assertTrue((self.root / "STOP").exists())
+        self.assertIn("STOP file present", self.output)
+        (self.root / "STOP").unlink()
+        self.assertEqual(self.run_main(), 0)  # without the option the run completes; receipts are untouched
+        self.assertEqual(self.host.exports, [pid(n) for n in range(1, 6)])
+        self.assertEqual(len(self.log_lines("export-manifest.jsonl")), 5)
+
+    def test_stop_after_counts_earlier_work_and_zero_or_negative_values(self):
+        self.seed({n: live_photo(bytes([96 + n])) for n in range(1, 4)})
+        self.assertEqual(self.run_main("--limit", "2"), 0)
+        self.assertEqual(self.run_main("--stop-after", "2"), 2)  # two receipts already exist: nothing new is exported
+        self.assertEqual(self.host.exports, [pid(1), pid(2)])
+        (self.root / "STOP").unlink()
+        self.assertEqual(self.run_main("--stop-after", "0"), 0)
+        self.assertFalse((self.root / "STOP").exists())
+        with self.assertRaises(SystemExit):
+            self.run_main("--stop-after", "-1")
+
+
 class MeteredLinkTests(ExporterTestCase):
     def test_hotspot_gateway_is_detected_on_macos_only(self):
         self.host.route = HOTSPOT_ROUTE
