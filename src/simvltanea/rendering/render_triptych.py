@@ -47,6 +47,7 @@ VIDEO_DIRECTIONS = {"forward", "reverse", "pingpong"}
 TONE_MODES = {"none", "normalize", "histeq"}
 SCRIPT_DIR = Path(__file__).resolve().parent
 FFMPEG_ERROR_LINES = 12
+RATE_FLOOR_EPSILON_SECONDS = "0.0003"
 
 
 @dataclass(frozen=True)
@@ -1193,7 +1194,14 @@ def video_source_filters(
         if panel.held or panel.source_kind == "still":
             chain += f"fps={settings.fps},trim=end_frame=1,loop=loop=-1:size=1:start=0,"
         else:
-            chain += f"setpts=PTS/{seconds(panel.playback_rate)},fps={settings.fps},"
+            # Hold each source frame until the next one is due (issue #65): the default nearest rounding put
+            # rate-changed loops up to a frame ahead. Shift by a sliver of a frame so round=up equals a floor
+            # that float noise cannot push over a grid line.
+            if panel.playback_rate == 1:
+                chain += f"setpts=PTS/{seconds(panel.playback_rate)},fps={settings.fps},"
+            else:
+                chain += (f"setpts=PTS/{seconds(panel.playback_rate)}-{RATE_FLOOR_EPSILON_SECONDS}/TB,"
+                          f"fps={settings.fps}:round=up,")
             chain += f"tpad=stop_mode=clone:stop_duration={seconds(segment.duration)},"
         chain += f"trim=duration={seconds(segment.duration)},setpts=PTS-STARTPTS,"
         return [finish_video_filter(input_label + chain, panel_width, settings, output_label, raster)]
