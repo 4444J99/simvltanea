@@ -20,6 +20,12 @@
  * silent v1 field (muted video autoplays); after it the same selection is
  * relaunched as plan v2 spatial_loops: each loop's own audio, panned by panel.
  *
+ * Library mode: when library/manifest.json (simvltanea.public-demo/1) sits beside the page and
+ * validates, its clips replace the generated loops (?gen=1 forces the generated ones). A roll
+ * picks clips by their tags (no palette+shot twice when avoidable, a portrait/landscape mix), and
+ * only those clips are fetched, checked like a visitor's file and kept in a small LRU; the next
+ * shuffle's clips are prefetched when idle. The clips' own audio plays in the spatial mix.
+ *
  * A visitor's own files are optional. Each one is gated before it becomes a loop:
  * a total-size cap, a container/codec sniff checked with video.canPlayType(), a
  * real metadata load that must yield a decoded frame, a duration quantized down to
@@ -304,7 +310,8 @@
     return code ? `${code}${loops.join('.')}` : null;
   }
   function parseMix(text, families, pool) {
-    const match = /^([a-z])(\d{1,2}(?:\.\d{1,2}){0,11})$/.exec(text || '');
+    // Up to four digits per index, so a library of thousands of clips is still addressable.
+    const match = /^([a-z])(\d{1,4}(?:\.\d{1,4}){0,11})$/.exec(text || '');
     if (!match || !FAMILY_CODES[match[1]]) return null;
     const family = FAMILY_CODES[match[1]], loops = match[2].split('.').map(Number);
     if (!families[family] || !families[family].includes(loops.length)) return null;
@@ -344,6 +351,98 @@
       return {codec: 'aac', channels: channels === 1 ? 1 : 2};
     }
     return null;
+  }
+
+  // ---- Library: the published demo clips, chosen by their tags -----------------------
+
+  const LIBRARY_SCHEMA = 'simvltanea.public-demo/1';
+  const LIBRARY_FILE = /^clips\/[0-9a-f]{12}\.mp4$/;
+  // The same bounds tools/publishing/stage_library_site.py applies before deploying a library.
+  const LIBRARY_MAX_CLIPS = 5000, LIBRARY_MAX_BYTES = 64 * MIB, LIBRARY_MAX_SIDE = 4096, LIBRARY_MAX_SECONDS = 600;
+  const LIBRARY_CACHE = 24;
+
+  const words = value => (Array.isArray(value) ? value.filter(item => typeof item === 'string') : []);
+  /* A clip's look for variety: its palette and shot together (null when neither is known). Only
+   * these comparison keys are kept from the tags; nothing from them is ever shown. */
+  function lookKey(tags) {
+    const palette = words(tags.palette).slice().sort().join(','), shot = typeof tags.shot === 'string' ? tags.shot : '';
+    return palette || shot ? `${palette}|${shot}` : null;
+  }
+
+  /* The clips of a simvltanea.public-demo/1 manifest, sorted by id, or null when anything is off:
+   * a wrong schema, no clips, a file outside clips/<id>.mp4, a duplicate id, or a size, orientation
+   * or duration out of bounds. A null manifest means the generated loops play instead. */
+  function libraryClips(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data.schema !== LIBRARY_SCHEMA) return null;
+    if (!Array.isArray(data.clips) || !data.clips.length || data.clips.length > LIBRARY_MAX_CLIPS) return null;
+    const size = (value, max) => Number.isSafeInteger(value) && value >= 1 && value <= max;
+    const seen = new Set(), clips = [];
+    for (const clip of data.clips) {
+      if (!clip || typeof clip !== 'object' || Array.isArray(clip)) return null;
+      const {id, file, width, height, orientation, bytes} = clip, seconds = clip.duration_seconds;
+      if (typeof id !== 'string' || !/^[0-9a-f]{12}$/.test(id) || seen.has(id)) return null;
+      if (typeof file !== 'string' || !LIBRARY_FILE.test(file) || file !== `clips/${id}.mp4`) return null;
+      if (!size(width, LIBRARY_MAX_SIDE) || !size(height, LIBRARY_MAX_SIDE) || !size(bytes, LIBRARY_MAX_BYTES)) return null;
+      if (orientation !== (height > width ? 'portrait' : 'landscape')) return null;
+      if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < MIN_FRAMES / FPS ||
+        seconds > LIBRARY_MAX_SECONDS) return null;
+      const tags = clip.tags === undefined ? {} : clip.tags;
+      if (!tags || typeof tags !== 'object' || Array.isArray(tags)) return null;
+      seen.add(id);
+      clips.push({id, file, bytes, orientation, look: lookKey(tags), mood: words(tags.mood)});
+    }
+    return clips.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  /* How many of `count` panels should be portrait: a mix whenever the library has both shapes.
+   * Authored layouts mix tall and wide cells, so they aim for half; strips follow the library's
+   * own share. Never depends on the viewport, so a seed picks the same clips everywhere. */
+  function portraitTarget(clips, count, family, exclude = []) {
+    const usable = clips.filter((_, index) => !exclude.includes(index));
+    const portraits = usable.filter(clip => clip.orientation === 'portrait').length;
+    const landscapes = usable.length - portraits;
+    const share = family === 'strips' && usable.length ? portraits / usable.length : 0.5;
+    let target = Math.round(count * share);
+    if (count >= 2 && portraits && landscapes) target = Math.min(count - 1, Math.max(1, target));
+    return Math.max(0, Math.min(portraits, Math.max(count - landscapes, target)));
+  }
+
+  /* Pick `count` more clips (indexes) beside `keep`, never one in `exclude`. Candidates are taken
+   * in a seeded random order and scored: a palette+shot not yet on screen (4) outweighs the
+   * wanted orientation (2), which outweighs a mood not yet on screen (1); the first best wins. */
+  function chooseClips(clips, count, family, random, keep = [], exclude = []) {
+    const picked = keep.slice(), total = keep.length + count;
+    const want = portraitTarget(clips, total, family, exclude);
+    const order = shuffled(clips.map((_, index) => index).filter(index => !picked.includes(index) &&
+      !exclude.includes(index)), random);
+    for (let step = 0; step < count && order.length; step++) {
+      const looks = new Set(picked.map(index => clips[index].look).filter(look => look !== null));
+      const moods = new Set(picked.flatMap(index => clips[index].mood));
+      const portraits = picked.filter(index => clips[index].orientation === 'portrait').length;
+      const needs = {portrait: portraits < want, landscape: picked.length - portraits < total - want};
+      let best = 0, bestScore = -1;
+      order.forEach((index, at) => {
+        const clip = clips[index];
+        const score = (clip.look === null || !looks.has(clip.look) ? 4 : 0) + (needs[clip.orientation] ? 2 : 0) +
+          (clip.mood.some(mood => moods.has(mood)) ? 0 : 1);
+        if (score > bestScore) { best = at; bestScore = score; }
+      });
+      picked.push(order.splice(best, 1)[0]);
+    }
+    return picked.slice(keep.length);
+  }
+
+  /* One accident from the library: a family and a count it offers, the strips framing, then clips
+   * chosen by their tags and placed in a seeded order. Same seed and same manifest, same clips. */
+  function rollLibrary(seed, families, clips, exclude = []) {
+    const random = seededRandom(seed), available = clips.length - new Set(exclude).size;
+    const names = Object.keys(families).sort().filter(name => families[name].some(count => count <= available));
+    if (!names.length) return null;
+    const family = pick(names, random);
+    const panels = pick(families[family].filter(count => count <= available), random);
+    const style = {z1: pick(ROLL_Z1, random), jitter: pick(ROLL_JITTER, random), reverse: random() < 0.5};
+    const loops = shuffled(chooseClips(clips, panels, family, random, [], exclude), random);
+    return {seed: seed >>> 0, family, panels, loops, style};
   }
 
   // ---- Built-in loops: twelve generative pictures, each with its own voice --------------
@@ -520,6 +619,7 @@
     quantizeDuration, admitSize, countVerdict, spanVerdict, nearestCount, familyLabel, oneLine, sniffContainer,
     playbackQueries, blobType, mediaSuffix, compositionFrames, formatMiB, seededRandom, parseSeed,
     rollComposition, formatMix, parseMix, stripsPreset, loopGain, audioStream,
+    libraryClips, chooseClips, rollLibrary, LIBRARY_CACHE,
     BUILTINS: BUILTINS.map(item => ({name: item.name, frames: item.frames})),
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -565,12 +665,19 @@
   // The loops on offer: the twelve built-ins until the visitor adds their own.
   const builtins = BUILTINS.map((item, index) => ({...item, index, ready: null, quantized: quantizeDuration(item.frames / FPS)}));
   const own = [];
+  /* Library mode: library/manifest.json beside the page lists published clips, which replace the
+   * built-ins. Only the clips a roll uses are fetched; a small LRU keeps recent ones for rerolls. */
+  const library = {active: false, clips: [], items: [], broken: new Set(), cache: new Map(), inflight: new Map(),
+    requested: 0, next: null, prefetch: [], probe: null};
   const digests = new WeakMap();
   const sound = {unlocked: false, muted: false, volume: 0.7, mixer: null};
   let selection = null, session = null, waiting = [], launches = 0, hold = reduced, paused = false;
   let lastRefusals = [], busy = 0, recordMode = 'pending', previewClock = null;
 
-  const pool = () => (own.length ? own : builtins);
+  const usingLibrary = () => library.active && !own.length;
+  const pool = () => (own.length ? own : library.active ? library.items : builtins);
+  // How many loops a roll may use: the library's clips minus any that failed to load.
+  const available = () => (usingLibrary() ? library.items.length - library.broken.size : pool().length);
   const familyCounts = () => Object.fromEntries(Object.entries(layout.families).map(([name, family]) => [name, family.counts]));
 
   // ---- Toast, idle chrome, about ------------------------------------------------
@@ -883,7 +990,13 @@
     renderPreview();
     if (!r) { until(runtime).then(() => { if (token === launches) launch({fade}); }).catch(() => {}); return; }
     if (!layout.bundle && !layout.own || !selection) return;
-    if (!itemsReady(items)) return;
+    if (!itemsReady(items)) {
+      // Library clips arrive on demand; the current composition keeps playing until they are checked.
+      if (usingLibrary() && items.length) {
+        loadClips(items).then(ok => { if (token === launches) { if (ok) launch({fade}); else repairSelection(); } });
+      }
+      return;
+    }
     const withSound = wantSound();
     let plan;
     try {
@@ -908,6 +1021,7 @@
       if (!hold && !paused) await r.start();
       if (token !== launches) return;
       guardAll();
+      if (usingLibrary()) prefetchNext();
     } catch (error) {
       if (token !== launches) return;
       if (r.audio && r.audio.blocked) {
@@ -938,8 +1052,28 @@
     return value[0];
   }
 
-  function roll(seed = freshSeed()) {
-    const rolled = rollComposition(seed, familyCounts(), pool().length);
+  const rollFor = seed => (usingLibrary() ?
+    rollLibrary(seed, familyCounts(), library.clips, [...library.broken]) :
+    rollComposition(seed, familyCounts(), pool().length));
+  // A shuffle takes the seed whose clips were prefetched, when there is one.
+  function nextSeed() {
+    const seed = library.next ?? freshSeed();
+    library.next = null;
+    return seed;
+  }
+
+  // `count` loops not in `loops`: chosen by their tags from the library, else at random.
+  function moreLoops(loops, count, family, exclude = []) {
+    const random = seededRandom(freshSeed());
+    if (usingLibrary()) {
+      return chooseClips(library.clips, count, family, random, loops, [...library.broken, ...exclude]);
+    }
+    return shuffled(pool().map((_, index) => index).filter(index => !loops.includes(index) && !exclude.includes(index)),
+      random).slice(0, count);
+  }
+
+  function roll(seed = nextSeed()) {
+    const rolled = rollFor(seed);
     if (!rolled) { toast('Add one more video to play.'); return; }
     selection = rolled;
     writeUrl(null);
@@ -955,11 +1089,11 @@
   function setCount(target) {
     if (!selection) return;
     const counts = layout.families[selection.family].counts;
-    const offered = counts.filter(count => count <= pool().length);
+    const offered = counts.filter(count => count <= available());
     if (!offered.length) return;
     const wanted = Math.max(offered[0], Math.min(offered[offered.length - 1], target));
     if (wanted !== target) {
-      if (target > pool().length && counts.includes(target)) toast(own.length ? 'Add more videos for more panels.' : 'That is every loop.');
+      if (target > available() && counts.includes(target)) toast(own.length ? 'Add more videos for more panels.' : 'That is every loop.');
       else toast(`${familyLabel(selection.family, layout.own && layout.own.name)}: ${offered[0]} to ${offered[offered.length - 1]} panels.`);
       return;
     }
@@ -967,23 +1101,20 @@
     let count = selection.loops.length;
     while (count !== target) { count += step; if (offered.includes(count)) break; }
     if (count === selection.loops.length) return;
-    const random = seededRandom(freshSeed());
-    const unused = shuffled(pool().map((_, index) => index).filter(index => !selection.loops.includes(index)), random);
     selection = {...selection, loops: count > selection.loops.length ?
-      selection.loops.concat(unused.slice(0, count - selection.loops.length)) : selection.loops.slice(0, count)};
+      selection.loops.concat(moreLoops(selection.loops, count - selection.loops.length, selection.family)) :
+      selection.loops.slice(0, count)};
     edited();
   }
 
   function setFamily(family) {
     if (!selection || family === selection.family || !layout.families[family]) return;
-    const counts = layout.families[family].counts.filter(count => count <= pool().length);
+    const counts = layout.families[family].counts.filter(count => count <= available());
     if (!counts.length) { toast(`${familyLabel(family)} needs ${layout.families[family].counts[0]} loops.`); return; }
     const count = nearestCount(counts, selection.loops.length);
     if (count !== selection.loops.length) toast(`${familyLabel(family, layout.own && layout.own.name)}: ${count} panels.`);
-    const random = seededRandom(freshSeed());
-    const unused = shuffled(pool().map((_, index) => index).filter(index => !selection.loops.includes(index)), random);
     selection = {...selection, family, loops: count <= selection.loops.length ? selection.loops.slice(0, count) :
-      selection.loops.concat(unused.slice(0, count - selection.loops.length))};
+      selection.loops.concat(moreLoops(selection.loops, count - selection.loops.length, family))};
     edited();
   }
 
@@ -991,9 +1122,10 @@
   function rerollPanel(index) {
     if (!selection || index < 0 || index >= selection.loops.length) return;
     const random = seededRandom(freshSeed());
-    const unused = pool().map((_, item) => item).filter(item => !selection.loops.includes(item));
+    const others = selection.loops.filter((_, at) => at !== index);
+    const [fresh] = moreLoops(others, 1, selection.family, [selection.loops[index]]);
     const loops = selection.loops.slice();
-    if (unused.length) loops[index] = pick(unused, random);
+    if (fresh !== undefined) loops[index] = fresh;
     else if (loops.length > 1) {
       const other = pick(loops.map((_, item) => item).filter(item => item !== index), random);
       [loops[index], loops[other]] = [loops[other], loops[index]];
@@ -1009,7 +1141,8 @@
   const fraction = value => { const [n, d = 1] = String(value).split('/').map(Number); return n / d; };
 
   function renderPreview() {
-    const showing = !own.length && selection && (recordMode === 'canvas' || !itemsReady(selectedItems()) ||
+    // The generated pictures stand in only for the built-ins; library clips need no preview.
+    const showing = !own.length && !library.active && selection && (recordMode === 'canvas' || !itemsReady(selectedItems()) ||
       studio.dataset.phase !== 'playing');
     if (!showing) {
       if (ui.preview.childElementCount) {
@@ -1162,6 +1295,30 @@
     });
   }
 
+  /* The playability and duration checks every loop passes, the visitor's files and library clips
+   * alike: {refusal} or {sniff, type, facts, quantized}. */
+  async function inspect(file, buffer, name, declared, probe) {
+    const sniff = sniffContainer(buffer);
+    const type = blobType(name, declared, sniff);
+    const described = sniff.codec ? `${type}, ${sniff.codec.label}${sniff.codec.string &&
+      sniff.codec.string !== sniff.codec.label ? ` ${sniff.codec.string}` : ''}` : type;
+    const cannot = `This browser cannot play ${name} (${described}).` +
+      (sniff.codec && sniff.codec.label === 'HEVC' ? ' HEVC needs a browser with HEVC decoding (for example ' +
+        'Safari, or Chrome on a Mac); an H.264 ("Most Compatible") export plays almost everywhere.' : '');
+    const {decisive, queries} = playbackQueries(type, sniff);
+    const answers = queries.map(query => probe.canPlayType(query));
+    if (decisive ? answers[0] === '' : answers.every(answer => answer === '')) return {refusal: cannot};
+    const facts = await metadata(file, type);
+    if (!facts) return {refusal: cannot};
+    let quantized = null;
+    try { quantized = quantizeDuration(facts.duration, FPS); } catch (_) { /* shorter than one frame */ }
+    if (!quantized || quantized.frames < MIN_FRAMES) {
+      return {refusal: `${name} was not added: it lasts ${facts.duration.toFixed(2)} s, and a loop must last at ` +
+        `least ${(MIN_FRAMES / FPS).toFixed(2)} s.`};
+    }
+    return {sniff, type, facts, quantized};
+  }
+
   async function admit(file, probe, refuse) {
     const name = file.name || 'unnamed video';
     const total = own.reduce((sum, loop) => sum + loop.size, 0);
@@ -1171,24 +1328,9 @@
     try { buffer = await file.arrayBuffer(); } catch (error) {
       return refuse(`${name} could not be read (${error.name || error}).`);
     }
-    const sniff = sniffContainer(buffer);
-    const type = blobType(name, file.type, sniff);
-    const described = sniff.codec ? `${type}, ${sniff.codec.label}${sniff.codec.string &&
-      sniff.codec.string !== sniff.codec.label ? ` ${sniff.codec.string}` : ''}` : type;
-    const cannot = `This browser cannot play ${name} (${described}).` +
-      (sniff.codec && sniff.codec.label === 'HEVC' ? ' HEVC needs a browser with HEVC decoding (for example ' +
-        'Safari, or Chrome on a Mac); an H.264 ("Most Compatible") export plays almost everywhere.' : '');
-    const {decisive, queries} = playbackQueries(type, sniff);
-    const answers = queries.map(query => probe.canPlayType(query));
-    if (decisive ? answers[0] === '' : answers.every(answer => answer === '')) return refuse(cannot);
-    const facts = await metadata(file, type);
-    if (!facts) return refuse(cannot);
-    let quantized = null;
-    try { quantized = quantizeDuration(facts.duration, FPS); } catch (_) { /* shorter than one frame */ }
-    if (!quantized || quantized.frames < MIN_FRAMES) {
-      return refuse(`${name} was not added: it lasts ${facts.duration.toFixed(2)} s, and a loop must last at ` +
-        `least ${(MIN_FRAMES / FPS).toFixed(2)} s.`);
-    }
+    const checked = await inspect(file, buffer, name, file.type, probe);
+    if (checked.refusal) return refuse(checked.refusal);
+    const {sniff, type, facts, quantized} = checked;
     if (!root.crypto || !crypto.subtle) return refuse(`${name} could not be checked: this page needs HTTPS or localhost.`);
     const sha256 = hex(await crypto.subtle.digest('SHA-256', buffer));
     const twin = own.find(loop => loop.sha256 === sha256);
@@ -1276,6 +1418,128 @@
     addFiles(event.dataTransfer && event.dataTransfer.files);
   });
 
+  // ---- Library clips: fetched per roll, checked like the visitor's files, kept in a small LRU ----
+
+  function useLibrary(clips) {
+    library.active = true;
+    library.clips = clips;
+    library.items = clips.map((clip, index) => ({name: clip.id, index, clip, file: null, sha256: null}));
+    recordMode = 'library';
+  }
+
+  // Clips the page must keep: on screen, in the playing plan, or prefetched for the next shuffle.
+  function keptIds() {
+    const ids = new Set(library.prefetch);
+    if (selection && usingLibrary()) for (const item of selectedItems()) ids.add(item.name);
+    if (session) for (const item of session.bySha.values()) ids.add(item.name);
+    return ids;
+  }
+
+  function remember(item) {
+    library.cache.delete(item.name);
+    library.cache.set(item.name, item);
+    if (library.cache.size <= LIBRARY_CACHE) return;
+    const kept = keptIds();
+    for (const [id, old] of library.cache) {
+      if (library.cache.size <= LIBRARY_CACHE) break;
+      if (kept.has(id)) continue;
+      library.cache.delete(id);
+      Object.assign(old, {file: null, sha256: null});
+    }
+  }
+
+  // A newer roll no longer wants these in-flight fetches.
+  function abortStale(wanted) {
+    for (const [id, job] of library.inflight) if (!wanted.has(id)) job.controller.abort();
+  }
+
+  /* Fetch one clip, then check it exactly as a chosen file: its size and SHA-256 must match the
+   * manifest (the id is the digest's first 12 hex digits), then the codec, a decoded frame and a
+   * duration of whole frames. Resolves true when the clip is ready, false when it is not. */
+  function loadClip(item) {
+    if (item.sha256) { remember(item); return Promise.resolve(true); }
+    const running = library.inflight.get(item.name);
+    if (running) return running.promise;
+    const controller = new AbortController();
+    const job = {controller, promise: null};
+    job.promise = (async () => {
+      library.requested += 1;
+      const response = await fetch(`library/${item.clip.file}`, {signal: controller.signal, redirect: 'error'});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const buffer = await response.arrayBuffer();
+      if (buffer.byteLength !== item.clip.bytes) throw new Error('size differs from the manifest');
+      const sha256 = hex(await crypto.subtle.digest('SHA-256', buffer));
+      if (!sha256.startsWith(item.name)) throw new Error('digest differs from the manifest');
+      const file = new Blob([buffer], {type: 'video/mp4'});
+      if (!library.probe) library.probe = document.createElement('video');
+      const checked = await inspect(file, buffer, `${item.name}.mp4`, 'video/mp4', library.probe);
+      if (checked.refusal) throw new Error('not playable');
+      if (controller.signal.aborted) return false;
+      Object.assign(item, {file, type: checked.type, suffix: 'mp4', size: buffer.byteLength, sha256,
+        audioStream: audioStream(buffer), ...checked.facts, quantized: checked.quantized});
+      remember(item);
+      return true;
+    })().catch(() => {
+      if (!controller.signal.aborted) library.broken.add(item.index);
+      return false;
+    }).finally(() => { if (library.inflight.get(item.name) === job) library.inflight.delete(item.name); });
+    library.inflight.set(item.name, job);
+    return job.promise;
+  }
+
+  async function loadClips(items) {
+    abortStale(new Set([...items.map(item => item.name), ...library.prefetch]));
+    const results = await Promise.all(items.map(loadClip));
+    return results.every(Boolean);
+  }
+
+  // A clip that failed is left out from now on: its panels get other clips, or the built-ins return.
+  function repairSelection() {
+    if (!selection || !usingLibrary()) return;
+    const bad = selection.loops.filter(index => library.broken.has(index));
+    if (!bad.length) { launch({fade: false}); return; }
+    const counts = familyCounts()[selection.family].filter(count => count <= available());
+    if (!counts.length || available() < 1) { fallbackToGenerated(); return; }
+    let loops = selection.loops.filter(index => !library.broken.has(index));
+    const count = counts.includes(selection.loops.length) ? selection.loops.length : nearestCount(counts, selection.loops.length);
+    if (loops.length > count) loops = loops.slice(0, count);
+    selection = {...selection, loops: loops.concat(moreLoops(loops, count - loops.length, selection.family))};
+    edited();
+  }
+
+  function fallbackToGenerated() {
+    for (const job of library.inflight.values()) job.controller.abort();
+    library.active = false;
+    library.prefetch = [];
+    library.next = null;
+    recordMode = 'pending';
+    selection = rollFor(selection ? selection.seed : freshSeed());
+    writeUrl(null);
+    renderControls();
+    renderPreview();
+    sync();
+    recordBuiltins();
+  }
+
+  /* After a roll plays, the next shuffle's seed is chosen and its clips fetched while the page is
+   * idle, so the shuffle crossfades at once. Skipped when the visitor asked to save data. */
+  const PREFETCH_BYTES = 8 * MIB;
+  function prefetchNext() {
+    if (!usingLibrary() || (root.navigator && navigator.connection && navigator.connection.saveData)) return;
+    if (library.next === null) library.next = freshSeed();
+    const rolled = rollFor(library.next);
+    if (!rolled) return;
+    const items = rolled.loops.map(index => library.items[index]);
+    if (items.reduce((sum, item) => sum + (item.sha256 ? 0 : item.clip.bytes), 0) > PREFETCH_BYTES) return;
+    library.prefetch = items.map(item => item.name);
+    const idle = root.requestIdleCallback ? callback => requestIdleCallback(callback, {timeout: 2000}) :
+      callback => setTimeout(callback, 300);
+    idle(() => {
+      if (!usingLibrary() || library.prefetch.join() !== items.map(item => item.name).join()) return;
+      items.forEach(item => { loadClip(item); });
+    });
+  }
+
   // ---- Controls -------------------------------------------------------------------
 
   function renderControls() {
@@ -1295,7 +1559,7 @@
       button.setAttribute('aria-checked', String(on)); button.tabIndex = on || !selection ? 0 : -1;
     }
     const count = selection ? selection.loops.length : 0;
-    const counts = selection ? layout.families[selection.family].counts.filter(value => value <= pool().length) : [];
+    const counts = selection ? layout.families[selection.family].counts.filter(value => value <= available()) : [];
     ui.panels.textContent = String(count || '');
     ui.panels.setAttribute('aria-label', `${plural(count, 'panel')}`);
     ui.fewer.disabled = !counts.some(value => value < count);
@@ -1420,7 +1684,7 @@
 
   // ---- Start ----------------------------------------------------------------------
 
-  fetch('layouts.json').then(response => {
+  const layoutsLoaded = fetch('layouts.json').then(response => {
     if (!response.ok) throw new Error(`layouts.json: HTTP ${response.status}`);
     return response.json();
   }).then(bundle => {
@@ -1431,18 +1695,27 @@
     }
   }).catch(error => {
     toast(oneLine(`The layouts could not be loaded (${error.message || error}).`));
-  }).finally(() => {
+  });
+  // The library is optional and silent: absent, unreadable or invalid, the generated loops play.
+  // ?gen=1 skips it without a request; clips are checked with crypto.subtle, so it needs a secure context.
+  const forceGenerated = new URLSearchParams(search).get('gen') === '1';
+  const manifestLoaded = forceGenerated || !root.isSecureContext || !(root.crypto && crypto.subtle) ? Promise.resolve(null) :
+    fetch('library/manifest.json', {redirect: 'error'})
+      .then(response => (response.ok ? response.json() : null)).then(libraryClips).catch(() => null);
+
+  Promise.all([layoutsLoaded, manifestLoaded]).then(([, clips]) => {
     layout.loading = false;
     if (!Object.keys(layout.families).length) return;
+    if (clips && Object.values(familyCounts()).some(counts => counts.some(count => count <= clips.length))) useLibrary(clips);
     const seed = parseSeed(search) ?? freshSeed();
-    selection = rollComposition(seed, familyCounts(), pool().length);
+    selection = rollFor(seed);
     const mix = parseMix(new URLSearchParams(search).get('mix'), familyCounts(), pool().length);
     if (selection && mix) selection = {...selection, ...mix};
     writeUrl(mix ? formatMix(selection.family, selection.loops) : null);
     renderControls();
     renderPreview();
     sync();
-    recordBuiltins();
+    if (library.active) launch(); else recordBuiltins();
   });
 
   renderSound();
@@ -1455,7 +1728,11 @@
       family: selection ? selection.family : null, panels: selection ? selection.loops.length : null,
       counts: selection ? layout.families[selection.family].counts.slice() : [],
       families: Object.entries(layout.families).map(([name, family]) => ({name, label: family.label, counts: family.counts.slice()})),
-      source: own.length ? 'own' : 'builtin', record: recordMode, held: hold, paused,
+      source: own.length ? 'own' : library.active ? 'library' : 'builtin', record: recordMode, held: hold, paused,
+      // Clip ids and counts only; the clips' tags are never exposed.
+      library: library.active ? {clips: library.items.length, broken: library.broken.size,
+        cached: [...library.cache.keys()], inflight: [...library.inflight.keys()], prefetch: library.prefetch.slice(),
+        next: library.next, requested: library.requested} : null,
       builtinsReady: builtins.filter(item => item.sha256).length,
       selection: selectedItems().map(item => item.name), style: selection ? selection.style : null,
       sound: soundState(), volume: sound.volume, refusals: lastRefusals.slice(), toast: ui.toast.textContent,

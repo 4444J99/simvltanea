@@ -11,6 +11,9 @@ builds. Files never leave the device. ``stage_studio(output)`` writes the flat, 
 
     index.html  runtime.js  compiler.js  studio.js  layouts.json
 
+A public clip library (``library/manifest.json`` and ``library/clips/``) is added
+beside these at deploy time by ``tools.publishing.stage_library_site``, never here.
+
 The HTML shell lives here as a string constant because HTML and CSS files are
 not permitted under ``src/``. Staging is deterministic and touches no network,
 media or subprocess, so the same sources always yield the same bytes::
@@ -111,7 +114,8 @@ align-items:center;justify-content:center;background:rgba(0,0,0,.35);pointer-eve
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
 '''
 STYLE_HASH = base64.b64encode(hashlib.sha256(STYLE.encode()).digest()).decode()
-# Same-origin scripts and layouts.json only; every loop plays from a blob: URL made on this device.
+# Same-origin scripts, layouts.json and the optional library/ only; every loop plays from a blob: URL
+# made on this device.
 CONTENT_SECURITY_POLICY = ("default-src 'none'; script-src 'self'; connect-src 'self'; media-src blob:; "
                            f"img-src blob:; style-src 'sha256-{STYLE_HASH}'; base-uri 'none'; form-action 'none'")
 

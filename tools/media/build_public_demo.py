@@ -217,7 +217,7 @@ def encode_command(original: pathlib.Path, destination: pathlib.Path, size: tupl
     command += ["-an"] if audio == "mute" else ["-map", "0:a:0?"]
     command += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1",
                 "-map_metadata:s:v", "-1", "-map_metadata:s:a", "-1",
-                "-vf", f"scale={size[0]}:{size[1]}:flags=lanczos,format=yuv420p,setsar=1",
+                "-vf", f"scale={size[0]}:{size[1]}:flags=lanczos:out_range=tv,format=yuv420p,setsar=1",
                 "-c:v", "libx264", "-preset", "medium", "-profile:v", "main", "-crf", str(CRF),
                 "-maxrate", "1000k", "-bufsize", "2000k", "-pix_fmt", "yuv420p"]
     if audio == "keep":
