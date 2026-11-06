@@ -1,13 +1,17 @@
 """Parity proofs for the client-side compiler browser.compiler.js.
 
 Supported subset, mirrored from the compiler header: schema_version 1 with
-silent audio; N=1..12 loops; exactly one source per bank, every source bound to
-one loop, distinct IDs and media digests, allow_source_reuse false; video and
-still sources; offset, rate, trim and initial held; fps 1..60; no events; layouts
-with the optional full_bleed, presentation and lateral_offset declarations; the
-state-wide slice, enabled or not; seam absent or disabled. Inside the subset the
-JavaScript plan must equal Python's compile_plan byte for byte. Outside it the
-JavaScript must throw a CompilerError, never return a differing plan.
+silent audio; N=1..12 loops; banks of one or more sources with seeded selection,
+every source in some bank, distinct IDs and media digests, allow_source_reuse
+false; video and still sources; offset, rate, trim and initial held; fps 1..60;
+reroll and swap events (every play state); layouts with the optional full_bleed,
+presentation and lateral_offset declarations; the state-wide slice, enabled or
+not; seam absent or disabled. Inside the subset the JavaScript plan must equal
+Python's compile_plan byte for byte. Outside it the JavaScript must throw a
+CompilerError, never return a differing plan. Hold and move events stay outside.
+
+Play states come from the play engine itself (schedule_play on the synthetic pool
+of test_gravity_pool, through test_play_support.play) for N=3 and N=7.
 
 The layout-file half (strict JSON, presets, pairs, strips expansion, adjacency and
 the two bundle formats) is proven against authoring/layout_presets.py: the same
@@ -23,6 +27,7 @@ Node.js 22 is a CI prerequisite. These tests fail, never skip, without it.
 """
 from __future__ import annotations
 
+import bisect
 import copy
 import hashlib
 import json
@@ -397,22 +402,30 @@ class CompilerParityTests(unittest.TestCase):
         def add_source(state, sha=None):
             state['sources'].append(dict(id='extra', path='media/extra.mp4', sha256=sha or digest('extra'),
                                          kind='video', duration='8'))
+        def bank_collision(state):
+            """An epoch at which loop-1's bank picks loop-2's source at frame 0."""
+            return next(epoch for epoch in range(64)
+                        if c.choose_source(state, dict(state['loops'][0], epoch=epoch), 0) == 'media-2')
+        # Reroll and swap events and multi-source banks compile (PlayStateCompilerTests); hold and move do not.
         events = {
             'hold': dict(op='hold', frame=12, loop='loop-1', value=True),
-            'reroll': dict(op='reroll', frame=12, loop='loop-1'),
-            'swap': dict(op='swap', frame=12, a='loop-1', b='loop-2'),
             'move': dict(op='move', frame=12, loop='loop-1', orientation='portrait',
                          rect=['1/10', '3/100', '4/5', '21/50']),
+            'hold-after-reroll': [dict(op='reroll', frame=6, loop='loop-2'),
+                                  dict(op='hold', frame=12, loop='loop-1', value=True)],
         }
         # Python compiles these; the JavaScript must refuse them instead of differing.
         python_accepts = {
             'thirteen-loops': (n_loops(13), 'N=1..12'),
             'thirty-two-loops': (n_loops(32), 'N=1..12'),
-            **{f'event-{name}': (edit(lambda s, e=event: s.__setitem__('events', [e])), 'events')
+            **{f'event-{name}': (edit(lambda s, e=event: s.__setitem__('events', e if isinstance(e, list) else [e])),
+                                 'hold and move events')
                for name, event in events.items()},
             'audio-v1.1': (edit(lambda s: s.update(schema_version='1.1', engine_version='1.1.0')), 'Audio v1.1'),
-            'multi-source-bank': (edit(lambda s: (add_source(s), s['loops'][0].__setitem__(
-                'bank', ['media-1', 'extra']))), 'bank'),
+            'unbanked-source-beside-a-bank': (edit(lambda s: (add_source(s), s['loops'][0].__setitem__(
+                'bank', ['media-1', 'extra']), s['sources'].append(dict(
+                    id='spare', path='media/spare.mp4', sha256=digest('spare'), kind='video', duration='8')))),
+                'filler'),
             'seam-enabled': (edit(lambda s: s.__setitem__('seam', {'enabled': True})), 'seams are compiled by Python'),
             'seam-enabled-beside-slice': (edit(lambda s: s.update(slice={'enabled': True}, seam={'enabled': True})),
                                           'seams are compiled by Python'),
@@ -429,6 +442,29 @@ class CompilerParityTests(unittest.TestCase):
             'duplicate-media': (edit(lambda s: s['sources'][1].__setitem__('sha256', s['sources'][0]['sha256'])),
                                 'duplicated'),
             'shared-source': (edit(lambda s: s['loops'][1].__setitem__('bank', ['media-1'])), 'duplicated'),
+            'event-cue': (edit(lambda s: s.__setitem__('events', [dict(op='cue', frame=12, loop='loop-1')])),
+                          'unsupported event: cue'),
+            'event-without-op': (edit(lambda s: s.__setitem__('events', [dict(frame=12, loop='loop-1')])),
+                                 'unsupported event: None'),
+            'events-out-of-order': (edit(lambda s: s.__setitem__('events', [
+                dict(op='reroll', frame=12, loop='loop-1'), dict(op='reroll', frame=11, loop='loop-2')])),
+                'events must be ordered'),
+            'event-beyond-last-frame': (edit(lambda s: s.__setitem__('events', [
+                dict(op='reroll', frame=48, loop='loop-1')])), 'event.frame must be an integer'),
+            'event-absent-loop': (edit(lambda s: s.__setitem__('events', [
+                dict(op='reroll', frame=1, loop='loop-9')])), 'absent loop'),
+            'event-extra-field': (edit(lambda s: s.__setitem__('events', [
+                dict(op='reroll', frame=1, loop='loop-1', value=True)])), 'unsupported fields'),
+            'swap-one-loop': (edit(lambda s: s.__setitem__('events', [dict(op='swap', frame=1, a='loop-1',
+                                                                         b='loop-1')])), 'two different loops'),
+            'hold-value-string': (edit(lambda s: s.__setitem__('events', [
+                dict(op='hold', frame=1, loop='loop-1', value='yes')])), 'hold.value must be boolean'),
+            'move-bad-rect': (edit(lambda s: s.__setitem__('events', [dict(
+                op='move', frame=1, loop='loop-1', orientation='portrait', rect=['0', '0', '2', '1'])])),
+                'positive area'),
+            'bank-selection-reuses-a-source': (edit(lambda s: (add_source(s), s['loops'][0].__setitem__(
+                'bank', ['media-2', 'extra']), s['loops'][0].__setitem__('epoch', bank_collision(s)))),
+                'duplicated'),
             'float-offset': (edit(lambda s: s['loops'][0].__setitem__('offset', 1.5)), 'decimals'),
             'nan-rate': (edit(lambda s: s['loops'][0].__setitem__('rate', float('nan'))), 'non-finite'),
             'infinite-duration': (edit(lambda s: s['sources'][0].__setitem__('duration', float('inf'))),
@@ -1213,6 +1249,232 @@ class StagingParityTests(unittest.TestCase):
         self.assertRegex(results[0]['message'], 'MP4')
         self.assertRegex(results[1]['message'], 'byte count required')
         self.assertRegex(results[2]['message'], '256 MiB')
+
+
+# compilePlan on one state, timed inside Node so the JSON transfer is not counted.
+TIMED_DRIVER = r'''
+const C = require(process.argv[1]);
+let input = '';
+process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
+  const state = JSON.parse(input), start = process.hrtime.bigint();
+  const plan = C.compilePlan(state);
+  const seconds = Number(process.hrtime.bigint() - start) / 1e9;
+  process.stdout.write(JSON.stringify({seconds, plan}));
+});
+'''
+# Generous on purpose: 0.1 to 0.9 s measured in Node 26, against the 35 to 40 s of the per-frame replay (issue #61).
+LARGE_STATE_SECONDS = 20
+
+
+def play_state(n: int, seconds: float, seed=7, pool: int = 60, **sections) -> dict:
+    """A state from the play engine itself (schedule_play on test_gravity_pool's synthetic pool)."""
+    from simvltanea.authoring.test_play_support import cfg, play
+    return play(cfg('sticky', **sections), n, seconds, seed, pool=pool)
+
+
+def source_at(spans: list[dict], frame: int) -> str:
+    return spans[bisect.bisect_right([span['frame'] for span in spans], frame) - 1]['source']
+
+
+class PlayStateCompilerTests(unittest.TestCase):
+    """Play states (reroll and swap events over multi-source banks) compile to Python's plan exactly."""
+
+    def assertSamePlan(self, javascript: dict, python: dict):
+        self.assertEqual(javascript, python)
+        self.assertEqual(json.dumps(javascript), json.dumps(python))
+
+    def assertSameOutcome(self, state: dict, result: dict):
+        """The JavaScript plan equals Python's, or both refuse (Python refuses, JS throws unsupported false)."""
+        try:
+            expected = compile_plan(state)
+        except c.StateError as error:
+            self.assertFalse(result['ok'], f'Python refused ({error}) but JavaScript compiled')
+            self.assertEqual(result['name'], 'CompilerError')
+            self.assertFalse(result['unsupported'], result['message'])
+            return None
+        self.assertTrue(result['ok'], result)
+        self.assertSamePlan(result['value'], expected)
+        return expected
+
+    def test_play_states_for_three_and_seven_loops_match_python(self):
+        cases = {
+            'n3-swaps': play_state(3, 30, timing={'swap_interval': 2.0})['state'],
+            'n3': play_state(3, 60, seed='three')['state'],
+            'n7': play_state(7, 60)['state'],
+            'n7-seed-2': play_state(7, 45, seed=2)['state'],
+        }
+        for name, state in list(cases.items()):
+            sliced = copy.deepcopy(state)
+            sliced['slice'] = {'enabled': True, 'width': '1/3', 'height': '1/2'}
+            cases[f'{name}-slice'] = sliced
+        results = node(*(['compilePlan', state] for state in cases.values()))
+        for (name, state), result in zip(cases.items(), results):
+            with self.subTest(case=name):
+                ops = {event['op'] for event in state['events']}
+                self.assertIn('reroll', ops)
+                self.assertTrue(any(len(loop['bank']) > 1 for loop in state['loops']))
+                if name.startswith('n3-swaps'):
+                    self.assertIn('swap', ops)
+                self.assertTrue(result['ok'], result)
+                self.assertSamePlan(result['value'], compile_plan(state))
+                spans = sum(len(track['spans']) for track in result['value']['tracks'])
+                self.assertGreater(spans, len(state['loops']), 'events must split spans')
+
+    def test_positive_controls_a_mutated_seed_or_event_changes_the_plan(self):
+        out = play_state(3, 30, timing={'swap_interval': 2.0})
+        state = out['state']
+        original = compile_plan(state)['tracks']
+        rerolls = [index for index, event in enumerate(state['events']) if event['op'] == 'reroll']
+        # Two rerolls of different loops at different frames, exchanged between the loops.
+        first = rerolls[0]
+        second = next(index for index in rerolls if state['events'][index]['loop'] != state['events'][first]['loop']
+                      and state['events'][index]['frame'] != state['events'][first]['frame'])
+        swaps = [index for index, event in enumerate(state['events']) if event['op'] == 'swap']
+        mutants = {}
+        for seed in (8, 9, 10, 'other'):
+            mutants[f'seed-{seed}'] = dict(copy.deepcopy(state), seed=seed)
+        exchanged = copy.deepcopy(state)
+        events = exchanged['events']
+        events[first]['loop'], events[second]['loop'] = events[second]['loop'], events[first]['loop']
+        mutants['exchanged-rerolls'] = exchanged
+        mutants['dropped-swap'] = dict(copy.deepcopy(state),
+                                       events=[e for i, e in enumerate(state['events']) if i != swaps[0]])
+        mutants['dropped-reroll'] = dict(copy.deepcopy(state),
+                                         events=[e for i, e in enumerate(state['events']) if i != first])
+        results = node(['compilePlan', state], *(['compilePlan', mutant] for mutant in mutants.values()))
+        self.assertSamePlan(results[0]['value'], compile_plan(state))
+        compiled = 0
+        for (name, mutant), result in zip(mutants.items(), results[1:]):
+            with self.subTest(mutant=name):
+                expected = self.assertSameOutcome(mutant, result)
+                if expected is not None:
+                    compiled += 1
+                    self.assertNotEqual(result['value']['tracks'], original, f'{name} left every span unchanged')
+        self.assertGreaterEqual(compiled, 3, 'too few mutants compiled to show that plans change')
+
+    def test_single_source_bank_play_states_compile_as_before(self):
+        every = [['loop-1', 'clip-001'], ['loop-2', 'clip-002'], ['loop-3', 'clip-003']]
+        pinned = play_state(3, 20, path={'pins': every})['state']
+        partly = play_state(3, 20, path={'pins': every[:1]})['state']
+        self.assertEqual((pinned['events'], [len(loop['bank']) for loop in pinned['loops']]), ([], [1, 1, 1]))
+        self.assertEqual(len(partly['loops'][0]['bank']), 1)
+        self.assertGreater(len(partly['loops'][1]['bank']), 1)
+        # The same pinned state built through buildState, the pre-play path, gives the same plan.
+        caller = dict(sources=pinned['sources'], seed=pinned['seed'], fps=pinned['fps'], frames=pinned['frames'],
+                      layouts=pinned['layouts'],
+                      loops=[dict(id=loop['id'], source=loop['bank'][0], offset=loop['offset'], rate=loop['rate'])
+                             for loop in pinned['loops']])
+        results = node(['compilePlan', pinned], ['compilePlan', partly], ['compile', caller])
+        for name, state, result in (('pinned', pinned, results[0]), ('partly-pinned', partly, results[1])):
+            with self.subTest(case=name):
+                self.assertTrue(result['ok'], result)
+                self.assertSamePlan(result['value'], compile_plan(state))
+        self.assertTrue(results[2]['ok'], results[2])
+        self.assertEqual(results[2]['value']['tracks'], results[0]['value']['tracks'])
+
+    def cycle_state(self, slice_value=None) -> dict:
+        """Banks whose pick also changes with the selection cycle (short periods), trims, swaps and rerolls."""
+        state = authored_state(3, frames=96)
+        extra = {'alt-1-a': '5/2', 'alt-1-b': '3', 'alt-2-a': '7/2', 'alt-2-b': '4'}
+        state['sources'] += [dict(id=ident, path=f'media/{ident}.mp4', sha256=digest(ident), kind='video',
+                                  duration=duration) for ident, duration in extra.items()]
+        one, two, three = state['loops']
+        one.update(bank=['media-1', 'alt-1-a', 'alt-1-b'], period='1/2', rate='1', offset='0')
+        two.update(bank=['alt-2-a', 'media-2', 'alt-2-b'], period='2/3', rate='5/4', offset='1/3')
+        three.update(bank=['media-3'], period='1', trim=['1', '2'])
+        state['events'] = [dict(op='reroll', frame=10, loop='loop-1'), dict(op='reroll', frame=20, loop='loop-3'),
+                           dict(op='swap', frame=30, a='loop-1', b='loop-2'),
+                           dict(op='reroll', frame=50, loop='loop-1'), dict(op='reroll', frame=50, loop='loop-2'),
+                           dict(op='reroll', frame=50, loop='loop-2'),
+                           # Two swaps of one pair at one frame cancel out: the second reads the pins the first set.
+                           dict(op='swap', frame=70, a='loop-2', b='loop-1'),
+                           dict(op='swap', frame=70, a='loop-1', b='loop-2')]
+        if slice_value is not None:
+            state['slice'] = slice_value
+        return state
+
+    def test_selection_cycles_trims_and_epoch_only_rerolls_match_python(self):
+        plain, sliced = self.cycle_state(), self.cycle_state({'enabled': True, 'width': '1/2', 'height': '2/5'})
+        too_long = self.cycle_state()
+        too_long['loops'][0]['bank'] = ['alt-1-a']
+        too_long['sources'] = [s for s in too_long['sources'] if s['id'] not in ('media-1', 'alt-1-b')]
+        too_long['loops'][2]['trim'] = ['1', '3']
+        too_long['events'] = [dict(op='swap', frame=5, a='loop-1', b='loop-3')]
+        results = node(['compilePlan', plain], ['compilePlan', sliced], ['compilePlan', too_long])
+        plans = {}
+        for name, state, result in (('plain', plain, results[0]), ('slice', sliced, results[1])):
+            with self.subTest(case=name):
+                self.assertTrue(result['ok'], result)
+                self.assertSamePlan(result['value'], compile_plan(state))
+                plans[name] = result['value']['tracks']
+        # Source changes at frames without an event come from the selection cycle alone.
+        event_frames = {event['frame'] for event in plain['events']}
+        by_cycle = [(track['id'], span['frame']) for track in plans['plain'][:2]
+                    for before, span in zip(track['spans'], track['spans'][1:])
+                    if span['frame'] not in event_frames and span['source'] != before['source']]
+        self.assertGreaterEqual(len(by_cycle), 2, by_cycle)
+        # loop-3's single-source bank is rerolled at frame 20: only the slice window (epoch domain) moves.
+        self.assertNotIn(20, [span['frame'] for span in plans['plain'][2]['spans']])
+        self.assertIn(20, [span['frame'] for span in plans['slice'][2]['spans']])
+        self.assertFalse(results[2]['ok'], results[2])
+        self.assertRegex(results[2]['message'], 'does not fit loop trim')
+        self.assertFalse(results[2]['unsupported'])
+        with self.assertRaisesRegex(c.StateError, 'does not fit loop trim'):
+            compile_plan(too_long)
+
+    def test_unsupported_constructs_in_a_play_state_are_still_refused(self):
+        state = play_state(3, 20)['state']
+        last = state['frames'] - 1
+        with_hold = dict(copy.deepcopy(state), events=[*state['events'],
+                                                       dict(op='hold', frame=last, loop='loop-1', value=True)])
+        with_move = dict(copy.deepcopy(state), events=[*state['events'], dict(
+            op='move', frame=last, loop='loop-1', orientation='portrait',
+            rect=state['layouts']['portrait']['cells'][0]['rect'])])
+        with_cue = dict(copy.deepcopy(state), events=[*state['events'], dict(op='cue', frame=last, loop='loop-1')])
+        with_seam = dict(copy.deepcopy(state), seam={'enabled': True})
+        results = node(*(['compilePlan', s] for s in (with_hold, with_move, with_cue, with_seam)))
+        for name, mutant, result, pattern, python_compiles in (
+                ('hold', with_hold, results[0], 'hold and move events are resolved by composition.py only', True),
+                ('move', with_move, results[1], 'hold and move events are resolved by composition.py only', True),
+                ('cue', with_cue, results[2], 'unsupported event: cue', False),
+                ('seam', with_seam, results[3], 'seams are compiled by Python only', True)):
+            with self.subTest(construct=name):
+                self.assertFalse(result['ok'], f'{name} compiled')
+                self.assertEqual(result['name'], 'CompilerError')
+                self.assertRegex(result['message'], pattern)
+                self.assertEqual(result['unsupported'], python_compiles, result['message'])
+                if python_compiles:
+                    self.assertRegex(result['message'], '^outside the browser compiler subset: ')
+                    compile_plan(mutant)
+                else:
+                    with self.assertRaisesRegex(c.StateError, pattern):
+                        compile_plan(mutant)
+
+    def test_a_ten_minute_seven_loop_play_state_compiles_in_one_pass(self):
+        out = play_state(7, 600, seed=1, pool=120)
+        state = out['state']
+        self.assertEqual(state['frames'], 14400)
+        self.assertGreater(len(state['events']), 25000)
+        completed = subprocess.run([node_executable(), '-e', TIMED_DRIVER, str(COMPILER)], input=json.dumps(state),
+                                   capture_output=True, text=True, check=True, timeout=300)
+        result = json.loads(completed.stdout)
+        self.assertLess(result['seconds'], LARGE_STATE_SECONDS,
+                        f"{len(state['events'])} events took {result['seconds']:.2f} s")
+        tracks = {track['id']: track['spans'] for track in result['plan']['tracks']}
+        # Python's compile_plan replays every event at every frame, too slow here, so check against two
+        # independent references: the schedule's own timeline and composition.resolve_at at every event frame.
+        timeline = out['schedule'].timeline()
+        starts = [frame for frame, _ in timeline]
+        for ident, spans in tracks.items():
+            for index, span in enumerate(spans):
+                end = spans[index + 1]['frame'] if index + 1 < len(spans) else state['frames']
+                for frame in (span['frame'], (span['frame'] + end - 1) // 2, end - 1):
+                    snapshot = timeline[bisect.bisect_right(starts, frame) - 1][1]
+                    self.assertEqual(span['source'], snapshot[ident], (ident, frame))
+        for frame in sorted({0, state['frames'] - 1, *(event['frame'] for event in state['events'])}):
+            for loop in c.resolve_at(state, frame)['loops']:
+                self.assertEqual(source_at(tracks[loop['id']], frame), loop['source'], (loop['id'], frame))
+        self.assertEqual(result['plan']['state_sha256'], hashlib.sha256(c.canonical_json(state).encode()).hexdigest())
 
 
 class RuntimePlaybackTests(unittest.TestCase):

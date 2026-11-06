@@ -10,18 +10,25 @@
  *   - schema_version 1, engine_version "1.0.0", silent audio {mode: "none"};
  *   - 1..12 loops (the engine-wide browser subset; which counts a layout family
  *     offers comes from the layout bundle, never from a constant here), each with
- *     exactly one source in its bank, every declared source bound to exactly one
- *     loop, distinct source IDs and media digests, and allow_source_reuse false
- *     (N independent loops, no filler, no duplication);
+ *     a bank of one or more sources; every declared source in some bank, distinct
+ *     source IDs and media digests, no two loops showing one source at any frame,
+ *     and allow_source_reuse false (N independent loops, no filler, no duplication);
+ *   - seeded bank selection, as composition.choose_source does it: SHA-256 of the
+ *     canonical JSON [rng, seed, loop, epoch, cycle, bank], modulo the bank size;
+ *   - reroll and swap events, the vocabulary of every play state (play_encode.py):
+ *     applied in array order at their frames, a reroll advancing the loop's epoch and
+ *     clearing its pin, a swap pinning each loop to the other's current source. The
+ *     compiler walks the events once, in order (O(frames x loops + events));
  *   - video and still sources; per-loop offset, rate, trim and initial held flag;
  *     any fps in 1..60 and frames in 1..14400;
  *   - layouts with the optional full_bleed, presentation and cell lateral_offset
  *     declarations, checked as Python's layout_presets.validate_layout_pair checks them;
  *   - the state-wide slice, enabled or not: every span carries the slice_rect that
- *     composition.slice_rect picks (sha256-counter-v1, one window per loop per period);
- *   - no events, seam absent or disabled.
- * Explicitly outside: hold/reroll/swap/move events, Audio v1.1, N outside 1..12,
- * multi-source banks (seeded selection), per-loop slices, seams and duplicate media.
+ *     composition.slice_rect picks (sha256-counter-v1, one window per loop, epoch and
+ *     period, so a reroll moves it too);
+ *   - seam absent or disabled.
+ * Explicitly outside: hold and move events, Audio v1.1, N outside 1..12, per-loop
+ * slices, seams, duplicate media and declared sources that no bank holds.
  *
  * Layout files (simvltanea.layout-preset/1 and simvltanea.layout-pair/1) are read by
  * loadLayoutFile with Python's json.loads strictness, validated as load_layout_file
@@ -70,6 +77,11 @@
     'loops', 'layouts', 'events', 'audio', 'allow_source_reuse'];
   const SOURCE_FIELDS = ['id', 'path', 'sha256', 'kind', 'duration'];
   const LOOP_FIELDS = ['id', 'bank', 'offset', 'rate', 'period', 'epoch', 'held'];
+  // composition.validate_state's event vocabulary. The compiler reads reroll and swap, the only
+  // operations play states use; hold and move are validated, then refused.
+  const COMPILED_EVENTS = ['reroll', 'swap'];
+  const EVENT_FIELDS = new Map([['hold', ['loop', 'value']], ['reroll', ['loop']], ['swap', ['a', 'b']],
+    ['move', ['loop', 'orientation', 'rect']]]);
   // Layout keys, mirrored from authoring/layout_presets.py (LAYOUT_FIELDS, CELL_FIELDS, ...).
   const LAYOUT_FIELDS = ['name', 'cells', 'full_bleed', 'presentation'];
   const CELL_FIELDS = ['loop', 'rect', 'fit', 'focal', 'lateral_offset'], CELL_REQUIRED = ['loop', 'rect', 'fit', 'focal'];
@@ -581,8 +593,6 @@
         need(loop.bank.every(id => cmp(high, rational(sources.get(id).duration, 'duration')) <= 0),
           'trim exceeds a bank source duration');
       }
-      refuse(loop.bank.length !== 1,
-        `loop ${loop.id} has a ${loop.bank.length}-source bank; seeded bank selection is compiled by Python only`);
     }
     const audio = state.audio;
     need(isObject(audio), 'audio must be an object');
@@ -596,16 +606,116 @@
         sigma: within('seam.sigma', [1n, 10n], true),
         mode: value => need(SEAM_MODES.includes(value), `seam.mode must be one of ${SEAM_MODES.join(', ')}`)});
     }
-    need(Array.isArray(state.events), 'events must be an array');
-    refuse(state.events.length > 0, 'hold/reroll/swap/move events are resolved by composition.py only');
+    validateEvents(state, loopIds);
+    refuse(state.events.some(event => !COMPILED_EVENTS.includes(event.op)),
+      'hold and move events are resolved by composition.py only; the browser compiler reads reroll and swap events');
     refuse(state.allow_source_reuse, 'allow_source_reuse must be false (no implicit duplication)');
-    const bound = state.loops.map(loop => loop.bank[0]);
-    need(new Set(bound).size === bound.length &&
-      new Set(bound.map(id => sources.get(id).sha256)).size === bound.length,
-      'source reuse must be explicit; no duplicated IDs or media bytes as filler');
-    refuse(sources.size !== bound.length, 'every declared source must be bound to exactly one loop (no filler)');
+    // composition.validate_state resolves frame 0 and every event frame; no two loops may show one source.
+    const walk = resolver(state);
+    for (const frame of new Set([0, ...state.events.map(event => event.frame)])) {
+      walk.advance(frame);
+      walk.resolve(frame);
+    }
+    const banked = new Set(state.loops.flatMap(loop => loop.bank));
+    refuse(state.sources.some(source => !banked.has(source.id)),
+      'every declared source must be in a loop bank (no filler)');
     refuse(new Set(state.sources.map(source => source.sha256)).size !== sources.size,
       'two sources declare the same media digest (duplicate media)');
+  }
+
+  // composition.validate_state's event checks, with its messages. Every operation Python reads is
+  // checked here; validateState then refuses hold and move.
+  function validateEvents(state, loopIds) {
+    need(Array.isArray(state.events), 'events must be an array');
+    let previous = -1;
+    for (const event of state.events) {
+      need(isObject(event), 'event must be an object');
+      const op = has(event, 'op') ? event.op : null;
+      need(typeof op === 'string' && EVENT_FIELDS.has(op), `unsupported event: ${op === null ? 'None' : op}`);
+      const allowed = ['op', 'frame', ...EVENT_FIELDS.get(op)];
+      fields(event, allowed, allowed, 'event');
+      integer(event.frame, 0, state.frames - 1, 'event.frame');
+      need(event.frame >= previous, 'events must be ordered; equal frames use array order');
+      previous = event.frame;
+      for (const key of ['loop', 'a', 'b']) {
+        if (has(event, key)) {
+          need(typeof event[key] === 'string' && loopIds.has(event[key]), `event references absent loop: ${event[key]}`);
+        }
+      }
+      if (op === 'hold') need(typeof event.value === 'boolean', 'hold.value must be boolean');
+      else if (op === 'swap') need(event.a !== event.b, 'swap requires two different loops');
+      else if (op === 'move') {
+        need(ORIENTATIONS.includes(event.orientation), 'move requires an orientation');
+        rectOf(event.rect, {}, strictRead);
+      }
+    }
+  }
+
+  /* composition.resolve_at, walked forward instead of replayed from frame 0 at every frame.
+   * advance(frame) applies, in array order, each event at or before `frame` that is not yet
+   * applied; resolve(frame) then gives every loop's {loop, source, local, cycle} at that frame,
+   * after resolve_at's checks (a swapped source must fit the loop trim; no source reuse). Visit
+   * frames in increasing order. Each event is applied once and a loop hashes only when its epoch
+   * or selection cycle changes, so a compile costs O(frames x loops + events), not
+   * O(frames x events). Only reroll and swap get here: validateState refuses hold and move. */
+  function resolver(state) {
+    const fps = BigInt(state.fps), sources = new Map(state.sources.map(source => [source.id, source]));
+    const durations = new Map(state.sources.map(source => [source.id, rational(source.duration, 'duration')]));
+    const prefix = `[${canonicalJson(RNG)},${canonicalJson(state.seed)},`;
+    const loops = state.loops.map(loop => ({id: loop.id, bank: loop.bank, offset: rational(loop.offset, 'offset'),
+      rate: rational(loop.rate, 'rate'), period: rational(loop.period, 'period'), held: loop.held, epoch: loop.epoch,
+      trim: has(loop, 'trim') ? loop.trim.map(value => rational(value, 'trim')) : null, pin: null,
+      payload: `${prefix}${canonicalJson(loop.id)},`, bankJson: canonicalJson(loop.bank),
+      picked: null, pickedEpoch: null, pickedCycle: null}));
+    const byId = new Map(loops.map(loop => [loop.id, loop]));
+    const localTime = (loop, frame) =>
+      (loop.held ? loop.offset : add(loop.offset, mul(frac(BigInt(frame), fps), loop.rate)));
+    const cycleOf = (loop, local) => floorDiv(local[0] * loop.period[1], local[1] * loop.period[0]);
+    // composition.choose_source: the pin, else sha256 of canonical [rng, seed, loop, epoch, cycle, bank].
+    function choose(loop, cycle) {
+      if (loop.pin !== null) return loop.pin;
+      if (loop.bank.length === 1) return loop.bank[0]; // any digest modulo 1 picks it
+      if (loop.pickedEpoch !== loop.epoch || loop.pickedCycle !== cycle) {
+        const digest = sha256Hex(new TextEncoder().encode(`${loop.payload}${loop.epoch},${cycle},${loop.bankJson}]`));
+        loop.picked = loop.bank[Number(BigInt(`0x${digest}`) % BigInt(loop.bank.length))];
+        loop.pickedEpoch = loop.epoch;
+        loop.pickedCycle = cycle;
+      }
+      return loop.picked;
+    }
+    const chooseAt = (loop, frame) => choose(loop, cycleOf(loop, localTime(loop, frame)));
+    let next = 0;
+    function advance(frame) {
+      const events = state.events;
+      while (next < events.length && events[next].frame <= frame) {
+        const event = events[next++];
+        if (event.op === 'reroll') {
+          const loop = byId.get(event.loop);
+          loop.epoch += 1;
+          loop.pin = null;
+        } else if (event.op === 'swap') {
+          // Both picks are taken before either pin changes, as in Python's tuple assignment.
+          const a = byId.get(event.a), b = byId.get(event.b);
+          const [pinA, pinB] = [chooseAt(b, event.frame), chooseAt(a, event.frame)];
+          a.pin = pinA;
+          b.pin = pinB;
+        } else {
+          throw new CompilerError(`${event.op} events are resolved by composition.py only`, true);
+        }
+      }
+    }
+    function resolve(frame) {
+      const resolved = loops.map(loop => {
+        const local = localTime(loop, frame), cycle = cycleOf(loop, local), source = choose(loop, cycle);
+        need(loop.trim === null || cmp(loop.trim[1], durations.get(source)) <= 0, 'swapped source does not fit loop trim');
+        return {loop, source, local, cycle};
+      });
+      need(new Set(resolved.map(item => item.source)).size === resolved.length &&
+        new Set(resolved.map(item => sources.get(item.source).sha256)).size === resolved.length,
+        'source reuse must be explicit; no duplicated IDs or media bytes as filler');
+      return resolved;
+    }
+    return {advance, resolve, durations, sources};
   }
 
   // Python sorts str keys by code point; the default JS sort compares UTF-16 units and
@@ -670,8 +780,9 @@
   }
   const stateDigest = state => sha256Hex(new TextEncoder().encode(canonicalJson(state)));
 
-  /* composition.slice_rect: a deterministic window per loop per selection period (it moves
-   * at each wrap of local time over loop.period), sha256-counter-v1 in its own "slice" domain. */
+  /* composition.slice_rect: a deterministic window per loop, epoch and selection period (it
+   * moves at each wrap of local time over loop.period and at each reroll), sha256-counter-v1
+   * in its own "slice" domain. `loop` needs only its id and current epoch. */
   function sliceRect(state, loop, cycle, [w, h]) {
     const payload = `[${canonicalJson(RNG)},${canonicalJson(state.seed)},${canonicalJson(loop.id)},"slice",` +
       `${loop.epoch},${cycle},${canonicalJson(text(w))},${canonicalJson(text(h))}]`;
@@ -684,39 +795,43 @@
 
   function compilePlan(state) {
     validateState(state);
-    const fps = BigInt(state.fps), sources = new Map(state.sources.map(source => [source.id, source]));
+    const fps = BigInt(state.fps), walk = resolver(state);
     const slice = has(state, 'slice') && state.slice.enabled ? sliceSize(state.slice) : null;
-    let spanCount = 0;
+    // Per loop: its spans and the previous frame, which browser_runtime._continues compares against.
     const tracks = state.loops.map(loop => {
-      const source = sources.get(loop.bank[0]), still = source.kind === 'still';
-      const rate = rational(loop.rate, 'rate'), offset = rational(loop.offset, 'offset');
-      const period = rational(loop.period, 'period');
-      need(still || (cmp(rate, [1n, 16n]) >= 0 && cmp(rate, EIGHT) <= 0),
-        'browser video rate must be within 1/16..8; offline model unchanged');
-      const [low, high] = (has(loop, 'trim') ? loop.trim : [0, source.duration]).map(value => rational(value, 'trim'));
-      const length = sub(high, low), step = loop.held || still ? ZERO : mul(rate, [1n, fps]);
-      const spans = [];
-      let previous = null, previousRect = null, cycle = null, rect = null;
-      for (let frame = 0; frame < state.frames; frame++) {
-        const local = loop.held ? offset : add(offset, mul(frac(BigInt(frame), fps), rate));
-        const sourceOffset = still ? ZERO : add(low, mod(local, length));
-        if (slice) {
-          const current = floorDiv(local[0] * period[1], local[1] * period[0]);
-          if (current !== cycle) { cycle = current; rect = sliceRect(state, loop, cycle, slice); }
-        }
-        const key = rect && rect.join(' ');
-        if (previous === null || cmp(sourceOffset, add(previous, step)) !== 0 || key !== previousRect) {
-          const span = {frame, id: loop.id, source: source.id, kind: source.kind, local: text(local),
-            source_offset: text(sourceOffset), rate: text(rate), held: loop.held, epoch: loop.epoch};
-          if (rect) span.slice_rect = rect.slice();
-          spans.push(span);
-        }
-        previous = sourceOffset;
-        previousRect = key;
-      }
-      spanCount += spans.length;
-      return {id: loop.id, spans};
+      const rate = rational(loop.rate, 'rate');
+      return {id: loop.id, spans: [], rateText: text(rate), step: mul(rate, [1n, fps]),
+        browserRate: cmp(rate, [1n, 16n]) >= 0 && cmp(rate, EIGHT) <= 0,
+        trim: has(loop, 'trim') ? loop.trim.map(value => rational(value, 'trim')) : null,
+        source: null, offset: null, key: null, rect: null, rectEpoch: null, rectCycle: null};
     });
+    let spanCount = 0;
+    for (let frame = 0; frame < state.frames; frame++) {
+      walk.advance(frame);
+      walk.resolve(frame).forEach(({loop, source: id, local, cycle}, index) => {
+        const track = tracks[index], source = walk.sources.get(id), still = source.kind === 'still';
+        need(still || track.browserRate, 'browser video rate must be within 1/16..8; offline model unchanged');
+        const [low, high] = track.trim || [ZERO, walk.durations.get(id)];
+        const sourceOffset = still ? ZERO : add(low, mod(local, sub(high, low)));
+        // The slice window depends on the epoch and the selection cycle, so a reroll moves it too.
+        if (slice && (track.rectEpoch !== loop.epoch || track.rectCycle !== cycle)) {
+          track.rect = sliceRect(state, loop, cycle, slice);
+          track.rectEpoch = loop.epoch;
+          track.rectCycle = cycle;
+        }
+        const key = slice ? track.rect.join(' ') : null, step = loop.held || still ? ZERO : track.step;
+        if (track.source !== id || track.key !== key || cmp(sourceOffset, add(track.offset, step)) !== 0) {
+          const span = {frame, id: loop.id, source: id, kind: source.kind, local: text(local),
+            source_offset: text(sourceOffset), rate: track.rateText, held: loop.held, epoch: loop.epoch};
+          if (slice) span.slice_rect = track.rect.slice();
+          track.spans.push(span);
+          spanCount += 1;
+        }
+        track.source = id;
+        track.offset = sourceOffset;
+        track.key = key;
+      });
+    }
     need(spanCount <= MAX_SEGMENTS * tracks.length, 'browser span resource guard exceeded; no loops were dropped');
     const canonical = (values, where) => values.map(value => text(rational(value, where)));
     const layouts = {};
@@ -725,7 +840,7 @@
         ({...cell, rect: canonical(cell.rect, 'rect'), focal: canonical(cell.focal, 'focal')}))};
     }
     return {plan_version: PLAN_VERSION, engine_version: state.engine_version, state_sha256: stateDigest(state),
-      fps: state.fps, frames: state.frames, audio: 'none', tracks,
+      fps: state.fps, frames: state.frames, audio: 'none', tracks: tracks.map(({id, spans}) => ({id, spans})),
       layout_keyframes: [{frame: 0, layouts}],
       sources: state.sources.map(source => ({...source, duration: text(rational(source.duration, 'duration'))})),
       seam: structuredClone(has(state, 'seam') ? state.seam : {enabled: false}),

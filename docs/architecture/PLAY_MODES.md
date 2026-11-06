@@ -144,14 +144,17 @@ beside `originals/` is outside this repository, so the default is refused with `
 incubator`. The renderer, the preview and `play_state` all write under `var/` (git-ignored by `/var/*`;
 `var/work/` is the place for private output). The rendered video is as private as the state.
 
-What does not work: the in-browser client compiler (`src/simvltanea/browser/browser.compiler.js` on the main
-branch) refuses any state with `events` and any loop with a multi-source bank, with a `CompilerError`
-("outside the browser compiler subset"). Almost every play state has one or both, so the in-browser web studio
-cannot preview it, although Python's `compile_plan` accepts the same file. The one exception is a state with
-every loop pinned (`path.pins`, one pin per loop): it has no events and only one-source banks, and the browser
-compiler accepts it (`EventsAndBanksTests` in `test_play_modes.py` checks that shape). Closing the gap for the
-rest is a separate lane (the `cue` event, or compiler support in the browser client); this lane does not touch
-the compiler.
+The in-browser client compiler (`src/simvltanea/browser/browser.compiler.js`) also reads a play state. It
+compiles the `reroll` and `swap` events and the multi-source banks with seeded selection, and returns the
+plan that Python's `compile_plan` returns for the same file, byte for byte (see
+[Browser compiler, Play states](../authoring/BROWSER_COMPILER.md#play-states)). A default 10-minute state for
+7 loops, about 28,000 events, compiles in under 1 s in Node. A state with every loop pinned (`path.pins`,
+one pin per loop) has no events and only one-source banks (`EventsAndBanksTests` in `test_play_modes.py`
+checks that shape), and it compiles as before. What the browser still refuses, with a `CompilerError`
+("outside the browser compiler subset"): `hold` and `move` events, which play states do not contain. The web
+studio builds its states from the videos a visitor picks and has no control that opens a state file, so a page
+or tool must pass the play state to the compiler itself. A `cue` event is out of scope
+(owner decision, issue 71).
 
 ## The four dials
 
