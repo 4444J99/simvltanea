@@ -44,7 +44,7 @@ jobs:
       - name: Observe live GitHub state without mutations
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python -m tools.verification.repository_status --repository 4444J99/simvltanea --expected-repository-id 1364497735
+        run: python -m tools.verification.repository_status --repository 4444J99/tool-video-loop-compositor --expected-repository-id 1364497735
 
       - name: Preserve timestamped observation
         if: always()
