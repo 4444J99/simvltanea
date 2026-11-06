@@ -39,7 +39,7 @@ def verify(root: Path = REPO_ROOT) -> list[str]:
                 continue
             relative = path.relative_to(root).as_posix()
             owner = path.parent.name if path.is_relative_to(root / "src" / "simvltanea") else None
-            errors.extend(f"{relative}:{line}: {message}" for line, message in violations(path.read_text(), owner))
+            errors.extend(f"{relative}:{line}: {message}" for line, message in violations(path.read_text(encoding="utf-8"), owner))
     return errors
 
 

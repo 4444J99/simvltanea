@@ -223,7 +223,7 @@ def main() -> int:
     directory = require_in_var(args.output or PROOFS_DIR / "current-status" / ("run-" + uuid.uuid4().hex))
     directory.mkdir(parents=True, exist_ok=False)
     source = {"git_sha": subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip(),
-              "package_version": tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"]["version"],
+              "package_version": tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"],
               "layout_contract": dict(LAYOUT.contract), "engine_version": ENGINE_VERSION,
               "composition_schema": SCHEMA_VERSION, "supported_loop_counts": sorted(AUTHORED)}
     try:
@@ -234,11 +234,11 @@ def main() -> int:
         report = {"schema": "simvltanea.repository-status-error.v1", "observed_at": utc_now(),
                   "error": "collection-or-schema-failure", "collection_complete": False,
                   "repository_conformance": False, "release_authorized": False, "retirement_authorized": False}
-        (directory / "snapshot.json").write_text(json.dumps(report, indent=2) + "\n")
+        (directory / "snapshot.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8", newline="\n")
         return 2
-    (directory / "snapshot.json").write_text(json.dumps(report, indent=2) + "\n")
+    (directory / "snapshot.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8", newline="\n")
     text = markdown(report)
-    (directory / "STATUS.md").write_text(text)
+    (directory / "STATUS.md").write_text(text, encoding="utf-8", newline="\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with Path(summary).open("a", encoding="utf-8") as stream:

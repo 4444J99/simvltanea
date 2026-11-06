@@ -339,7 +339,7 @@ def _cause_line(text: str) -> str:
 
 def pixel_format_depths() -> dict[str, int]:
     """Maximum component bit depth per pixel format, from ``ffprobe -pix_fmts``."""
-    completed = subprocess.run(["ffprobe", "-hide_banner", "-pix_fmts"], capture_output=True, text=True,
+    completed = subprocess.run(["ffprobe", "-hide_banner", "-pix_fmts"], capture_output=True, text=True, encoding="utf-8",
                                errors="replace")
     depths = {}
     for line in completed.stdout.splitlines():
@@ -361,7 +361,7 @@ def bit_depth(pix_fmt: str, depths: dict[str, int]) -> int:
 def ffprobe_json(path: Path) -> dict[str, Any]:
     completed = subprocess.run(
         ["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
-        capture_output=True, text=True, errors="replace")
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     if completed.returncode != 0:
         detail = _cause_line(completed.stderr).replace(str(path), path.name)
         raise ClipError(f"not a readable video ({detail or f'ffprobe exit status {completed.returncode}'})")
@@ -532,7 +532,7 @@ def top_level_boxes(path: Path) -> list[str]:
 def frame_times(path: Path) -> list[float]:
     completed = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time",
-         "-of", "csv=p=0", str(path)], capture_output=True, text=True, errors="replace")
+         "-of", "csv=p=0", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     times = []
     for line in completed.stdout.splitlines():
         value = line.strip().rstrip(",")
@@ -608,7 +608,7 @@ def convert(clip: Clip, out: Path, settings: Settings, size: tuple[int, int], fo
     temporary = Path(temporary_name)
     try:
         completed = subprocess.run(encode_command(clip.path, temporary, source, size, settings),
-                                   capture_output=True, text=True, errors="replace")
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace")
         if completed.returncode != 0:
             detail = _cause_line(completed.stderr).replace(str(clip.path), clip.name).replace(str(temporary), "output")
             raise ClipError(f"ffmpeg failed with exit status {completed.returncode}" + (f": {detail}" if detail else ""))

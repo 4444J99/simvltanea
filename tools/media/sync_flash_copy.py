@@ -86,7 +86,8 @@ def require_inside(path: Path, label: str) -> None:
 
 
 def relative_to_base(path: Path, base: Path = SCRIPT_DIR) -> str:
-    return os.path.relpath(path.absolute(), base.absolute())
+    # Forward slashes keep receipts portable; on POSIX os.sep is already "/".
+    return os.path.relpath(path.absolute(), base.absolute()).replace(os.sep, "/")
 
 
 def iso_now() -> str:

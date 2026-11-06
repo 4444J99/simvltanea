@@ -70,7 +70,7 @@ def verify() -> dict:
                                          text=True, check=True).stdout.splitlines()[0],
                    cases=[], status='running')
     receipt_path = output/'receipt.json'
-    receipt_path.write_text(json.dumps(receipt,indent=2)+'\n')
+    receipt_path.write_text(json.dumps(receipt,indent=2)+'\n', encoding="utf-8", newline="\n")
     print(f'Receipt: {receipt_path}', flush=True)
     for timing, audio in CASES:
         pair = []
@@ -82,7 +82,7 @@ def verify() -> dict:
                      '--timing',timing,'--phrase','1','--audio',audio,
                      '--output',str(target.relative_to(REPO_ROOT)),
                      '--work-dir',str((output/f'work-{name}').relative_to(REPO_ROOT))]
-            with (output/f'{name}.log').open('w') as log:
+            with (output/f'{name}.log').open('w', encoding="utf-8") as log:
                 subprocess.run(command,cwd=REPO_ROOT,stdout=log,stderr=subprocess.STDOUT,
                                check=True,timeout=120)
             facts=probe(target)
@@ -95,12 +95,12 @@ def verify() -> dict:
         for key in ('video_sha256','audio_sha256'):
             c.require(pair[0][key] == pair[1][key], f'legacy decoded {key} changed: {timing}/{audio}')
         receipt['cases'].append(dict(timing=timing,audio=audio,decoded_equal=True,pair=pair))
-        receipt_path.write_text(json.dumps(receipt,indent=2)+'\n')
+        receipt_path.write_text(json.dumps(receipt,indent=2)+'\n', encoding="utf-8", newline="\n")
         print(f'{timing}/{audio}: decoded video and applicable audio equal',flush=True)
     c.require(c.sha256_file(CORE/'render_triptych.py') == receipt['current_renderer_sha256'],
               'current renderer changed during regression')
     receipt['status']='passed'
-    receipt_path.write_text(json.dumps(receipt,indent=2)+'\n')
+    receipt_path.write_text(json.dumps(receipt,indent=2)+'\n', encoding="utf-8", newline="\n")
     return receipt
 
 

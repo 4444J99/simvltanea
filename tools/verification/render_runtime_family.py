@@ -37,7 +37,7 @@ def render_family() -> list[dict]:
                        '--orientation', orientation, '--width', str(width), '--height', str(height),
                        '--preset', 'ultrafast', '--crf', '18', '--output', str(output)]
             start = time.monotonic()
-            with (ROOT / 'evidence' / f'render-{count}-{orientation}.log').open('w') as log:
+            with (ROOT / 'evidence' / f'render-{count}-{orientation}.log').open('w', encoding="utf-8") as log:
                 subprocess.run(command, cwd=str(REPO), stdout=log, stderr=subprocess.STDOUT, check=True)
             elapsed = time.monotonic() - start
             facts = probe(output)
@@ -55,7 +55,7 @@ def render_family() -> list[dict]:
             receipts.append(dict(count=count, orientation=orientation, command=command, returncode=0,
                                  elapsed_seconds=elapsed, output=str(output.relative_to(ROOT)),
                                  sha256=c.sha256_file(output), facts=facts, stills=stills))
-            (ROOT / 'evidence/render-family.json').write_text(json.dumps(receipts, indent=2) + '\n')
+            (ROOT / 'evidence/render-family.json').write_text(json.dumps(receipts, indent=2) + '\n', encoding="utf-8", newline="\n")
             print(count, orientation, c.sha256_file(output), flush=True)
     return receipts
 
@@ -73,7 +73,7 @@ def verify_portable_reproduction() -> list[dict]:
         c.require(digest == reference, 'portable state did not reproduce identical bytes')
         receipts.append(dict(command=command, orientation=orientation, sha256=digest,
                              reference_sha256=reference, byte_identical=True))
-    (ROOT / 'evidence/portable-reproduction.json').write_text(json.dumps(receipts, indent=2) + '\n')
+    (ROOT / 'evidence/portable-reproduction.json').write_text(json.dumps(receipts, indent=2) + '\n', encoding="utf-8", newline="\n")
     return receipts
 
 

@@ -76,7 +76,7 @@ def prepare(root: Path) -> list[Path]:
         ctrl_src = next(p for p in paths if p.stem == "state-3")
     except StopIteration:
         ctrl_src = paths[0]
-    state = json.loads(ctrl_src.read_text())
+    state = json.loads(ctrl_src.read_text(encoding="utf-8"))
     state['sources'] = sources[:3]+[still_src]
     state['allow_source_reuse'] = True  # explicit bank overlap in this control fixture only
     state['loops'][0]['bank'] = ['still']
@@ -118,7 +118,7 @@ def main() -> None:
                 size = (360, 640) if orientation == 'portrait' else (640, 360)
                 command += ['--width', str(size[0]), '--height', str(size[1])]
             log = root / 'evidence' / f'{name}.log'
-            with log.open('w') as stream:
+            with log.open('w', encoding="utf-8") as stream:
                 result = subprocess.run(command, cwd=REPO_ROOT, stdout=stream, stderr=subprocess.STDOUT)
             if result.returncode:
                 raise SystemExit(f'Render failed ({result.returncode}); inspect {log}')

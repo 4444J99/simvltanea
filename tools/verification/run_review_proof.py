@@ -58,7 +58,7 @@ def child(output: Path, names: list[str]) -> int:
         failures=len(result.failures), errors=len(result.errors),
         expected_failures=len(result.expectedFailures),
         skipped=len(result.skipped), unexpected_successes=len(result.unexpectedSuccesses),
-        status='passed' if passed else 'failed'), indent=2)+'\n')
+        status='passed' if passed else 'failed'), indent=2)+'\n', encoding="utf-8", newline="\n")
     return 0 if passed else 1
 
 
@@ -81,7 +81,7 @@ def read_child_receipt(path: Path) -> dict:
     """Validate completed child evidence; retain corrupt raw files for diagnosis."""
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
         raise ValueError('missing, non-regular or oversized child receipt')
-    value = json.loads(path.read_text(), object_pairs_hook=unique_keys)
+    value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_keys)
     if not isinstance(value, dict) or value.get('status') not in ('passed', 'failed'):
         raise ValueError('child receipt must be an object with a terminal status')
     if any(type(value.get(key)) is not int or value[key] < 0 for key in COUNTERS):
@@ -111,14 +111,14 @@ def run(output: Path, transport: str, groups: list[str], timeout: float) -> int:
                   demonstrated=dict(local_narrow_tests=False, served_http=False, physical_device=False,
                                     historical_original=False, deployment=False, artist_approval=False))
     report_path = output/'summary.json'
-    report_path.write_text(json.dumps(report, indent=2)+'\n')
+    report_path.write_text(json.dumps(report, indent=2)+'\n', encoding="utf-8", newline="\n")
     env = dict(os.environ, PORTVS_BROWSER_TRANSPORT=transport)
     for group in groups:
         path = output/f'{group}.json'
         command = [sys.executable, '-m', 'tools.verification.run_review_proof',
                    '--child', str(path), *GROUPS[group]]
         started = time.monotonic()
-        with (output/f'{group}.log').open('w') as log:
+        with (output/f'{group}.log').open('w', encoding="utf-8") as log:
             try:
                 process = subprocess.run(command, cwd=base_dir, env=env, stdout=log,
                                          stderr=subprocess.STDOUT, timeout=timeout)
@@ -135,7 +135,7 @@ def run(output: Path, transport: str, groups: list[str], timeout: float) -> int:
                 facts = dict(status='failed', reason=f'child launch failed: {exc}')
         facts.update(group=group, elapsed_seconds=round(time.monotonic()-started,3), tests=GROUPS[group])
         report['groups'].append(facts)
-        report_path.write_text(json.dumps(report, indent=2)+'\n')
+        report_path.write_text(json.dumps(report, indent=2)+'\n', encoding="utf-8", newline="\n")
         print(f"{group}: {facts['status']}", flush=True)
     passed = all(item['status']=='passed' for item in report['groups'])
     report['status'] = 'passed' if passed else 'failed'
@@ -150,7 +150,7 @@ def run(output: Path, transport: str, groups: list[str], timeout: float) -> int:
         path.name:hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(source_dir.glob('*')) if path.suffix in ('.py','.js')
     }
-    report_path.write_text(json.dumps(report, indent=2)+'\n')
+    report_path.write_text(json.dumps(report, indent=2)+'\n', encoding="utf-8", newline="\n")
     print(json.dumps(dict(status=report['status'], totals=report['totals'], transport=transport)), flush=True)
     return 0 if passed else 1
 

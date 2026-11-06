@@ -181,7 +181,8 @@ def list_editions(payload: dict[str, Any]) -> None:
 
 
 def relative_to_base(path: Path, base: Path) -> str:
-    return os.path.relpath(path.absolute(), base.absolute())
+    # Forward slashes keep project JSON portable; on POSIX os.sep is already "/".
+    return os.path.relpath(path.absolute(), base.absolute()).replace(os.sep, "/")
 
 
 def default_project_path(slug: str) -> Path:

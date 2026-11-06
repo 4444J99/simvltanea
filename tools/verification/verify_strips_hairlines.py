@@ -96,7 +96,7 @@ def prepare_clips(root: Path = ROOT) -> list[dict]:
     media.mkdir(parents=True, exist_ok=True)
     manifest_path = root / 'clips.json'
     commands = [clip_command(k, Path('media') / f'clip-{k + 1}.mp4') for k in range(MAX_CLIPS)]
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
     cached = manifest.get('sha256', []) if manifest.get('commands') == commands else []
     if len(cached) == MAX_CLIPS and all((media / f'{sha}.mp4').is_file() and
                                         hashlib.sha256((media / f'{sha}.mp4').read_bytes()).hexdigest() == sha
@@ -111,13 +111,13 @@ def prepare_clips(root: Path = ROOT) -> list[dict]:
             os.replace(scratch, media / f'{digest}.mp4')
             digests.append(digest)
         manifest_path.write_text(json.dumps(dict(kind='original-synthetic', commands=commands, sha256=digests),
-                                            indent=2) + '\n')
+                                            indent=2) + '\n', encoding="utf-8", newline="\n")
     for k, digest in enumerate(digests):
         darkest = _darkest(media / f'{digest}.mp4')
         if darkest < NEAR_BLACK:
             raise RuntimeError(f'clip {k + 1} has near-black pixels (largest channel {darkest}); '
                                'the background would not be distinguishable')
-    (root / 'index.html').write_text(browser_runtime.HTML.replace('<script src="runtime.js" defer></script>\n', ''))
+    (root / 'index.html').write_text(browser_runtime.HTML.replace('<script src="runtime.js" defer></script>\n', ''), encoding="utf-8", newline="\n")
     return [dict(id=f'source-{k + 1}', path=f'media/{digest}.mp4', sha256=digest, kind='video',
                  duration=str(CLIP_SECONDS)) for k, digest in enumerate(digests)]
 
@@ -206,7 +206,7 @@ class RasterProbe:
                                                   headless=True, args=['--no-sandbox', '--disable-dev-shm-usage',
                                                                        '--autoplay-policy=no-user-gesture-required'])
         self._stack.callback(self.browser.close)
-        self.runtime_js = (HERE / 'browser.runtime.js').read_text()
+        self.runtime_js = (HERE / 'browser.runtime.js').read_text(encoding="utf-8")
         return self
 
     def __exit__(self, *exc):
@@ -394,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
           f'{time.monotonic() - began:.0f} s')
     if args.json:
         require_in_var(args.json.resolve(), 'hairline report')
-        args.json.write_text(json.dumps(dict(controls=controls, matrix=rows), indent=2) + '\n')
+        args.json.write_text(json.dumps(dict(controls=controls, matrix=rows), indent=2) + '\n', encoding="utf-8", newline="\n")
     if bad or blind:
         print('hairline matrix FAILED' + (' (the probe saw no hairline without the bleed)' if blind else ''))
         return 1

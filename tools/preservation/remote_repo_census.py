@@ -250,7 +250,7 @@ def summarize(repos: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
 
 def display_path(path: Path) -> str:
@@ -310,7 +310,7 @@ def write_markdown(path: Path, payload: dict[str, Any]) -> None:
             )
         )
 
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
 def build_census(owners: Iterable[str], limit: int) -> dict[str, Any]:

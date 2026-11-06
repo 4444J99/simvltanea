@@ -36,10 +36,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--write', action='store_true', help='Update derived ignore rules')
     args = parser.parse_args(argv)
     ignore_path = LAYOUT.root / '.gitignore'
-    actual = ignore_path.read_text() if ignore_path.exists() else ''
+    actual = ignore_path.read_text(encoding="utf-8") if ignore_path.exists() else ''
     expected = expected_ignore(actual, LAYOUT)
     naming_path = LAYOUT.path('config') / 'lint' / 'ls-lint.yml'
-    naming = naming_path.read_text()
+    naming = naming_path.read_text(encoding="utf-8")
     head = naming.split('ignore:', 1)[0]
     # Resolve the docs rule through its configured role as well.
     for topic in ('plans', 'provenance'):
@@ -47,14 +47,14 @@ def main(argv: list[str] | None = None) -> int:
     expected_naming = head + 'ignore:\n' + ''.join(
         '  - ' + json.dumps(LAYOUT.expand(item)) + '\n' for item in LAYOUT.lint['ignore'])
     markdown_path = LAYOUT.path('config') / 'lint' / 'markdownlintignore'
-    markdown = markdown_path.read_text()
+    markdown = markdown_path.read_text(encoding="utf-8")
     expected_markdown = '# CLI exclusions resolved from the active layout manifest.\n' + ''.join(
         LAYOUT.expand(item) + '\n' for item in LAYOUT.lint['markdown_ignore'])
     differences = [(ignore_path, actual, expected), (naming_path, naming, expected_naming),
                    (markdown_path, markdown, expected_markdown)]
     editor_path = LAYOUT.root / '.vscode' / 'settings.json'
     if editor_path.is_file():
-        editor = editor_path.read_text()
+        editor = editor_path.read_text(encoding="utf-8")
         settings = json.loads(editor)
         settings['markdownlint.configFile'] = './' + LAYOUT.relative('config') + '/lint/markdownlint.json'
         differences.append((editor_path, editor, json.dumps(settings, indent=2) + '\n'))
@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.write:
         for path, _, content in changed:
-            path.write_text(content)
+            path.write_text(content, encoding="utf-8", newline="\n")
         print('layout ignore and naming rules updated')
         return 0
     print('derived layout rules differ; run python3 -m tools.verification.sync_layout --write')

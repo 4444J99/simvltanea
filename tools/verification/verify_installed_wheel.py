@@ -129,7 +129,7 @@ def verify(wheel: Path, checkout: Path) -> dict:
         script = workspace / "consumer.py"
         script.write_text(CONSUMER, encoding="utf-8")
         subprocess.run([str(python), "-I", str(script)], cwd=workspace, env=env, check=True, timeout=360)
-        return json.loads((workspace / "consumer-result.json").read_text())
+        return json.loads((workspace / "consumer-result.json").read_text(encoding="utf-8"))
 
 
 def main() -> int:

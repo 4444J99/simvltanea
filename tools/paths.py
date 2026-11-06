@@ -8,9 +8,9 @@ from pathlib import Path
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_PROJECT = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
+_PROJECT = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 _BOOTSTRAP_MANIFEST = _REPO_ROOT / _PROJECT["tool"]["simvltanea"]["layout"]
-_BOOTSTRAP_LAYOUT = tomllib.loads(_BOOTSTRAP_MANIFEST.read_text())
+_BOOTSTRAP_LAYOUT = tomllib.loads(_BOOTSTRAP_MANIFEST.read_text(encoding="utf-8"))
 _SRC_DIR = _REPO_ROOT / _BOOTSTRAP_LAYOUT["paths"]["source"]
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))

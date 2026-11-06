@@ -45,8 +45,8 @@ def check_python() -> Check:
 
 def _run_version(path: str) -> tuple[bool, str]:
     try:
-        completed = subprocess.run([path, "-version"], capture_output=True, text=True, errors="replace",
-                                   timeout=PROBE_TIMEOUT_SECONDS)
+        completed = subprocess.run([path, "-version"], capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace", timeout=PROBE_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError) as error:
         return False, f"{path} is not runnable: {error}"
     if completed.returncode != 0:
@@ -75,7 +75,7 @@ def check_encoders() -> list[Check]:
     reason = "ffmpeg is unavailable, so encoders cannot be listed"
     if path is not None:
         try:
-            completed = subprocess.run([path, "-hide_banner", "-encoders"], capture_output=True, text=True,
+            completed = subprocess.run([path, "-hide_banner", "-encoders"], capture_output=True, text=True, encoding="utf-8",
                                        errors="replace", timeout=PROBE_TIMEOUT_SECONDS)
         except (OSError, subprocess.SubprocessError) as error:
             reason = f"could not list encoders: {error}"
