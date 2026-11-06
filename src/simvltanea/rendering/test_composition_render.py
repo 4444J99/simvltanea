@@ -299,18 +299,20 @@ class RenderTests(unittest.TestCase):
 
 # Filter-graph digests of states without the full-bleed keys, computed from the renderer
 # and compiler at the commit before lane D (git archive of HEAD, same fixture states).
-# A state without ``presentation`` must keep the historical graph byte for byte.
+# A state without ``presentation`` must keep the historical graph byte for byte, except that rate-changed
+# panels now use ``setpts=PTS/<rate>-0.0003/TB,fps=<fps>:round=up`` (issue #65); undoing that one substitution
+# reproduces the earlier digests exactly.
 LEGACY_GRAPH_SHA256 = {
-    'authored-2-contain-slice-seam/landscape': '7878396e0189796425225a89a64b00ea5277311a91268f4faceb168820db3383',
-    'authored-2-contain-slice-seam/portrait': '7fe255a88830f93bcf2f6e1dc191378b06554e6cd2dfad036928841e277562f5',
-    'authored-3/landscape': '0a47750f6efb1da98a91a9c47a1762ca2c086825d5bfb6dccf3bc1871635c186',
-    'authored-3/portrait': 'e040414a509990a5759fa9082a664b60853ce0f3eee0f5a11ddadd9b752b3887',
-    'authored-5-slice/landscape': 'c683f9785ca5fe4953795442faec882be7758aa096aa95939b671cd79d580d43',
-    'authored-5-slice/portrait': 'ea0f81e19054ad4d3a64d65830de9f109ffcec43046f6415ba73bde48b8a09dc',
-    'rows-5-no-new-keys/landscape': 'bfc769ab137338b1135209905a0242909995827f21c7bcf50644f55ca677e81f',
-    'rows-5-no-new-keys/portrait': 'c9d4e6e02ef38b10e4494bdebf1a2780a6d0a1127646baa96732a764cf3c22c7',
-    'still-controls/landscape': '52741809eae016bbee2f300290ff7fff41d5c27fc563ab41c269b6f178dc280f',
-    'still-controls/portrait': '88d2b86b26d68b0750bf5c6b74b0e78cd26d9e693fef1f8e8f50d606020d6551',
+    'authored-2-contain-slice-seam/landscape': '9f77ca4c7363571f09c70c7e7cbc00a934157b3a8337a25eea46bf78e2149cc0',
+    'authored-2-contain-slice-seam/portrait': '3e31a7736f488182d5f7c9806c847bbfe7c933facf3d3e159cd1cdf8b83014f1',
+    'authored-3/landscape': 'd80e79f47e2706ca405a366290098f69ff2b006a3c0a36ce97203150f52b7e3a',
+    'authored-3/portrait': '65525306ca937692bfcff73565fb8513e39cc83ca377584f5caa6625856131cc',
+    'authored-5-slice/landscape': 'adc649940b858179b9382dd62c8b3e6c5252ad3e6608b841d1d6f3e5fe12d88b',
+    'authored-5-slice/portrait': 'f780e70020dd1ab83c4314b51015f546c081e7be025af509073047e5c83062a3',
+    'rows-5-no-new-keys/landscape': '806dfa046ec97f242d5475d73e3e9fd8c25fb363b6174c33b4e7c2282af6c1da',
+    'rows-5-no-new-keys/portrait': '894c8680246b1e9820fd0da7e44d6592fa3a38f0a875521c30b4c89c53d71eb8',
+    'still-controls/landscape': 'd8f08adfb2da5171f3a5ee0281fe266725915dde3ebd0502ce86ce0cbd85f6ba',
+    'still-controls/portrait': '747c7a60fc5ae7e544f601e7496815bc46686420fdd301f826f5225098e87464',
 }
 
 
