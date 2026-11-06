@@ -191,11 +191,14 @@ is drawn exactly as before, and `compile_plan` emits it byte for byte as before.
 - **Bleed.** On each side a cell shares with a neighbour drawn later, the cell box
   grows `overlap_px` device pixels under that neighbour
   (`calc(<h>% + <k / devicePixelRatio>px)`), clamped to half the neighbour's pixel
-  extent. The cell drawn on top keeps its exact edge, so the visible picture is the
-  nominal partition. A side that also touches an earlier cell does not grow, because
-  it would paint over that cell. Shared edges come from the runtime's own
-  `adjacency` helper. It returns the same JSON as the Python `adjacency` for every
-  layout in the conformance corpus.
+  extent (the thinnest one when a side has several later neighbours). The cell drawn
+  on top keeps its exact edge, so the visible picture is the nominal partition. A side
+  that also touches an earlier cell does not grow, because it would paint over that
+  cell. As in the export, a side grows only when the nominal boxes of the later cells
+  cover the whole bleed strip, and when two perpendicular sides grow, the corner
+  square between them must be covered too, or the horizontal side does not grow.
+  Shared edges come from the runtime's own `adjacency` helper. It returns the same
+  JSON as the Python `adjacency` for every layout in the conformance corpus.
 - **Slices: crop, then fit.** With a slice the runtime crops the source to the slice
   window and fits that window to the cell with the cell's `fit`, positioned by the
   focal point, as the offline renderer does. The media keeps the source aspect, and
@@ -206,14 +209,18 @@ is drawn exactly as before, and `compile_plan` emits it byte for byte as before.
 - **Corner radius.** Only corners on a side shared with an earlier-drawn neighbour
   are rounded, with `border-*-radius` on the cell box. That neighbour's bleed grows
   to `overlap_px + ceil(radius in device px)`, so it fills the rounded-off area.
-  Every other corner stays square.
+  Every other corner stays square. The bleed is capped at half the neighbour's
+  extent, so on a strip thinner than `2 * (overlap_px + radius)` device pixels the
+  radius is reduced to `extent / 2 - overlap_px` device pixels. The earlier strip
+  then always backs the whole cutout.
 - **Lateral jitter.** The media target is the unchanged cell stretched by `1 + 2J`
   along the strip and shifted by `lateral_offset`, so it always contains the cell. A
   cell that spans the full canvas width runs along x, and one that spans the full
-  height runs along y. A cell that spans both (N=1) or neither uses the
-  orientation: x in portrait, y in landscape. J and the offset are fractions of the
-  drawn cell box along that axis. A strip bleeds only across, so for a strip that
-  extent is the canvas extent.
+  height runs along y. A cell that spans both (N=1) uses the orientation: x in
+  portrait, y in landscape. A cell that spans neither uses its longer side in
+  pixels (x when its width is at least its height), as the export does. J and the
+  offset are fractions of the drawn cell box along that axis. A strip bleeds only
+  across, so for a strip that extent is the canvas extent.
 - **Refusals.** The plan validator refuses a `full_bleed` layout with a `contain`
   cell or rects that do not tile the unit square exactly, and names the layout. It
   checks the `presentation` bounds, the corner rule and the `lateral_offset` rule,
@@ -222,8 +229,8 @@ is drawn exactly as before, and `compile_plan` emits it byte for byte as before.
 The hairline matrix plays strips in real headless Chrome on synthetic clips and
 counts background pixels in each screenshot. The always-on suite runs N=5 and N=12
 (`src/simvltanea/browser/test_browser_raster.py`). The full matrix (N=1, 5, 8 and 12
-at five viewports and up to three pixel ratios, with radius and jitter at 0 and at
-1/20) prints a report:
+at seven viewports, including the near-square 360x360, 744x768 and 800x800, and up to three
+pixel ratios, with radius and jitter at 0 and at 1/20) prints a report:
 
 ```bash
 python -m tools.verification.verify_strips_hairlines

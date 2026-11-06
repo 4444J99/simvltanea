@@ -2,7 +2,9 @@
 
 Spec: docs/plans/2026-11-05-full-bleed-layout-presets.md (lane B). The Node tier
 checks the runtime's adjacency helper against Python ``adjacency`` on the whole
-conformance corpus (seam test 5, runtime half) and the plan validator. The browser
+conformance corpus (seam test 5, runtime half), the plan validator and the raster
+decisions of ``rasterLayout`` (corner backing, coverage guard, bleed clamp) and
+``overscanFor`` (jitter axis). The browser
 tier runs the real runtime in headless Chrome on synthetic ``ffmpeg lavfi`` clips:
 the hairline matrix for N=5 and N=12 (seam test 6; the full N=1, 5, 8, 12 matrix is
 ``python -m tools.verification.verify_strips_hairlines``), aspect-preserving slices,
@@ -21,6 +23,7 @@ from pathlib import Path
 
 import simvltanea.authoring.composition as c
 from simvltanea.authoring import adjacency, build_artifact001, build_strips, strips_layouts
+from simvltanea.authoring.layout_presets import DEFAULT_STRIPS_PRESET
 from simvltanea.browser.browser_runtime import HERE, compile_plan
 from simvltanea.browser.test_browser_runtime import browser_executable
 from tools.verification import verify_strips_hairlines as hairlines
@@ -113,6 +116,157 @@ console.log(JSON.stringify(input.map(cells => canonical(runtime.adjacency(cells)
         self.assertEqual(run_node('console.log(JSON.stringify(runtime.adjacency(input)));', cells),
                          [{"a": 0, "b": 1, "edge": "bottom", "span": ["0", "1"]},
                           {"a": 1, "b": 2, "edge": "bottom", "span": ["0", "1"]}])
+
+
+def hand_layout(rects, overlap=2, radius='0', jitter='0') -> dict:
+    """A layout with ``presentation`` over hand-written rects (draw order = list order)."""
+    return dict(name='hand', presentation=dict(overlap_px=overlap, corner_radius=radius, lateral_jitter=jitter),
+                cells=[dict(loop=f'loop-{k + 1}', rect=list(rect), fit='cover', focal=['1/2', '1/2'])
+                       for k, rect in enumerate(rects)])
+
+
+GROW = r'''
+console.log(JSON.stringify(input.map(({layout, width, height, ratio}) =>
+  runtime.rasterLayout(layout, width, height, ratio).cells.map(cell => cell.grow))));
+'''
+
+
+class CornerBackingTests(unittest.TestCase):
+    """A rounded corner must always have the earlier strip beneath its whole cutout (always-fill)."""
+
+    BACKING = r'''
+console.log(JSON.stringify(input.map(({layout, width, height, ratio, configured}) => {
+  const raster = runtime.rasterLayout(layout, width, height, ratio);
+  const edges = runtime.adjacency(layout.cells).map(({a, b, edge}) => ({a, b, edge,
+    backing: raster.cells[a].grow[edge] * ratio, radius: raster.cells[b].radius,
+    rounded: [...raster.cells[b].rounded]}));
+  return {configured, overlap: layout.presentation.overlap_px, ratio, edges};
+})));
+'''
+
+    @staticmethod
+    def case(count, orientation, width, height, ratio, weights=None):
+        preset = copy.deepcopy(DEFAULT_STRIPS_PRESET)
+        preset['style'] = {'corner_radius': '1/20', 'lateral_jitter': '0'}
+        if weights:
+            preset['weights'] = {'default': 'equal', 'by_count': {str(count): weights}}
+        layout = strips_layouts(count, preset)[orientation]
+        return dict(layout=layout, width=width, height=height, ratio=ratio,
+                    configured=float(Fraction(1, 20) * min(width, height)))
+
+    def assert_backed(self, out):
+        for index, result in enumerate(out):
+            for edge in result['edges']:
+                with self.subTest(case=index, edge=(edge['a'], edge['b'])):
+                    # The earlier cell extends under the later one by at least overlap + the rounded radius.
+                    self.assertGreaterEqual(edge['backing'] + 1e-6, result['overlap'] + edge['radius'] * result['ratio'])
+                    self.assertLessEqual(edge['radius'], result['configured'] + 1e-9)
+                    self.assertGreater(edge['radius'], 0)
+                    self.assertTrue(edge['rounded'])
+
+    def test_backing_covers_every_rounded_corner_and_thin_strips_get_a_smaller_radius(self):
+        cases = [self.case(2, 'portrait', 900, 1000, 1, ['99', '1']),    # a 10 px strip
+                 self.case(12, 'landscape', 360, 360, 1),                # 30 px strips, radius 18 px
+                 self.case(12, 'landscape', 360, 360, 2),
+                 self.case(5, 'portrait', 375, 812, 3)]                  # roomy strips: radius unchanged
+        out = run_node(self.BACKING, cases)
+        self.assert_backed(out)
+        reduced = [edge['radius'] for edge in out[0]['edges']] + [edge['radius'] for edge in out[1]['edges']]
+        self.assertTrue(all(radius < out[1]['configured'] for radius in reduced), reduced)
+        self.assertAlmostEqual(out[0]['edges'][0]['radius'], 3.0)         # (10 / 2 - 2) px
+        self.assertAlmostEqual(out[1]['edges'][0]['radius'], 13.0)        # (30 / 2 - 2) px
+        self.assertTrue(all(abs(edge['radius'] - out[3]['configured']) < 1e-9 for edge in out[3]['edges']))
+
+    def test_a_thin_sibling_on_the_same_side_reduces_the_radius_of_the_wide_neighbour(self):
+        # Cell 0's bottom is shared with a 500 px cell and a 50 px cell: its bleed is capped at 25 px,
+        # so the wide cell's corners can only be backed behind 25 - 2 = 23 px, not the configured 50 px.
+        layout = hand_layout([['0', '0', '1', '1/2'], ['0', '1/2', '1/2', '1/2'], ['1/2', '1/2', '1/2', '1/20'],
+                              ['1/2', '11/20', '1/2', '9/20']], overlap=2, radius='1/20')
+        out = run_node(self.BACKING, [dict(layout=layout, width=1000, height=1000, ratio=1, configured=50.0)])
+        self.assert_backed(out)
+        for edge in out[0]['edges']:
+            if edge['a'] == 0:
+                self.assertAlmostEqual(edge['radius'], 23)
+
+
+    def test_a_dropped_bleed_leaves_no_rounded_corner_without_backing(self):
+        # A 2x2 grid drawn BR, TL, TR, BL: the corner-square check drops one side's bleed, and the cell next
+        # to it must then lose the rounding that bleed was meant to back (or its cutout would show the canvas).
+        layout = hand_layout([['1/2', '1/2', '1/2', '1/2'], ['0', '0', '1/2', '1/2'], ['1/2', '0', '1/2', '1/2'],
+                              ['0', '1/2', '1/2', '1/2']], overlap=2, radius='1/20')
+        out = run_node(self.BACKING, [dict(layout=layout, width=1000, height=1000, ratio=1, configured=50.0),
+                                      dict(layout=layout, width=1000, height=1000, ratio=2, configured=50.0)])
+        for index, result in enumerate(out):
+            for edge in result['edges']:
+                with self.subTest(case=index, edge=(edge['a'], edge['b'])):
+                    backed = max(0.0, edge['backing'] - result['overlap'])
+                    self.assertLessEqual(edge['radius'] * result['ratio'], backed + 1e-6)
+                    if edge['radius'] == 0:
+                        self.assertEqual(edge['rounded'], [])
+        # The guard really bites in this layout: some cell loses its rounding because its backing was dropped.
+        self.assertTrue(any(edge['radius'] == 0 for result in out for edge in result['edges']), out)
+
+
+class CoverageGuardTests(unittest.TestCase):
+    """A side grows only where later cells hide the whole bleed, as in render_triptych.presentation_placements."""
+
+    def test_side_grows_only_when_later_cells_cover_the_whole_strip(self):
+        partial = hand_layout([['0', '0', '1/2', '1/2'], ['0', '1/2', '1/4', '1/2']])   # bottom half exposed
+        full = hand_layout([['0', '0', '1/2', '1/2'], ['0', '1/2', '1/2', '1/2']])
+        out = run_node(GROW, [dict(layout=layout, width=1000, height=1000, ratio=ratio)
+                              for layout in (partial, full) for ratio in (1, 2)])
+        self.assertEqual([grows[0]['bottom'] for grows in out], [0, 0, 2, 1])
+        self.assertTrue(all(grows[1] == {'top': 0, 'right': 0, 'bottom': 0, 'left': 0} for grows in out))
+
+    def test_an_uncovered_grown_corner_square_drops_the_horizontal_side(self):
+        # No fourth cell: cell 0's right and bottom strips are covered, the square between them is not.
+        layout = hand_layout([['0', '0', '1/2', '1/2'], ['1/2', '0', '1/2', '1/2'], ['0', '1/2', '1/2', '1/2']])
+        out = run_node(GROW, [dict(layout=layout, width=1000, height=1000, ratio=1)])
+        self.assertEqual(out[0][0], {'top': 0, 'right': 0, 'bottom': 2, 'left': 0})
+        self.assertEqual(out[0][1], {'top': 0, 'right': 0, 'bottom': 0, 'left': 0})
+
+    def test_grid_fixture_keeps_its_bleed_where_fully_covered(self):
+        portrait = json.loads((CORPUS / 'valid' / 'grid-4-bleed-pair.json').read_text())['portrait']
+        out = run_node(GROW, [dict(layout=portrait, width=375, height=812, ratio=2)])[0]
+        # Radius 1/20 * 375 = 18.75 CSS px = 37.5 device px; bleed 8 + ceil(37.5) = 46 device px = 23 CSS px.
+        # Cell 1's left and cell 2's top touch earlier cells, so they never grow.
+        none = {'top': 0, 'right': 0, 'bottom': 0, 'left': 0}
+        self.assertEqual(out, [dict(none, right=23, bottom=23), dict(none, bottom=23), dict(none, right=23), none])
+
+
+class BleedClampTests(unittest.TestCase):
+    """The bleed is at most half of the thinnest later neighbour's device-pixel extent."""
+
+    def test_bleed_is_clamped_to_half_the_neighbour_and_to_the_thinnest_of_several(self):
+        thin = hand_layout([['0', '0', '1', '99/100'], ['0', '99/100', '1', '1/100']], overlap=8)   # a 10 px strip
+        siblings = hand_layout([['0', '0', '1', '1/2'], ['0', '1/2', '1/2', '1/2'], ['1/2', '1/2', '1/2', '1/100'],
+                                ['1/2', '51/100', '1/2', '49/100']], overlap=8)
+        out = run_node(GROW, [dict(layout=thin, width=1000, height=1000, ratio=1),       # cap 5 device px
+                              dict(layout=thin, width=1000, height=1000, ratio=2),       # cap 10: overlap 8 fits
+                              dict(layout=siblings, width=1000, height=1000, ratio=1)])  # min(250, 5) = 5
+        self.assertEqual(out[0][0]['bottom'], 5)
+        self.assertEqual(out[1][0]['bottom'], 4)
+        self.assertEqual(out[2][0]['bottom'], 5)
+        self.assertEqual(out[2][1]['right'], 8)
+
+
+class JitterAxisTests(unittest.TestCase):
+    """overscanFor picks the jitter axis by render_triptych._jitter_axis's rule."""
+
+    def test_axis_follows_the_export_rule(self):
+        layout = hand_layout([['0', '0', '1', '1']], overlap=0, jitter='1/20')
+        cases = [(['0', '0', '1/2', '1/2'], 'portrait', 375, 812),     # 2x2 grid cell, taller: y
+                 (['0', '0', '1/2', '1/2'], 'landscape', 1280, 720),   # wider: x
+                 (['0', '0', '1/2', '1/2'], 'landscape', 500, 500),    # square: x
+                 (['0', '0', '1', '1/5'], 'landscape', 1280, 720),     # full-width row: x
+                 (['0', '0', '1/5', '1'], 'portrait', 375, 812),       # full-height column: y
+                 (['0', '0', '1', '1'], 'portrait', 375, 812),         # one strip: orientation
+                 (['0', '0', '1', '1'], 'landscape', 1280, 720)]
+        out = run_node(r'''
+console.log(JSON.stringify(input.cases.map(([rect, orientation, width, height]) =>
+  runtime.overscanFor({rect, lateral_offset:'0'}, input.layout, orientation, width, height).axis)));
+''', dict(layout=layout, cases=cases))
+        self.assertEqual(out, ['y', 'x', 'x', 'x', 'y', 'x', 'y'])
 
 
 class PlanValidationTests(unittest.TestCase):
@@ -239,7 +393,12 @@ class RasterBrowserTests(unittest.TestCase):
                 for ratio, sizes in hairlines.VIEWPORTS:
                     rows.extend(self.probe.measure(plan, ratio, sizes, label=f'strips N={count} {style}'))
         (hairlines.ROOT / 'hairline-default.json').write_text(json.dumps(rows, indent=2) + '\n')
-        self.assertEqual(len(rows), len(hairlines.DEFAULT_COUNTS) * len(hairlines.STYLES) * 13)
+        self.assertEqual(len(rows), len(hairlines.DEFAULT_COUNTS) * len(hairlines.STYLES) * 19)
+        near_square = {'360x360', '744x768', '800x800'}
+        self.assertEqual({row['viewport'] for row in rows} & near_square, near_square)
+        # 800x800 at 2x is the canvas where the unreduced corner radius showed 44 background pixels at N=12.
+        self.assertTrue(any(row['viewport'] == '800x800' and row['ratio'] == 2 and row['case'] == 'strips N=12 max'
+                            for row in rows))
         self.assertEqual([hairlines.format_row(row) for row in hairlines.failures(rows)], [])
         self.assertEqual(sum(row['background'] for row in rows), 0)
         self.assertEqual({row['orientation'] for row in rows}, {'portrait', 'landscape'})

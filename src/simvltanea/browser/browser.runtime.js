@@ -274,50 +274,114 @@ function adjacency(cells) {
   return result;
 }
 /* Per-cell raster decisions for one layout at one stage size and pixel ratio.
- * Bleed: a side shared with a later neighbour grows `overlap_px` device px (plus
- * ceil(radius) when corners are rounded) underneath it, clamped to half of that
- * neighbour's pixel extent. A side that also touches an earlier cell does not
- * grow: it would paint over that cell. Corners on a side shared with an earlier
- * neighbour are rounded; all others stay square. Layouts without `presentation`
- * get no bleed and no rounding, exactly as before. */
+ * Bleed: a side shared with later neighbours grows `overlap_px` device px (plus
+ * ceil(radius) when corners are rounded) underneath them, clamped to half of the
+ * thinnest such neighbour's pixel extent. A side that also touches an earlier cell
+ * does not grow: it would paint over that cell. As in the export
+ * (render_triptych.presentation_placements), a side grows only when the nominal
+ * boxes of the later cells cover the whole bleed strip, and a grown corner square
+ * must be covered too, so the bleed never changes a visible pixel. Corners on a
+ * side shared with an earlier neighbour are rounded; all others stay square.
+ * Layouts without `presentation` get no bleed and no rounding, exactly as before. */
+const COVERAGE_EPSILON = 1e-9;
+function bleedRegion([x, y, w, h], side, amount) {
+  if (side === 'bottom') return [x, y + h, w, amount];
+  if (side === 'top') return [x, y - amount, w, amount];
+  if (side === 'right') return [x + w, y, amount, h];
+  return [x - amount, y, amount, h];
+}
+/* True when `boxes` (pairwise disjoint, device px) cover `region`. */
+function coveredBy([x, y, w, h], boxes) {
+  let area = 0;
+  for (const [bx, by, bw, bh] of boxes) {
+    const dx = Math.min(x + w, bx + bw) - Math.max(x, bx), dy = Math.min(y + h, by + bh) - Math.max(y, by);
+    if (dx > 0 && dy > 0) area += dx * dy;
+  }
+  return area >= w * h - COVERAGE_EPSILON * Math.max(1, w * h);
+}
 function rasterLayout(layout, width, height, ratio) {
-  const cells = layout.cells.map(() => ({grow:{top:0, right:0, bottom:0, left:0}, rounded:new Set()}));
+  const cells = layout.cells.map(() => ({grow:{top:0, right:0, bottom:0, left:0}, rounded:new Set(), radius:0}));
   const presentation = layout.presentation;
   if (!presentation) return {cells, radius:0};
   const radiusFraction = number(presentation.corner_radius);
   const radius = radiusFraction * Math.min(width, height);
-  const bleed = presentation.overlap_px + (radiusFraction > 0 ? Math.ceil(radius * ratio - 1e-9) : 0);
+  const overlap = presentation.overlap_px;
   const edges = adjacency(layout.cells);
   const touchesEarlier = new Set(edges.map(edge => `${edge.b}:${OPPOSITE_SIDE[edge.edge]}`));
   const rects = layout.cells.map(cell => cell.rect.map(number));
-  const limits = new Map();
+  const boxes = rects.map(([x, y, w, h]) => [x * width * ratio, y * height * ratio, w * width * ratio, h * height * ratio]);
+  const extentOf = (b, edge) => edge === 'top' || edge === 'bottom' ? boxes[b][3] : boxes[b][2];
+  // Each side's bleed is capped at half of its thinnest later neighbour (device px).
+  const caps = new Map(), later = new Map();
   for (const {a, b, edge} of edges) {
-    if (radius > 0) cells[b].rounded.add(OPPOSITE_SIDE[edge]);
     const key = `${a}:${edge}`;
-    if (!bleed || touchesEarlier.has(key)) continue;
-    const extent = (edge === 'top' || edge === 'bottom' ? rects[b][3] * height : rects[b][2] * width) * ratio;
-    const device = Math.min(bleed, extent / 2);
-    limits.set(key, limits.has(key) ? Math.min(limits.get(key), device) : device);
+    caps.set(key, Math.min(caps.has(key) ? caps.get(key) : Infinity, extentOf(b, edge) / 2));
+    later.set(key, [...(later.get(key) || []), b]);
   }
-  for (const [key, device] of limits) {
+  /* The backing under a rounded corner is the earlier neighbour's bleed, capped as above, so a cell
+   * next to a thin cell can only be backed behind a smaller radius: reduce it to what every backing
+   * covers (overlap + radius must fit under each cap). Otherwise the cutout shows background. */
+  const effective = layout.cells.map(() => radius);
+  if (radius > 0) {
+    for (const {a, b, edge} of edges) {
+      effective[b] = Math.min(effective[b], Math.max(0, caps.get(`${a}:${edge}`) - overlap) / ratio);
+    }
+  }
+  const device = layout.cells.map(() => ({}));
+  for (const [key, neighbours] of later) {
+    const want = overlap + Math.max(...neighbours.map(b => effective[b] > 0 ? Math.ceil(effective[b] * ratio - 1e-9) : 0));
+    const amount = Math.min(want, caps.get(key));
+    if (!(amount > 0) || touchesEarlier.has(key)) continue;
     const [index, side] = key.split(':');
-    cells[Number(index)].grow[side] = device / ratio;
+    const a = Number(index);
+    if (coveredBy(bleedRegion(boxes[a], side, amount), boxes.slice(a + 1))) device[a][side] = amount;
+  }
+  device.forEach((sides, index) => {
+    // A grown corner square (two perpendicular grown sides) must be hidden too.
+    const [x, y, w, h] = boxes[index];
+    for (const vertical of ['top', 'bottom']) {
+      for (const horizontal of ['left', 'right']) {
+        if (!(vertical in sides && horizontal in sides)) continue;
+        const corner = [horizontal === 'left' ? x - sides[horizontal] : x + w,
+          vertical === 'top' ? y - sides[vertical] : y + h, sides[horizontal], sides[vertical]];
+        if (!coveredBy(corner, boxes.slice(index + 1))) delete sides[horizontal];
+      }
+    }
+    for (const [side, amount] of Object.entries(sides)) cells[index].grow[side] = amount / ratio;
+  });
+  /* Earlier cells are final here: a bleed that was dropped (the side or a corner square is not under
+   * later cells) or never grown (the side touches an even earlier cell) backs no corner, so each cell's
+   * radius shrinks to what every earlier neighbour's granted bleed covers, and it is rounded only if
+   * something is left. This mirrors the export's presentation_placements. */
+  if (radius > 0) {
+    layout.cells.forEach((_, b) => {
+      const shared = edges.filter(edge => edge.b === b);
+      if (!shared.length) return;
+      const backed = Math.min(...shared.map(({a, edge}) => Math.max(0, (device[a][edge] || 0) - overlap) / ratio));
+      const final = Math.min(effective[b], backed);
+      if (final > 0) {
+        cells[b].radius = final;
+        cells[b].rounded = new Set(shared.map(({edge}) => OPPOSITE_SIDE[edge]));
+      }
+    });
   }
   return {cells, radius};
 }
 /* Lateral jitter as overscan: the media target is the unchanged cell stretched by
  * 1+2J along the strip and shifted by the resolved offset, so it always contains
  * the cell. A cell spanning the full canvas width runs along x, one spanning the
- * full height along y; otherwise (one cell, or a non-strip cell) the orientation
- * decides: portrait x, landscape y. J and the offset are fractions of the drawn
- * cell box along that axis; a strip bleeds only across, so that is the canvas extent. */
-function overscanFor(cell, layout, orientation) {
+ * full height along y; one spanning both (one strip) follows the orientation:
+ * portrait x, landscape y. Any other cell uses its longer side in pixels (x when
+ * width >= height), as render_triptych._jitter_axis does. J and the offset are
+ * fractions of the drawn cell box along that axis; a strip bleeds only across, so
+ * that is the canvas extent. */
+function overscanFor(cell, layout, orientation, width, height) {
   const jitter = layout.presentation ? number(layout.presentation.lateral_jitter) : 0;
   if (!(jitter > 0) || cell.lateral_offset === undefined) return null;
   const [, , w, h] = cell.rect.map(number);
   const fullWidth = Math.abs(w - 1) <= EDGE_EPSILON, fullHeight = Math.abs(h - 1) <= EDGE_EPSILON;
   const axis = fullWidth && !fullHeight ? 'x' : fullHeight && !fullWidth ? 'y' :
-    orientation === 'portrait' ? 'x' : 'y';
+    fullWidth && fullHeight ? (orientation === 'portrait' ? 'x' : 'y') : w * width >= h * height ? 'x' : 'y';
   return {axis, jitter, offset:number(cell.lateral_offset)};
 }
 function mediaTarget(geometry) {
@@ -583,7 +647,7 @@ function applyLayout() {
   layout.cells.forEach((cell, z) => {
     const node = runtime.nodes.get(cell.loop);
     const [x,y,w,h] = cell.rect.map(number);
-    const {grow, rounded} = raster.cells[z];
+    const {grow, rounded, radius} = raster.cells[z];
     // Bleed under later neighbours in CSS px (device px / ratio); the edge drawn on top stays exact.
     const start = (value, before) => before ? `calc(${value*100}% - ${before}px)` : `${value*100}%`;
     const size = (value, extra) => extra ? `calc(${value*100}% + ${extra}px)` : `${value*100}%`;
@@ -591,9 +655,9 @@ function applyLayout() {
       width:size(w, grow.left + grow.right), height:size(h, grow.top + grow.bottom), zIndex:String(z), overflow:'hidden'});
     const round = new Set([...rounded].flatMap(side => SIDE_CORNERS[side]));
     for (const corner of CORNERS)
-      node.box.style[`border${corner}Radius`] = round.has(corner) ? `${raster.radius}px` : '';
+      node.box.style[`border${corner}Radius`] = round.has(corner) ? `${radius}px` : '';
     node.geometry = {width:w*width + grow.left + grow.right, height:h*height + grow.top + grow.bottom,
-      overscan:overscanFor(cell, layout, orientation)};
+      overscan:overscanFor(cell, layout, orientation, width, height)};
     // Default focal/cover; slice overrides via applySlice per span
     node.cell = cell;
     if (!isPartialSlice(resolveSliceRect(node))) {
@@ -1499,6 +1563,8 @@ function pageSnapshot(items, options = {}) {
 runtime.pageSnapshot = pageSnapshot;
 runtime.applySlice = applySlice;
 runtime.adjacency = adjacency;
+runtime.rasterLayout = rasterLayout;
+runtime.overscanFor = overscanFor;
 runtime.validatePlan = validatePlan;
 
 if (typeof window !== 'undefined') {

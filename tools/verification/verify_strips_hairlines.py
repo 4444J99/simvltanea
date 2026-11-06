@@ -3,9 +3,12 @@
 
 Seam test 6 of docs/plans/2026-11-05-full-bleed-layout-presets.md: a screenshot of
 the real browser runtime playing strips N=1, 5, 8 and 12 at 375x812, 390x844 and
-360x780 (1x, 2x, 3x) and at 1280x720 and 1366x768 (1x, 2x), with corner_radius and
-lateral_jitter at 0 and at their maxima, has zero background pixels. A background
-pixel is a device pixel whose largest channel is below 40.
+360x780 (1x, 2x, 3x), at 1280x720 and 1366x768 (1x, 2x) and at the near-square
+360x360, 744x768 and 800x800 (1x, 2x), with corner_radius and lateral_jitter at 0 and at their
+maxima, has zero background pixels. A background pixel is a device pixel whose
+largest channel is below 40. The near-square viewports give the thinnest strips
+relative to the radius (N=12 at 360x360: 30 px strips, configured radius 18 px), where
+the runtime reduces the radius so the earlier strip backs the whole cutout.
 
 The clips are synthetic ``ffmpeg -f lavfi`` ramps (R = row, G = column, B = 80 + 14k
 per clip, plus temporal noise), so the background is the only near-black colour;
@@ -46,8 +49,9 @@ MAX_CLIPS = 12
 NEAR_BLACK = 40  # largest channel below this is a background pixel
 PHONES = ((375, 812), (390, 844), (360, 780))
 DESKTOPS = ((1280, 720), (1366, 768))
+NEAR_SQUARE = ((360, 360), (744, 768), (800, 800))  # 800x800 @2x is the canvas that exposed the corner defect
 # Grouped by device pixel ratio: one browser context per ratio, resized in place.
-VIEWPORTS = ((1, PHONES + DESKTOPS), (2, PHONES + DESKTOPS), (3, PHONES))
+VIEWPORTS = ((1, PHONES + DESKTOPS + NEAR_SQUARE), (2, PHONES + DESKTOPS + NEAR_SQUARE), (3, PHONES))
 STYLES = {'flat': ('0', '0'), 'max': ('1/20', '1/20')}  # (corner_radius, lateral_jitter)
 FULL_COUNTS = (1, 5, 8, 12)
 DEFAULT_COUNTS = (5, 12)
