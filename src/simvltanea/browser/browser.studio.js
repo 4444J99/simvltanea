@@ -883,7 +883,7 @@
       try { node.audio.gain.disconnect(); } catch (_) { /* not yet connected */ }
       node.audio.gain.connect(mix.input);
       const item = session.byTrack.get(node.id);
-      if (item && item.builtin !== undefined) {
+      if (builtins.includes(item)) {
         const bus = r.audio.context.createGain(); bus.connect(node.audio.pan);
         voices.push({period: item.quantized.seconds, events: VOICES[item.name], input: bus, until: 0});
       }
