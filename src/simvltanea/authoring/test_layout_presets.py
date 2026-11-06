@@ -442,6 +442,28 @@ class StrictFileTests(unittest.TestCase):
             message = raises_code(self, "cell-count", load_layout_file, path)
             self.assertIn("count 1, portrait: has 2 cells, expected 1", message)
 
+    def test_state_validation_refuses_a_wrong_cell_count_before_geometry(self):
+        # 200 identical, overlapping cells for two loops: the count is compared with the loops first, so the
+        # error is the mapping error, not the overlap error the quadratic loop would raise (and takes no time).
+        cell = {"loop": "loop-1", "rect": ["0", "0", "1", "1"], "fit": "cover", "focal": ["1/2", "1/2"]}
+        cells = [{**cell, "loop": f"loop-{index % 2 + 1}"} for index in range(200)]
+        pair = {"portrait": {"name": "p", "cells": cells}, "landscape": {"name": "l", "cells": cells}}
+        message = raises_code(self, "mapping", validate_layout_pair, pair, {"loop-1", "loop-2"})
+        self.assertIn("each orientation must map every loop exactly once", message)
+
+    def test_oversized_count_keys_are_coded_errors_with_a_bounded_message(self):
+        # int() raises a plain ValueError for digit strings over 4300 characters on Python 3.12.
+        huge = "1" * 5000
+        cases = (
+            ("weights", preset(weights={"default": "equal", "by_count": {huge: ["1", "1"]}})),
+            ("focal", preset(focal={**DEFAULT_STRIPS_PRESET["focal"], "by_index": {huge: ["1/2", "1/2"]}})),
+            ("zoom", preset(zoom={**DEFAULT_STRIPS_PRESET["zoom"], "table": {huge: "1/2"}})),
+        )
+        for code, value in cases:
+            with self.subTest(code=code):
+                message = raises_code(self, code, strips_slice, 2, value)
+                self.assertLess(len(message), 400, len(message))
+
     def test_weights_outside_state_rationals_are_refused_at_parse(self):
         for weights in (["1", "1/1000000000"], ["1000000000", "1"]):
             with self.subTest(weights=weights):
