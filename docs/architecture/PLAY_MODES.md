@@ -63,8 +63,8 @@ earlier versions. The spatial gravity neighbours come from the strips cells (str
 either orientation; the bleed overlap is presentation only and the cell rectangles abut), the usual render
 segment and span limits apply, and the `.play.json` record keeps `layout_preset` so `--config` replays it.
 
-Known limitation (issue #61): the browser's client compiler cannot read play states yet. Only the Python
-`compile_plan` and the offline renderer do.
+The browser's client compiler reads these states too (issue #61; the paragraph on the in-browser client compiler
+below says what it still refuses).
 
 ### Replaying a record
 
