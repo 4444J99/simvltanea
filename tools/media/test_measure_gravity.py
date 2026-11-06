@@ -1,6 +1,7 @@
 """The measured tables of GRAVITY.md can be regenerated from this repository (DOC-9) and stay equal to the code."""
 import copy
 import io
+import json
 import shutil
 import tempfile
 import unittest
@@ -16,12 +17,34 @@ class MeasuredTablesTests(unittest.TestCase):
     def setUpClass(cls):
         cls.measurer = measure_gravity.Measurer()
         cls.text = measure_gravity.DOC.read_text(encoding="utf-8")
+        # pick_ranks is not cached by the Measurer, and the opposites block (all five settings) is rendered by
+        # three tests here and by the opposites test itself. Its result depends only on (measurer, configuration,
+        # loop count) and the run is seeded, so for the class's measurer each distinct call runs once.
+        ranks, real = {}, measure_gravity.pick_ranks
+
+        def pick_ranks(m, config, n=measure_gravity.RATIO_LOOPS):
+            if m is not cls.measurer:
+                return real(m, config, n)
+            key = (json.dumps(config, sort_keys=True), n)
+            if key not in ranks:
+                ranks[key] = real(m, config, n)
+            return ranks[key]
+        patch = mock.patch.object(measure_gravity, "pick_ranks", pick_ranks)
+        patch.start()
+        cls.addClassCleanup(patch.stop)
 
     def test_the_page_equals_a_fresh_measurement(self):
         self.assertTrue(measure_gravity.render(self.text, self.measurer) == self.text,
                         "run python3 -m tools.media.measure_gravity --write")
 
     def test_check_mode_exits_zero_on_the_committed_page_and_one_on_a_wrong_number(self):
+        # main() builds its own Measurer(); it is handed the class's one instead, so the whole measurement runs once
+        # per class rather than once more for each call here. Measurer() takes no arguments and is deterministic
+        # (test_two_measurements_are_identical builds a second one and compares), and its cache is keyed by the
+        # pure (params, n), so main measures exactly what a fresh Measurer would. The CLI path itself is unchanged.
+        fresh = mock.patch.object(measure_gravity, "Measurer", return_value=self.measurer)
+        made = fresh.start()
+        self.addCleanup(fresh.stop)
         out = io.StringIO()
         with redirect_stdout(out):
             self.assertEqual(measure_gravity.main(["--check"]), 0, out.getvalue())
@@ -32,6 +55,7 @@ class MeasuredTablesTests(unittest.TestCase):
         (scratch / "GRAVITY.md").write_text(wrong, encoding="utf-8")
         with mock.patch.object(measure_gravity, "DOC", scratch / "GRAVITY.md"), redirect_stdout(io.StringIO()):
             self.assertEqual(measure_gravity.main(["--check"]), 1)
+        self.assertEqual(made.call_count, 2)
 
     def test_two_measurements_are_identical(self):
         again = measure_gravity.Measurer()

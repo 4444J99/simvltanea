@@ -269,7 +269,8 @@ class BrowserTests(unittest.TestCase):
         from playwright.sync_api import sync_playwright
         prepare()
         cls.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),functools.partial(QuietHandler,directory=str(ROOT)))
-        cls.thread=threading.Thread(target=cls.server.serve_forever,daemon=True);cls.thread.start()
+        # A short poll interval: shutdown() waits up to one interval for serve_forever to notice.
+        cls.thread=threading.Thread(target=cls.server.serve_forever,kwargs={'poll_interval':0.05},daemon=True);cls.thread.start()
         cls.pw=sync_playwright().start()
         executable=browser_executable()
         cls.browser=cls.pw.chromium.launch(executable_path=executable,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
@@ -281,7 +282,19 @@ class BrowserTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.browser.close();cls.pw.stop();cls.server.shutdown();cls.server.server_close();cls.thread.join()
+        # Pages and contexts first (each test closes its own; this catches any a failing test left open, which
+        # would otherwise keep media requests and decoders alive into browser.close), then every remaining step
+        # even when an earlier one raises, so a slow or failed close never leaks the driver, the listening socket
+        # or the serving thread into the classes that run after this one.
+        try:
+            for context in list(cls.browser.contexts):
+                context.close()
+            cls.browser.close()
+        finally:
+            try:
+                cls.pw.stop()
+            finally:
+                cls.server.shutdown();cls.server.server_close();cls.thread.join(timeout=30)
 
     def open_preview(self,name):
         page=self.browser.new_page(viewport={'width':390,'height':844})
