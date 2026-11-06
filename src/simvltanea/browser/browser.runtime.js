@@ -16,7 +16,7 @@ const stage = document.querySelector('#stage');
 const runtime = window.compositionRuntime = {
   ready: false, running: false, finished: false, error: null, frame: 0,
   events: [], maxEvents: 256, nodes: new Map(), sources: new Map(), plan: null, origin: 0,
-  orientation: null, layoutIndex: 0, position: 0, generation: 0, starting: false,
+  orientation: null, orientationOverride: null, layoutIndex: 0, position: 0, generation: 0, starting: false,
   initEpoch: 0, initController: null, transitions: new Set(), pauseIntent: false, initializing: false, retryable: false, assetError: null, disposed: false,
   restarting: null, restartIntent: false,
   audio: {mode:'none', context:null, enabled:false, buffer:null, source:null, gain:null, interrupted:false},
@@ -436,7 +436,7 @@ function applyLayout() {
   if (!runtime.plan || runtime.nodes.size !== runtime.plan.tracks.length) return;
   const {width, height} = stage.getBoundingClientRect();
   if (width <= 0 || height <= 0) return;
-  const orientation = width >= height ? 'landscape' : 'portrait';
+  const orientation = runtime.orientationOverride ?? (width >= height ? 'landscape' : 'portrait');
   const orientationChanged=runtime.orientation!==null && runtime.orientation!==orientation;
   const layout = runtime.plan.layout_keyframes[runtime.layoutIndex].layouts[orientation];
   runtime.orientation = orientation;
@@ -467,6 +467,16 @@ function applyLayout() {
 }
 runtime.resizeObserver = new ResizeObserver(applyLayout);
 runtime.resizeObserver.observe(stage);
+/* A caller may pin the authored layout instead of deriving it from the stage
+ * shape; null returns to the viewport rule. Like a resize, this only moves loop
+ * boxes: no media element, source or clock is touched. */
+runtime.setOrientation = value => {
+  if (value !== null && value !== 'portrait' && value !== 'landscape')
+    throw new Error('Orientation must be "portrait", "landscape" or null');
+  runtime.orientationOverride = value;
+  record('orientation-override', null, {orientation: value});
+  applyLayout();
+};
 
 async function activate(node, span, frame, initial = false) {
   const epoch = runtime.initEpoch;
@@ -817,6 +827,7 @@ runtime.snapshot = () => {
   const sampledTime = compositionTime();
   return {
     frame: runtime.frame, wall: performance.now(), orientation: runtime.orientation,
+    orientationOverride: runtime.orientationOverride,
     running: runtime.running, finished: runtime.finished, error: runtime.error,
     retryable: !!runtime.retryable,
     assetError: runtime.assetError ?? null,
@@ -853,6 +864,13 @@ runtime.snapshot = () => {
 };
 // Tests may supply file-backed IO without enabling network access. Playback,
 // layout, integrity comparisons and event handling use the identical code path.
+// Media supplied through this hook (for example files a visitor chose) need not
+// be MP4: any lowercase alphanumeric video suffix is accepted, the optional
+// io.type(source) names the Blob type, and io.maxMediaBytes may raise the
+// memory guard up to 512 MiB. Staged previews keep the MP4-only, 256 MiB rules.
+const ioHook = Boolean(window.compositionIO);
+const MEDIA_GUARD = 256*1024*1024, IO_MEDIA_GUARD_LIMIT = 512*1024*1024;
+const VIDEO_TYPES = {mp4:'video/mp4', m4v:'video/mp4', mov:'video/quicktime', qt:'video/quicktime', webm:'video/webm'};
 const io = window.compositionIO || {
   async plan() {
     const response = await fetch('plan.json');
@@ -869,6 +887,15 @@ const io = window.compositionIO || {
     return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(v => v.toString(16).padStart(2,'0')).join('');
   },
 };
+function mediaGuard() {
+  const declared = ioHook ? io.maxMediaBytes : undefined;
+  return Number.isSafeInteger(declared) && declared > 0 ? Math.min(declared, IO_MEDIA_GUARD_LIMIT) : MEDIA_GUARD;
+}
+async function videoType(source) {
+  const declared = ioHook && typeof io.type === 'function' ? await io.type(source) : null;
+  if (typeof declared === 'string' && /^video\/[a-z0-9.+-]+$/i.test(declared)) return declared;
+  return VIDEO_TYPES[source.path.slice(source.path.lastIndexOf('.') + 1)] || 'video/mp4';
+}
 // Validate the transport document before IO or DOM mutation. This checks the
 // compiled envelope and references; it does not choose media or resolve events.
 function validatePlan(plan) {
@@ -883,15 +910,15 @@ function validatePlan(plan) {
   need(integer(plan.fps, 1, 60) && integer(plan.frames, 1, 14400), 'time bounds');
   need(Array.isArray(plan.tracks) && integer(plan.tracks.length, 1, 32), 'loop guard');
   need(Array.isArray(plan.sources) && plan.sources.length > 0, 'sources');
-  const sources = new Map(); let total = 0;
+  const sources = new Map(), guard = mediaGuard(); let total = 0;
   for (const source of plan.sources) {
     need(source && ident(source.id) && !sources.has(source.id), 'source identity');
-    need(hash(source.sha256) && integer(source.bytes, 1, 256*1024*1024), 'media metadata');
-    const extension = source.kind === 'video' ? 'mp4' : '(?:png|jpe?g)';
+    need(hash(source.sha256) && integer(source.bytes, 1, guard), 'media metadata');
+    const extension = source.kind === 'video' ? (ioHook ? '[a-z0-9]{1,8}' : 'mp4') : '(?:png|jpe?g)';
     need(['video','still'].includes(source.kind) &&
       new RegExp(`^media/${source.sha256}\\.${extension}$`).test(source.path), 'media path/kind');
     need(number(source.duration) > 0, 'source duration');
-    total += source.bytes; need(total <= 256*1024*1024, 'media memory guard');
+    total += source.bytes; need(total <= guard, 'media memory guard');
     if (plan.plan_version===2 && plan.audio.mode==='spatial_loops' && source.kind==='video') {
       need(source.audio_stream===null || (source.audio_stream?.codec==='aac' &&
         [1,2].includes(source.audio_stream.channels)), 'spatial source audio capability');
@@ -931,8 +958,8 @@ function validatePlan(plan) {
       need(asset && asset.id==='soundtrack' && asset.kind==='audio' && hash(asset.sha256) &&
         asset.sha256===audio.sha256 && asset.path===audio.source && asset.duration===audio.duration &&
         new RegExp(`^media/${asset.sha256}\\.(wav|mp3|m4a|ogg|flac)$`).test(asset.path) &&
-        integer(asset.bytes,1,256*1024*1024), 'soundtrack asset');
-      total+=asset.bytes; need(total<=256*1024*1024,'media memory guard');
+        integer(asset.bytes,1,guard), 'soundtrack asset');
+      total+=asset.bytes; need(total<=guard,'media memory guard');
     } else {
       fields(['mode','master_volume','spatial_panning','per_loop']);
       need(level(audio.master_volume) && typeof audio.spatial_panning==='boolean' &&
@@ -997,14 +1024,15 @@ async function initialize() {
     for (const source of assets) {
       if (!/^media\/[a-f0-9]{64}\.[a-z0-9]+$/.test(source.path)) throw new Error('Unsafe media URL');
       total += source.bytes;
-      if (total > 256*1024*1024) throw new Error('Media memory guard');
+      if (total > mediaGuard()) throw new Error('Media memory guard');
       const bytes = await io.bytes(source);
       assertActive(epoch);
       const digest = await io.digest(bytes);
       assertActive(epoch);
       if (digest !== source.sha256 || bytes.byteLength !== source.bytes) throw new Error(`Media integrity: ${source.id}`);
       if (source.kind==='audio') { soundtrackBytes=bytes; continue; }
-      const type = source.kind === 'video' ? 'video/mp4' : (source.path.endsWith('.png') ? 'image/png' : 'image/jpeg');
+      const type = source.kind === 'video' ? await videoType(source) : (source.path.endsWith('.png') ? 'image/png' : 'image/jpeg');
+      assertActive(epoch);
       runtime.sources.set(source.id, {url:URL.createObjectURL(new Blob([bytes], {type}))});
     }
     if (runtime.audio.mode!=='none') {
