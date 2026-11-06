@@ -6,18 +6,25 @@ def tap(lab, k=0):
     lab.page.locator('.panel[data-panel="%d"]' % k).click(position={"x": 8, "y": 8})
 
 
-def test_tap_opens_still_with_date_and_tags_and_escape_closes(lab, clips):
-    lab.page.wait_for_timeout(500)
+@pytest.mark.parametrize("has_date", [True, False])
+def test_tap_opens_still_with_date_and_tags_and_escape_closes(make_lab, clips, has_date):
+    clip = next(c for c in clips.values() if "tags" in c and ("captured_at" in c) == has_date)
+    lab = make_lab()
+    lab.page.route("**/data/clips.json", lambda route: route.fulfill(json={"version": 1, "clips": [clip]}))
+    lab.open(values={"layout.panels": 1})
     ids = lab.js("__lab.engine()")
-    tap(lab, 1)
+    tap(lab)
     lab.page.wait_for_selector(".reveal img.reveal-still")
     cid = lab.js("__lab.reveal().clip")
-    assert cid == ids[1]
+    assert cid == ids[0] == clip["id"]
     src = lab.page.locator(".reveal img.reveal-still").get_attribute("src")
     assert src.endswith(clips[cid]["still"])
     lab.page.wait_for_function("document.querySelector('.reveal img').complete && document.querySelector('.reveal img').naturalWidth > 0")
     date = lab.page.locator(".reveal-date").text_content()
-    assert clips[cid]["captured_at"][:4] in date
+    if has_date:
+        assert clip["captured_at"][:4] in date
+    else:
+        assert date == "date unknown"
     chips = lab.page.locator(".reveal .chip").all_text_contents()
     assert clips[cid]["tags"]["subjects"][0] in chips
     assert lab.js("__lab.reveal().open") is True
@@ -120,3 +127,30 @@ def test_space_toggles_global_pause(lab):
     sw.focus()
     lab.page.keyboard.press("Space")
     assert lab.js("__lab.params()['path.wrap']") != before and lab.js("__lab.paused()") is False
+
+
+@pytest.mark.parametrize("action", ["still", "both"])
+def test_missing_still_uses_full_video(make_lab, clips, action):
+    clip = dict(next(iter(clips.values())), still="")
+    lab = make_lab()
+    lab.page.route("**/data/clips.json", lambda route: route.fulfill(json={"version": 1, "clips": [clip]}))
+    lab.open(values={"layout.panels": 1, "reveal.action": action})
+    tap(lab)
+    video = lab.page.locator(".reveal video.reveal-video")
+    assert video.count() == 1
+    assert video.get_attribute("src").endswith(clip["video"])
+    assert lab.page.locator(".reveal .inset, .reveal img").count() == 0
+
+
+def test_pause_controls_reveal_video_and_respects_pause_others(make_lab):
+    lab = make_lab()
+    lab.open(values={"reveal.action": "video", "reveal.pause_others": True})
+    lab.page.keyboard.press("Space")
+    tap(lab)
+    lab.page.wait_for_function("document.querySelector('.reveal video')?.readyState >= 2")
+    assert lab.js("document.querySelector('.reveal video').paused")
+    lab.page.keyboard.press("Space")
+    lab.page.wait_for_function("!document.querySelector('.reveal video').paused")
+    assert lab.js("[...document.querySelectorAll('.panel video')].every(v => v.paused)")
+    lab.page.keyboard.press("Space")
+    assert lab.js("document.querySelector('.reveal video').paused")

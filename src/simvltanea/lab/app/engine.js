@@ -145,7 +145,13 @@ function addRanks(records) {
   for (const [key, getter] of [['luma', (r) => r.luma], ['sat', (r) => r.sat], ['motion', (r) => r.motion], ['duration', (r) => r.duration]]) {
     const known = records.filter((r) => Number.isFinite(getter(r))).sort((a, b) => getter(a) - getter(b));
     const n = known.length;
-    known.forEach((r, i) => { r.r[key] = n > 1 ? i / (n - 1) : 0.5; });
+    for (let start = 0; start < n;) {
+      let end = start + 1;
+      while (end < n && getter(known[end]) === getter(known[start])) end++;
+      const rank = n > 1 ? (start + end - 1) / (2 * (n - 1)) : 0.5;
+      for (let i = start; i < end; i++) known[i].r[key] = rank;
+      start = end;
+    }
   }
 }
 
@@ -465,7 +471,18 @@ export class Scheduler {
   tick(now) {
     this.now = now;
     const changes = [];
-    if (this.pool.length === 0) return changes;
+    if (this.pool.length === 0) {
+      this.panels.forEach((pn, panel) => {
+        const prev = pn.clip;
+        if (prev < 0) return;
+        this.lastEnd[prev] = now;
+        pn.clip = -1;
+        pn.due = -Infinity;
+        pn.stopped = false;
+        changes.push({ panel, clip: -1, prev });
+      });
+      return changes;
+    }
     const P = this.P;
     const sync = P['timing.synchronized'];
     const swapI = P['timing.swap_interval'];

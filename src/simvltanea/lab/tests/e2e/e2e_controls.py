@@ -196,3 +196,25 @@ def test_randomize_respects_locks_and_source(lab):
     lab.page.click("#btn-reset-all")
     assert lab.js("__lab.params()['layout.panels']") == 4
     assert lab.js("__lab.params()['zoom.gamma']") == 0.6
+
+
+def test_reshuffle_updates_fixed_seed(make_lab):
+    lab = make_lab()
+    lab.open(values={"source.seed": 42})
+    lab.page.locator("#btn-shuffle").click()
+    lab.page.wait_for_function("__lab.seed() !== 42")
+    seed = lab.js("__lab.seed()")
+    assert lab.js("__lab.params()['source.seed']") == seed
+    assert lab.js("__lab.player.sched.seed") == seed
+
+
+def test_empty_pool_releases_media_while_paused(lab):
+    lab.page.keyboard.press("Space")
+    lab.set("source.untagged", "exclude")
+    lab.set("source.tags_include", ["missing-tag"])
+    lab.page.wait_for_function("__lab.pool() === 0")
+    assert lab.js("__lab.scheduled().every(id => id === null)")
+    assert lab.js("__lab.engine().every(id => id === null)")
+    assert lab.js("[...document.querySelectorAll('.panel video')].every(v => v.paused && !v.hasAttribute('src') && !v.classList.contains('on'))")
+    lab.set("source.tags_include", [])
+    lab.page.wait_for_function("__lab.engine().every(Boolean)")

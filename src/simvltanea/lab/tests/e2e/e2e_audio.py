@@ -235,3 +235,29 @@ def test_clip_change_fades_instead_of_clicking(make_lab):
     assert biggest < 0.5 * peak, "gain steps (%.3f of peak %.3f) would click" % (biggest, peak)
     # both slots were audible simultaneously at some point = cross-fade
     assert any(s[0] > 0.05 * peak and s[1] > 0.05 * peak for s in samples)
+
+
+def test_reveal_uses_master_and_limiter(make_lab):
+    lab = make_lab()
+    lab.open(values={**PLAY, "audio.master": 0, "reveal.action": "video", "reveal.pause_others": True})
+    start(lab)
+    lab.page.keyboard.press("h")
+    # Observe real connections made while opening the reveal.
+    lab.js("""() => {
+      window.revealAudioEdges = [];
+      const connect = AudioNode.prototype.connect;
+      AudioNode.prototype.connect = function (dest, ...args) {
+        window.revealAudioEdges.push([this, dest]);
+        return connect.call(this, dest, ...args);
+      };
+    }""")
+    lab.page.locator('.panel[data-panel="0"]').click(position={"x": 8, "y": 8})
+    lab.page.wait_for_function("!document.querySelector('.reveal video').paused")
+    assert lab.js("""() => {
+      const video = document.querySelector('.reveal video');
+      const {master, comp} = __lab.player.audio;
+      const gain = revealAudioEdges.find(([source]) => source.mediaElement === video)?.[1];
+      return !!gain && gain instanceof GainNode &&
+        revealAudioEdges.some(([from, to]) => from === gain && to === master) &&
+        master.gain.value < 0.001 && comp.ratio.value > 1;
+    }""")

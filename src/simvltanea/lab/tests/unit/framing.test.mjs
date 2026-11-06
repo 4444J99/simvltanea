@@ -284,3 +284,10 @@ test('presets: every scene sets a framing mode, plain presets leave FRAMING alon
   }
   assert.ok(new Set(PRESETS.filter((p) => p.kind === 'scene').map((p) => p.values['framing.mode'])).size >= 5);
 });
+
+
+test('framing memory of one ignores previous windows', () => {
+  const input = { clip: gclip(1), srcAspect: 1, cellAspect: 0.5, baseZoom: 4, seed: 42, params: PARAMS({ mode: 'random', memory: 1, vary_per_appearance: true }) };
+  const window = deriveWindow(input);
+  assert.deepEqual(deriveWindow({ ...input, history: [window] }), window);
+});

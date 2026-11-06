@@ -232,7 +232,8 @@ export function deriveWindow(input) {
   if ((mode === 'detail' || mode === 'blend' || mode === 'contrast') && !col.grid) eff = 'random';
 
   // memory: the windows this clip showed in its last M-1 appearances must all differ from the new one
-  const recent = P.vary ? history.slice(-Math.max(0, Math.floor(P.memory) - 1)) : [];
+  const keep = Math.max(0, Math.floor(P.memory) - 1);
+  const recent = P.vary && keep > 0 ? history.slice(-keep) : [];
   const allowed = (c) => recent.every((h) => windowDistance(c, h, srcAspect, cellAspect) >= MEMORY_TOL);
   const gen = (n) => Array.from({ length: n }, () => { const u = rng() * 2 - 1, v = rng() * 2 - 1; return place(u, v, zoom, spread, srcAspect, cellAspect); });
   const farthest = (list) => {

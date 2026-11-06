@@ -84,7 +84,12 @@ export class Player {
     this._rt = setTimeout(() => this.sched.reset(this.t, { keepSteps }), 250);
   }
   _replanNow() { clearTimeout(this._rt); this.sched.reset(this.t); }
-  reshuffle() { this.seed = (Math.floor(Math.random() * 999998) + 1); this.sched.reseed(this.seed); }
+  reshuffle() {
+    const offset = Math.floor(Math.random() * 999998) + 1;
+    this.seed = (this.seed - 1 + offset) % 999999 + 1;
+    if (this.store.get('source.seed')) this.store.set('source.seed', this.seed);
+    this.sched.reseed(this.seed);
+  }
 
   // ---- panels ----
   syncPanels(n) {
@@ -132,6 +137,26 @@ export class Player {
     for (const s of p.slots) { s.token = 0; s.video.pause(); s.video.removeAttribute('src'); try { s.src?.disconnect(); s.gain?.disconnect(); } catch { /* already gone */ } }
     try { p.bus?.disconnect(); p.panner?.disconnect(); p.analyser?.disconnect(); } catch { /* already gone */ }
     p.root.remove();
+  }
+
+  _clearPanel(p) {
+    p.active = -1; p.rec = null; p.fx = null;
+    p.root.setAttribute('aria-label', `Panel ${p.k + 1}: show the original`);
+    for (const s of p.slots) {
+      s.token = null; // Cancel the pending media load. allow-secret
+      s.rec = null; s.norm = 0;
+      const v = s.video;
+      v.pause();
+      v.classList.remove('on');
+      v.removeAttribute('poster');
+      v.removeAttribute('src');
+      v.load();
+      if (s.gain) {
+        const now = this.audio.ctx.currentTime;
+        s.gain.gain.cancelScheduledValues(now);
+        s.gain.gain.setValueAtTime(0, now);
+      }
+    }
   }
 
   loadClip(k, ci) {
@@ -321,6 +346,8 @@ export class Player {
     }
     for (const p of this.panels) { const s = p.slots[p.active]; if (s) this._audioActivate(p, s, p.slots[1 - p.active]); }
     this._audioLayoutDirty = true;
+    this._ensureRevealAudio();
+    this._audioPass();
     this._emit({ type: 'audio' });
     return true;
   }
@@ -339,6 +366,19 @@ export class Player {
       s.gain = ctx.createGain(); s.gain.gain.value = 0;
       s.src.connect(s.gain); s.gain.connect(p.bus);
     }
+  }
+
+  _ensureRevealAudio() {
+    const rv = this.reveal;
+    if (!rv?.video || rv.source || !this.audio.started) return;
+    const { ctx, master } = this.audio;
+    rv.source = ctx.createMediaElementSource(rv.video);
+    rv.gain = ctx.createGain();
+    rv.norm = this.normGain(rv.rec);
+    rv.gain.gain.value = rv.norm;
+    rv.source.connect(rv.gain);
+    rv.gain.connect(master);
+    rv.video.muted = this.speechMuted(rv.rec);
   }
 
   _ramp(param, target, seconds) {
@@ -374,13 +414,25 @@ export class Player {
     const now = a.ctx.currentTime;
     const trim = e['audio.auto_trim'] ? 1 / Math.sqrt(Math.max(1, this.panels.length)) : 1;
     const mg = e['audio.master'] * trim;
-    if (Math.abs((a.lastMaster ?? -1) - mg) > 1e-4) { a.master.gain.setTargetAtTime(mg, now, 0.02); a.lastMaster = mg; }
+    if (a.lastMaster === undefined) a.master.gain.value = mg;
+    else if (Math.abs(a.lastMaster - mg) > 1e-4) a.master.gain.setTargetAtTime(mg, now, 0.02);
+    a.lastMaster = mg;
     const lim = e['audio.limiter'] ? `${e['audio.limiter_ceiling']}` : 'off';
     if (lim !== a.lastLimiter) {
       a.lastLimiter = lim;
       const c = a.comp;
       if (lim === 'off') { c.threshold.value = 0; c.ratio.value = 1; c.knee.value = 0; }
       else { c.threshold.value = e['audio.limiter_ceiling']; c.ratio.value = 20; c.knee.value = 0; c.attack.value = 0.003; c.release.value = 0.1; }
+    }
+    const rv = this.reveal;
+    if (rv?.gain) {
+      const muted = this.speechMuted(rv.rec);
+      if (rv.video.muted !== muted) rv.video.muted = muted;
+      const norm = this.normGain(rv.rec);
+      if (Math.abs(norm - rv.norm) > 1e-4) {
+        rv.gain.gain.setTargetAtTime(norm, now, 0.03);
+        rv.norm = norm;
+      }
     }
     for (const p of this.panels) {
       if (!p.bus) continue;
@@ -430,8 +482,13 @@ export class Player {
     sch.setParams(eff);
     const n = eff['layout.panels'];
     if (n !== this.panels.length) this.syncPanels(n);
-    if (!this.paused && !this.revealPaused) for (const c of sch.tick(this.t)) this.loadClip(c.panel, c.clip);
-    else if (sch.panels.some((p) => p.clip < 0)) for (const c of sch.tick(this.t)) this.loadClip(c.panel, c.clip);
+    if (!sch.pool.length) {
+      sch.tick(this.t);
+      for (const panel of this.panels) if (panel.rec) this._clearPanel(panel);
+      if (this.reveal) this.closeReveal(true);
+    } else if ((!this.paused && !this.revealPaused) || sch.panels.some((p) => p.clip < 0)) {
+      for (const c of sch.tick(this.t)) this.loadClip(c.panel, c.clip);
+    }
     this._layoutPass(wall);
     const speed = eff['timing.speed'];
     if (Math.abs(speed - this.lastSpeed) > 0.005) { this.lastSpeed = speed; for (const p of this.panels) for (const s of p.slots) s.video.playbackRate = speed; }
@@ -469,7 +526,12 @@ export class Player {
   // ---- transport ----
   setPaused(p) {
     this.paused = p;
-    for (const pn of this.panels) { const s = pn.slots[pn.active]; if (s?.rec) p ? s.video.pause() : s.video.play().catch(() => {}); }
+    for (const pn of this.panels) {
+      if (p) for (const s of pn.slots) s.video.pause();
+      else if (!this.revealPaused && pn.rec) pn.slots[pn.active].video.play().catch(() => {});
+    }
+    const video = this.reveal?.video;
+    if (video) p ? video.pause() : video.play().catch(() => {});
     this._emit({ type: 'transport' });
   }
   togglePause() { this.setPaused(!this.paused); }
@@ -495,15 +557,15 @@ export class Player {
     const rec = panel?.rec;
     if (!rec) return;
     const e = this.eff;
-    const action = e['reveal.action'];
+    const action = rec.still ? e['reveal.action'] : 'video';
     const ms = this.reduced || e['reveal.animation'] === 'none' ? 0 : e['reveal.anim_ms'];
     const root = el('div', 'reveal', { role: 'dialog', 'aria-modal': 'true', 'aria-label': `Original, ${this.dateText(rec)}`, tabindex: '-1' });
     const back = el('div', 'reveal-back'); if (rec.still) back.style.backgroundImage = `url("${this.url(rec.still)}")`;
     const stageBox = el('div', 'reveal-stage');
-    let outline = null;
+    let outline = null, video = null;
     if (action !== 'video') {
       const img = el('img', 'reveal-still', { alt: `Original photo, ${this.dateText(rec)}`, 'data-clip': rec.id });
-      img.src = this.url(rec.still || rec.video);
+      img.src = this.url(rec.still);
       stageBox.append(img);
       if (e['reveal.show_window']) {
         const box = el('div', 'reveal-window', { 'aria-hidden': 'true', 'data-clip': rec.id });
@@ -513,11 +575,10 @@ export class Player {
       }
     }
     if (action !== 'still') {
-      const v = el('video', action === 'both' ? 'reveal-video inset' : 'reveal-video', { 'data-clip': rec.id });
-      v.loop = true; v.playsInline = true; v.autoplay = true; v.muted = !this.audio.started || this.speechMuted(rec); v.src = this.url(rec.video); v.controls = false;
-      v.addEventListener('click', (ev) => ev.stopPropagation());
-      stageBox.append(v);
-      v.play().catch(() => {});
+      video = el('video', action === 'both' ? 'reveal-video inset' : 'reveal-video', { 'data-clip': rec.id });
+      video.loop = true; video.playsInline = true; video.preload = 'auto'; video.muted = true; video.src = this.url(rec.video);
+      video.addEventListener('click', (ev) => ev.stopPropagation());
+      stageBox.append(video);
     }
     root.append(back, stageBox);
     const meta = el('div', 'reveal-meta');
@@ -531,7 +592,9 @@ export class Player {
     root.append(close);
     root.addEventListener('click', () => this.closeReveal());
     this.revealRoot.append(root);
-    this.reveal = { root, rec, k, ms, prevFocus: document.activeElement, outline };
+    this.reveal = { root, rec, k, ms, prevFocus: document.activeElement, outline, video };
+    this._ensureRevealAudio();
+    if (video && !this.paused) video.play().catch(() => {});
     this._placeOutline();
     if (e['reveal.pause_others']) { this.revealPaused = true; for (const p of this.panels) for (const s of p.slots) s.video.pause(); this.reveal.paused = true; }
     root.focus({ preventScroll: true });
@@ -567,19 +630,22 @@ export class Player {
     box.dataset.window = [w.cx, w.cy, w.zoom].map((x) => x.toFixed(4)).join(',');
   }
 
-  closeReveal() {
+  closeReveal(immediate = false) {
     const rv = this.reveal;
     if (!rv) return;
     this.reveal = null;
+    if (rv.video) rv.video.pause();
+    rv.source?.disconnect();
+    rv.gain?.disconnect();
     const finish = () => {
       rv.root.remove();
-      rv.root.querySelectorAll('video').forEach((v) => { v.pause(); v.removeAttribute('src'); });
+      if (rv.video) { rv.video.removeAttribute('src'); rv.video.load(); }
       if (rv.paused) { this.revealPaused = false; if (!this.paused) for (const p of this.panels) { const s = p.slots[p.active]; if (s?.rec) s.video.play().catch(() => {}); } }
       this._emit({ type: 'reveal', open: false });
       try { rv.prevFocus?.focus?.({ preventScroll: true }); } catch { /* element gone */ }
     };
     rv.root.classList.add('closing');
-    if (rv.ms > 0) {
+    if (!immediate && rv.ms > 0) {
       const panel = this.panels[rv.k], r = panel?.rect;
       const st = rv.root.style;
       if (this.eff['reveal.animation'] === 'zoom' && r) st.clipPath = `inset(${r.y}px ${this.W - r.x - r.w}px ${this.H - r.y - r.h}px ${r.x}px)`;
