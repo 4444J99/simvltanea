@@ -75,7 +75,7 @@ def transcribe(mov: pathlib.Path, work: pathlib.Path, model: pathlib.Path) -> st
     if result.returncode != 0:
         return None
     transcript = base.with_suffix(".txt")
-    return transcript.read_text(errors="replace") if transcript.exists() else ""
+    return transcript.read_text(encoding="utf-8", errors="replace") if transcript.exists() else ""
 
 
 def analyse(text: str) -> dict:
@@ -108,7 +108,7 @@ def write_private(path: pathlib.Path, text: str) -> None:
     """Write ``text`` with mode 0600 (never wider, whatever the umask) by renaming a private temporary file."""
     temporary = path.with_name(path.name + ".tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w") as handle:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         handle.write(text)
     os.replace(temporary, path)
 
