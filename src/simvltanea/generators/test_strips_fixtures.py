@@ -57,8 +57,7 @@ class RampMediaTests(unittest.TestCase):
         self.assertEqual([s['id'] for s in sources], [f'strip-{k + 1}' for k in range(12)])
         width, height = runtime.RAMP_SIZE
         path = PROOFS_DIR / sources[4]['path']
-        self.assertEqual(c.sha256_file(path), sources[4]['sha256'])
-        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(path), '-frames:v', '1', '-f', 'rawvideo',
+        raw =subprocess.run(['ffmpeg', '-v', 'error', '-i', str(path), '-frames:v', '1', '-f', 'rawvideo',
                               '-pix_fmt', 'yuv444p', '-'], capture_output=True, check=True).stdout
         plane = width * height
         def rgb(x, y):
@@ -84,6 +83,9 @@ class StripsFixtureTests(unittest.TestCase):
             state = c.load_state(path)
             check_strips_state(self, state, count)
             self.assertEqual([loop['bank'] for loop in state['loops']], [[f'strip-{k + 1}'] for k in range(count)])
+            # The digest each saved state records must still name the ramp clip on disk.
+            for source in state['sources']:
+                self.assertEqual(c.sha256_file(PROOFS_DIR / source['path']), source['sha256'], (path.name, source['path']))
             preview = PROOFS_DIR / path.stem.replace('state-', 'preview-')
             self.assertTrue((preview / 'index.html').is_file())
             for layout in state['layouts'].values():

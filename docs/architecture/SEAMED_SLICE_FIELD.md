@@ -51,7 +51,12 @@ window and then covers the cell; it never stretches. A layout with `presentation
   are therefore identical for every `overlap_px` (`test_bleed_is_hidden_and_never_changes_a_visible_pixel`).
 - **Rounded corners.** Only the corners on a side shared with an earlier strip are rounded, by an
   anti-aliased alpha mask (`geq` + `alphamerge`) on the later overlay. The earlier strip's bleed grows
-  by `ceil(radius)` beneath them, so no corner shows background.
+  by `ceil(radius)` beneath them, so no corner shows background. The bleed is capped at half of the
+  thinnest later strip on that side, rounded down to an even number of pixels, so on a strip thinner
+  than about `2*(overlap_px + radius)` the radius is reduced until `overlap_px + radius` fits under
+  the cap. The radius is also reduced to what every earlier neighbour's granted bleed covers: a bleed
+  dropped by the coverage guard backs no corner, and a cell with nothing to back its corners stays
+  square. The earlier strip therefore always backs the whole cutout.
 - **Lateral jitter.** The picture is fitted to the cell overscanned by `2*ceil(J*L/2)` pixels at both
   ends of the strip's long axis (`L` is the canvas extent along it) and slides by `lateral_offset*L`,
   rounded to even. A single strip slides along x in portrait and along y in landscape.

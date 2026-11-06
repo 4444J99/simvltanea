@@ -26,6 +26,7 @@ import simvltanea.authoring.composition as c
 import simvltanea.rendering.render_triptych as r
 from simvltanea.authoring.artifact001_layouts import build_artifact001
 from simvltanea.authoring import build_strips, strips_layouts
+from simvltanea.authoring.layout_presets import DEFAULT_STRIPS_PRESET
 from simvltanea.generators.make_artifact_001 import prepare, probe
 from simvltanea.generators.make_runtime_fixture import RAMP_SIZE, ramp_row, ramp_sources, ramp_tint
 
@@ -356,8 +357,8 @@ class StripsRenderTests(unittest.TestCase):
         prepare(ROOT)
         cls.ramps = ramp_sources(ROOT)
 
-    def strips(self, count, overlap=None, radius=None, jitter=None, offsets=None, zoom=True, frames=6):
-        state = build_strips(count, sources=self.ramps[:count], frames=frames)
+    def strips(self, count, overlap=None, radius=None, jitter=None, offsets=None, zoom=True, frames=6, preset='strips'):
+        state = build_strips(count, preset, sources=self.ramps[:count], frames=frames)
         for layout in state['layouts'].values():
             presentation = layout['presentation']
             if overlap is not None:
@@ -373,12 +374,12 @@ class StripsRenderTests(unittest.TestCase):
         c.validate_state(state)
         return state
 
-    def render(self, state, name, orientation, width, height):
+    def render(self, state, name, orientation, width, height, crf=None):
         path = ROOT/f'test-{name}.json'; c.save_state(state, path)
         output = ROOT/'renders'/f'test-{name}-{orientation}.mp4'
         command = [sys.executable, '-m', 'simvltanea.rendering.render_triptych', '--state', str(path),
                    '--orientation', orientation, '--width', str(width), '--height', str(height),
-                   '--preset', 'ultrafast', '--output', str(output)]
+                   '--preset', 'ultrafast', '--output', str(output)] + (['--crf', str(crf)] if crf is not None else [])
         done = subprocess.run(command, cwd=HERE, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr[-4000:])
         raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output), '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
@@ -412,6 +413,38 @@ class StripsRenderTests(unittest.TestCase):
     @staticmethod
     def background(frame):
         return sum(1 for i in range(0, len(frame), 3) if max(frame[i], frame[i + 1], frame[i + 2]) < 40)
+
+    def blue_floor(self, width, height, index=0):
+        """Lowest BT.601 blue of frame ``index`` of the last render, per 2x2 chroma block.
+
+        Every ramp tint is at least 80, so a reading below 72 means a block took at least
+        a tenth of the black background. Each block pairs its mean luma with its own chroma
+        sample: at a rounded corner two strips share a block, and a per-pixel reading would
+        pair one strip's luma with the shared chroma (tens of levels off) without any
+        background showing. Renders measured here use CRF 12, which keeps x264 noise on the
+        sharp arc edges a few levels clear of the floor.
+        """
+        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(self.output), '-vf', f'select=eq(n\\,{index})',
+                              '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-'],
+                             capture_output=True, check=True).stdout
+        plane, half = width * height, width // 2
+        self.assertEqual(len(raw), plane * 3 // 2)
+        def blue(bx, by):
+            i = 2 * by * width + 2 * bx
+            luma = (raw[i] + raw[i + 1] + raw[i + width] + raw[i + width + 1]) / 4
+            return 1.164 * (luma - 16) + 2.017 * (raw[plane + by * half + bx] - 128)
+        return min(blue(bx, by) for by in range(height // 2) for bx in range(half))
+
+    @staticmethod
+    def preset(**changes):
+        preset = copy.deepcopy(DEFAULT_STRIPS_PRESET)
+        preset['name'] = 'strips-test'
+        if 'order' in changes:
+            for orientation in preset['orientations'].values():
+                orientation['order'] = changes['order']
+        if 'weights' in changes:
+            preset['weights']['by_count'] = {str(len(changes['weights'])): changes['weights']}
+        return preset
 
 
     def test_legacy_filter_graphs_are_unchanged(self):
@@ -483,12 +516,17 @@ class StripsRenderTests(unittest.TestCase):
     def test_style_maxima_never_expose_background(self):
         offsets = ('1/20', '-1/20', '0', '1/40', '-1/40')
         for count in (1, 5, 8, 12):
-            for orientation, width, height in (('portrait', 360, 640), ('landscape', 640, 360)):
-                with self.subTest(count=count, orientation=orientation):
+            for orientation, width, height in (('portrait', 360, 640), ('landscape', 640, 360), ('landscape', 360, 360)):
+                with self.subTest(count=count, orientation=orientation, size=(width, height)):
                     state = self.strips(count, overlap=8 if count > 1 else 0,
                                         radius='1/20' if count > 1 else None, jitter='1/20', offsets=offsets)
-                    frames = self.render(state, f'styled-{count}', orientation, width, height)
+                    frames = self.render(state, f'styled-{count}', orientation, width, height, crf=12)
                     self.assertEqual([self.background(f) for f in frames], [0] * len(frames))
+                    self.assertGreaterEqual(self.blue_floor(width, height), 72)
+                    # A renderer that ignored presentation would also have no background pixel: the styled
+                    # frame must differ from the same state drawn with no bleed, radius or jitter.
+                    plain = self.render(self.strips(count, overlap=0), f'styled-plain-{count}', orientation, width, height)
+                    self.assertNotEqual(frames[0], plain[0], 'the export ignored the presentation styles')
 
     def test_rounded_corners_show_the_earlier_strip_only_in_the_corner(self):
         state = self.strips(5, radius='1/20')
@@ -509,6 +547,73 @@ class StripsRenderTests(unittest.TestCase):
                 self.assertLess(abs(tint(mid) - ramp_tint(k)), 7, (orientation, k, 'edge', tint(mid)))
                 self.assertLess(abs(tint(beyond) - ramp_tint(k)), 7, (orientation, k, 'past the radius'))
             self.assertEqual(self.background(frame), 0)
+
+    def test_thin_strips_round_only_as_far_as_their_backing(self):
+        # A strip thinner than 2*(overlap_px + radius) caps the earlier strip's bleed below
+        # overlap_px + radius; its radius shrinks to fit, so no cutout reaches the background.
+        cases = ((12, 'strips', 'landscape', 360, 360), (11, 'strips', 'landscape', 360, 360),
+                 (12, 'strips', 'landscape', 1080, 1080), (2, self.preset(weights=['99', '1']), 'portrait', 900, 1000))
+        for count, preset, orientation, width, height in cases:
+            with self.subTest(count=count, size=(width, height)):
+                state = self.strips(count, radius='1/20', frames=2, preset=preset)
+                cells = c.pixel_placements(state['layouts'][orientation], width, height)
+                for before, cell in zip(cells, cells[1:]):
+                    self.assertGreater(cell.raster.radius, 0)
+                    self.assertLessEqual(cell.raster.radius + 2, max(before.raster.bleed))
+                styled = self.render(state, f'thin-{count}-{width}', orientation, width, height, crf=12)[0]
+                self.assertEqual(self.background(styled), 0)
+                self.assertGreaterEqual(self.blue_floor(width, height), 72)
+                plain = self.render(self.strips(count, radius='0', frames=2, preset=preset),
+                                    f'thin-{count}-{width}-square', orientation, width, height)[0]
+                self.assertNotEqual(styled, plain, 'the export ignored corner_radius')
+
+    def test_reverse_order_hides_the_bleed_and_rounds_the_far_corners(self):
+        reverse = self.preset(order='reverse')
+        for orientation, width, height in (('portrait', 360, 640), ('landscape', 640, 360)):
+            with self.subTest(orientation=orientation):
+                plain = [self.render(self.strips(5, overlap=k, frames=2, preset=reverse), f'reverse-{k}',
+                                     orientation, width, height) for k in (0, 2, 8)]
+                self.assertEqual(plain[1], plain[0], 'overlap_px 2 changed a visible pixel')
+                self.assertEqual(plain[2], plain[0], 'overlap_px 8 changed a visible pixel')
+                state = self.strips(5, radius='1/20', frames=2, preset=reverse)
+                styled = self.render(state, 'reverse-corners', orientation, width, height, crf=12)
+                self.assertEqual(self.background(styled[0]), 0)
+                self.assertGreaterEqual(self.blue_floor(width, height), 72)
+                self.assertNotEqual(styled[0], plain[1][0])
+                read = self.colour(width, height, 0)
+                cells = c.pixel_placements(state['layouts'][orientation], width, height)
+                for k in range(1, 5):
+                    cell = cells[k]
+                    # Cell k draws clip 4-k over clip 5-k. 3 px inside its far corner (radius 18 px)
+                    # the earlier strip shows; at radius 0 that pixel is clip 4-k.
+                    if orientation == 'portrait':
+                        self.assertEqual(cell.raster.corners, ('bottom-left', 'bottom-right'))
+                        corner = (width - 4, cell.y + cell.height - 4)
+                    else:
+                        self.assertEqual(cell.raster.corners, ('top-right', 'bottom-right'))
+                        corner = (cell.x + cell.width - 4, height - 4)
+                    tint = read(*corner)[2]
+                    self.assertLess(abs(tint - ramp_tint(5 - k)), 7, (orientation, k, tint))
+
+    def test_a_corner_without_backing_stays_square(self):
+        # A valid 2x2 grid drawn bottom-right, top-left, top-right, bottom-left. The top-left
+        # cell's right bleed would leave its bottom-right corner square uncovered, so it is
+        # dropped; the top-right cell, whose top-left corner only that bleed backs, stays square.
+        state = self.strips(4, radius='1/20', frames=2)
+        rects = (['1/2', '1/2', '1/2', '1/2'], ['0', '0', '1/2', '1/2'], ['1/2', '0', '1/2', '1/2'], ['0', '1/2', '1/2', '1/2'])
+        for layout in state['layouts'].values():
+            for cell, rect in zip(layout['cells'], rects):
+                cell['rect'] = rect
+        c.validate_state(state)
+        for orientation, width, height in (('portrait', 360, 640), ('landscape', 640, 360)):
+            with self.subTest(orientation=orientation):
+                cells = c.pixel_placements(state['layouts'][orientation], width, height)
+                self.assertEqual(cells[1].raster.bleed, (0, 0, 0, 20))
+                self.assertEqual((cells[2].raster.radius, cells[2].raster.corners), (0.0, ()))
+                self.assertEqual(cells[3].raster.corners, ('top-left', 'top-right', 'bottom-right'))
+                frame = self.render(state, 'grid-4', orientation, width, height, crf=12)[0]
+                self.assertEqual(self.background(frame), 0)
+                self.assertGreaterEqual(self.blue_floor(width, height), 72)
 
     def test_lateral_jitter_slides_the_picture_by_the_resolved_offset(self):
         # Columns slide along y. Without zoom, cover fits the 540x720 clip to the cell

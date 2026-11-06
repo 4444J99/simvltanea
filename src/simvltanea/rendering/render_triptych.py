@@ -259,7 +259,8 @@ def presentation_placements(
       of the thinnest such neighbour. A side grows only when the later cells cover the
       whole bleed, so the bleed never changes a visible pixel.
     - Corners: only the corners on a side shared with an earlier-drawn neighbour are
-      rounded, with ``corner_radius`` times the canvas minor dimension.
+      rounded, with ``corner_radius`` times the canvas minor dimension, reduced so that
+      ``overlap_px`` plus the radius fits inside every earlier neighbour's granted bleed.
     - Lateral jitter: the picture is fitted to the cell overscanned by
       ``2*ceil(J*L/2)`` px on both ends of the strip's long axis (``L`` is the canvas
       extent along it) and slid by ``lateral_offset*L`` px, rounded to even.
@@ -270,23 +271,29 @@ def presentation_placements(
     jitter = Fraction(presentation["lateral_jitter"])
     rounded: dict[int, set[str]] = {index: set() for index in range(count)}
     later: dict[tuple[int, str], list[int]] = {}
+    shared: dict[int, list[tuple[int, str]]] = {index: [] for index in range(count)}
     for edge in edges:
         a, b, side = int(edge["a"]), int(edge["b"]), str(edge["edge"])
         if not 0 <= a < b < count or side not in _OPPOSITE_SIDE:
             raise ValueError(f"invalid adjacency entry {edge!r} for {count} cells")
         later.setdefault((a, side), []).append(b)
-        if radius > 0:
-            rounded[b].add(_OPPOSITE_SIDE[side])
-    want = overlap + (math.ceil(radius) if radius > 0 else 0)
+        shared[b].append((a, side))
+    # The backing under a rounded corner is the earlier cell's bleed, capped at half of the thinnest
+    # later neighbour (an even number of px). A thin cell therefore gets the radius that backing can
+    # cover: overlap + radius must fit under the cap, otherwise the cutout would show the background.
+    caps = {key: (min(placements[b].height if key[1] in ("top", "bottom") else placements[b].width
+                      for b in neighbours) // 2) // 2 * 2 for key, neighbours in later.items()}
+    radii = {index: min([radius] + [max(0, caps[key] - overlap) for key in shared[index]]) if radius > 0 else 0.0
+             for index in range(count)}
+    for index in range(count):
+        if radii[index] > 0:
+            rounded[index] = {_OPPOSITE_SIDE[side] for _, side in shared[index]}
     bleeds: dict[int, dict[str, int]] = {index: {} for index in range(count)}
-    if want > 0:
-        for (a, side), neighbours in sorted(later.items()):
-            cell = placements[a]
-            thinnest = min(placements[b].height if side in ("top", "bottom") else placements[b].width
-                           for b in neighbours)
-            amount = min(_even_ceil(want), (thinnest // 2) // 2 * 2)
-            if amount > 0 and _covered(_bleed_region(cell, side, amount), placements[a + 1:]):
-                bleeds[a][side] = amount
+    for (a, side), neighbours in sorted(later.items()):
+        want = overlap + max(math.ceil(radii[b]) if radii[b] > 0 else 0 for b in neighbours)
+        amount = min(_even_ceil(want), caps[(a, side)]) if want > 0 else 0
+        if amount > 0 and _covered(_bleed_region(placements[a], side, amount), placements[a + 1:]):
+            bleeds[a][side] = amount
     result = []
     for index, cell in enumerate(placements):
         sides = bleeds[index]
@@ -308,10 +315,13 @@ def presentation_placements(
             value = Fraction(offset if offset is not None else 0) * extent
             moved = max(-margin, min(margin, 2 * math.floor(value / 2 + Fraction(1, 2))))
             overscan, shift = ((margin, 0), (moved, 0)) if axis == "x" else ((0, margin), (0, moved))
+        # Earlier cells are final here: a bleed dropped above (side or corner square not under later
+        # cells) backs no corner, so the radius shrinks to what every earlier neighbour's bleed covers.
+        cell_radius = min([radii[index]] + [max(0, bleeds[a].get(side, 0) - overlap) for a, side in shared[index]])
         corners = tuple(corner for corner in CORNERS
-                        if any(corner in _SIDE_CORNERS[side] for side in rounded[index]))
+                        if any(corner in _SIDE_CORNERS[side] for side in rounded[index])) if cell_radius > 0 else ()
         raster = Raster(bleed=(sides.get("left", 0), sides.get("top", 0), sides.get("right", 0), sides.get("bottom", 0)),
-                        overscan=overscan, shift=shift, radius=radius if corners else 0.0, corners=corners)
+                        overscan=overscan, shift=shift, radius=cell_radius if corners else 0.0, corners=corners)
         result.append(replace(cell, raster=raster))
     return tuple(result)
 
@@ -1096,10 +1106,18 @@ def corner_mask_filters(raster: Raster, panel_width: int, height: int, fps: int,
         inside_y = f"gte(Y,{y0})*lt(Y+0.5,{cy:.6f})" if vertical == "top" else f"gt(Y+0.5,{cy:.6f})*lt(Y,{y1})"
         alpha = f"255*clip({r + 0.5:.6f}-hypot(X+0.5-{cx:.6f},Y+0.5-{cy:.6f}),0,1)"
         expression = f"if({inside_x}*{inside_y},{alpha},{expression})"
+    # On an overlay source's last chroma row (column) FFmpeg's overlay takes the chroma alpha from
+    # the upper (left) pixels only, so a rounded bottom (right) corner there blends the wrong colour.
+    # Two fully transparent pixels past those edges keep every corner off them.
+    pad_w = 2 if any(corner.endswith("right") for corner in raster.corners) else 0
+    pad_h = 2 if any(corner.startswith("bottom") for corner in raster.corners) else 0
+    pad = f"pad=w=iw+{pad_w}:h=ih+{pad_h}," if pad_w or pad_h else ""
+    if pad:
+        expression = f"if(gte(X,{box_w})+gte(Y,{box_h}),0,{expression})"
     fill, mask = f"[{tag}fill]", f"[{tag}mask]"
     return [
-        f"{input_label}format=yuva420p{fill}",
-        (f"color=c=white:s={box_w}x{box_h}:r={fps}:d={seconds(duration)},"
+        f"{input_label}{pad}format=yuva420p{fill}",
+        (f"color=c=white:s={box_w + pad_w}x{box_h + pad_h}:r={fps}:d={seconds(duration)},"
          f"format=gray,geq=lum='{expression}'{mask}"),
         f"{fill}{mask}alphamerge{output_label}",
     ]
