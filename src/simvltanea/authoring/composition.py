@@ -333,9 +333,21 @@ def validate_state(state: dict) -> None:
             require(event["orientation"] in ORIENTATIONS, "move requires an orientation")
             rect_values(event["rect"])
     # Catch event-induced collisions, invalid trims and unsupported overlap before encoding.
-    for frame in sorted({0, *(event["frame"] for event in state["events"])}):
-        resolved = resolve_at(state, frame)
-        validate_layouts(resolved["layouts"], loop_ids)
+    # Only "move" events change layouts: without one, every resolved frame holds a copy of
+    # state["layouts"], which validate_layouts (read-only) already accepted above.
+    # The frames are replayed once, in order, rather than from frame 0 for each one: the same
+    # events in the same order, so the first problem found (and its message) is resolve_at's.
+    moves = any(event["op"] == "move" for event in state["events"])
+    loops, layouts = _replay_start(state)
+    events, replayed = state["events"], 0
+    for frame in sorted({0, *(event["frame"] for event in events)}):
+        integer(frame, 0, state["frames"], "frame")
+        while replayed < len(events) and events[replayed]["frame"] <= frame:
+            _replay_event(state, loops, layouts, events[replayed])
+            replayed += 1
+        resolved = _resolved(state, loops, layouts, frame)
+        if moves:
+            validate_layouts(resolved["layouts"], loop_ids)
 
 
 def media_paths(state: dict, root: Path, verify: bool = True) -> dict[str, Path]:
@@ -447,28 +459,42 @@ def seam_config(state: dict) -> dict:
 def resolve_at(state: dict, frame: int) -> dict:
     """Pure replay from the saved initial state; never consults wall clock or call order."""
     integer(frame, 0, state["frames"], "frame")
-    loops = {item["id"]: dict(copy.deepcopy(item), anchor=0, pin=None) for item in state["loops"]}
-    layouts = copy.deepcopy(state["layouts"])
+    loops, layouts = _replay_start(state)
     for event in state["events"]:
-        at = event["frame"]
-        if at > frame:
+        if event["frame"] > frame:
             break
-        op = event["op"]
-        if op == "hold":
-            loop = loops[event["loop"]]
-            loop["offset"] = str(local_time(loop, at, state["fps"]))
-            loop["anchor"], loop["held"] = at, event["value"]
-        elif op == "reroll":
-            loop = loops[event["loop"]]
-            loop["epoch"] += 1
-            loop["pin"] = None
-        elif op == "swap":
-            a, b = loops[event["a"]], loops[event["b"]]
-            a["pin"], b["pin"] = choose_source(state, b, at), choose_source(state, a, at)
-        elif op == "move":
-            for cell in layouts[event["orientation"]]["cells"]:
-                if cell["loop"] == event["loop"]:
-                    cell["rect"] = list(event["rect"])
+        _replay_event(state, loops, layouts, event)
+    return _resolved(state, loops, layouts, frame)
+
+
+def _replay_start(state: dict) -> tuple[dict, dict]:
+    """The loops and layouts ``resolve_at`` replays events onto: copies, so the state itself never changes."""
+    loops = {item["id"]: dict(copy.deepcopy(item), anchor=0, pin=None) for item in state["loops"]}
+    return loops, copy.deepcopy(state["layouts"])
+
+
+def _replay_event(state: dict, loops: dict, layouts: dict, event: dict) -> None:
+    """Apply one event to the replayed loops and layouts, in place."""
+    at, op = event["frame"], event["op"]
+    if op == "hold":
+        loop = loops[event["loop"]]
+        loop["offset"] = str(local_time(loop, at, state["fps"]))
+        loop["anchor"], loop["held"] = at, event["value"]
+    elif op == "reroll":
+        loop = loops[event["loop"]]
+        loop["epoch"] += 1
+        loop["pin"] = None
+    elif op == "swap":
+        a, b = loops[event["a"]], loops[event["b"]]
+        a["pin"], b["pin"] = choose_source(state, b, at), choose_source(state, a, at)
+    elif op == "move":
+        for cell in layouts[event["orientation"]]["cells"]:
+            if cell["loop"] == event["loop"]:
+                cell["rect"] = list(event["rect"])
+
+
+def _resolved(state: dict, loops: dict, layouts: dict, frame: int) -> dict:
+    """What every loop shows at ``frame`` once the events up to it are replayed onto ``loops`` and ``layouts``."""
     sources = {src["id"]: src for src in state["sources"]}
     resolved = []
     for loop in loops.values():

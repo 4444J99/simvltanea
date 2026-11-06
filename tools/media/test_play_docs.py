@@ -1,5 +1,6 @@
 """PLAY_MODES.md: the generated tables equal the code, and what the page cites exists and holds."""
 import io
+import json
 import re
 import unittest
 from contextlib import redirect_stdout
@@ -436,8 +437,22 @@ def with_setting(config, name):
     return out
 
 
+# Memo of ``outcome`` for this module. ``play`` is deterministic in (configuration, loops, seconds, seed, pool), which
+# is exactly what the key holds, so a cached digest is the digest a fresh run would give. The inert checks ask for the
+# same (configuration, scale) many times over (one base per row and setting, the same base in several rows, the full
+# sweep repeated by the false-claim test), and running each distinct case once cuts some 2350 runs to some 860.
+_OUTCOMES = {}
+
+
 def outcome(overlay, scale, seed=1):
     """The state digest, or the refusal text: a setting that changes only the refusal still changed the outcome."""
+    key = (json.dumps(overlay, sort_keys=True), scale, seed)
+    if key not in _OUTCOMES:
+        _OUTCOMES[key] = _fresh_outcome(overlay, scale, seed)
+    return _OUTCOMES[key]
+
+
+def _fresh_outcome(overlay, scale, seed):
     _, pool, seconds = scale
     n = overlay.get("_n", 3)
     overlay = {key: value for key, value in overlay.items() if key != "_n"}
