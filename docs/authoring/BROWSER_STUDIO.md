@@ -53,6 +53,7 @@ Messages appear as one short toast that dismisses itself, for example
 | `?seed=<n>` | Repeats a roll exactly; `n` is a whole number up to 4294967295. The page writes the current seed into the address after every roll, so the address is shareable |
 | `&mix=s3.7.1` | Written after hand edits (panel taps, count, family): the family's initial and the built-in loops by number. Together with the seed it reproduces the edited composition |
 | `?seconds=<n>` | Length of one pass of the piece, in seconds (default 120). At the end it starts again |
+| `?gen=1` | Plays the built-in loops even when a library is deployed, without requesting it |
 
 ## Sound
 
@@ -88,14 +89,78 @@ to stage, but it costs a few seconds of drawing after load and depends on
 recording fails, the live canvases stay as the panels and their voices play
 through the page's own audio context instead of the runtime.
 
+## Library mode
+
+A deployment can put a public clip library beside the page:
+`library/manifest.json` (schema `simvltanea.public-demo/1`, written by
+`tools/media/build_public_demo.py`, see `PUBLIC_DEMO.md`) and
+`library/clips/<id>.mp4`. On load the page requests the manifest once. When it
+validates, its clips replace the built-in loops. When it is absent, unreadable,
+or invalid, the built-in loops play as before. `?gen=1` forces the built-in
+loops without the request.
+
+The manifest validates only if every one of these holds:
+
+- the schema string matches;
+- `clips` is a non-empty array;
+- every `file` is exactly `clips/<id>.mp4`, where the id is 12 lowercase hex
+  digits, and no id repeats;
+- widths, heights, and byte sizes are positive whole numbers within bounds;
+- the orientation agrees with the width and height;
+- the duration lies between a quarter of a second and ten minutes.
+
+Clips are fetched only for the roll on screen, never the whole library. Each
+clip then goes through the same checks as a dropped file:
+
+1. Its byte count must equal the manifest's.
+2. Its SHA-256 must begin with its id.
+3. Its codec, a decoded frame, and its whole-frame duration are checked as
+   for your own videos.
+
+A clip that fails is left out and its panel gets another. At most about 24
+checked clips stay in memory, so rerolls are quick. While the page is idle,
+it fetches the next shuffle's clips, unless the browser asks to save data. A
+reroll cancels fetches it no longer needs.
+
+A roll picks a family, a panel count, and then clips by their tags. It avoids
+two clips with the same palette and shot when others exist, mixes portrait and
+landscape clips, and prefers moods not yet on screen. The same seed with the
+same manifest always picks the same clips, on any screen. After hand edits,
+`&mix=` numbers the clips in id order. The tags only guide
+the choice: they are never shown, logged, or written into the page.
+
+The clips carry their own sound. After the first gesture each clip's audio
+plays in the same spatial mix as your own videos, at about 1/√N per loop. The
+generated voices are not used in library mode. Shuffle, panel taps, the
+panel-count keys, the speaker, and reduced motion behave as with the built-in
+loops.
+
+`stage_studio` still writes only its five files. The library joins them at
+deploy time:
+
+```bash
+PYTHONPATH=src python3 -m simvltanea.browser.browser_studio --output var/site/studio
+python3 -m tools.publishing.stage_library_site --studio-out var/site/studio \
+    --library /path/to/public-demo --site var/site/deploy
+```
+
+`stage_library_site` copies both into an absent or empty `--site`. It checks
+everything before it writes, and it refuses each of these:
+
+- a studio output that is not exactly the five files;
+- a library without a valid manifest;
+- a file in `clips/` that the manifest does not name;
+- a listed clip that is missing, or whose size or digest differs;
+- any other file in the library, including hidden files and symlinks.
+
 ## Privacy
 
 **Your videos never leave this device. Nothing is uploaded.** The page reads,
 checks, hashes, and plays dropped or picked files inside the browser. Its
-content security policy permits only its own scripts and `layouts.json` from its
-own origin. Built-in loops and your own videos play from local `blob:` URLs. The
-page uses no analytics, fonts, CDNs, or other network requests. Its one
-typeface is the system UI stack.
+content security policy permits only its own scripts, `layouts.json`, and the
+optional `library/` from its own origin. Built-in loops, library clips, and your
+own videos play from local `blob:` URLs. The page uses no analytics, fonts,
+CDNs, or other network requests. Its one typeface is the system UI stack.
 
 ## Your own videos
 
@@ -175,4 +240,15 @@ subpath in headless Chrome. It proves the following:
 - refusals (ProRes, over the cap, a duplicate) show a toast;
 - reduced motion starts paused;
 - the control bar fits from 360 pixels to 1440;
-- nothing is requested beyond the staged files.
+- nothing is requested beyond the staged files and the library manifest.
+
+Its library tests serve a synthetic library of 30 FFmpeg test clips with a tone,
+assembled by `stage_library_site`. They prove the following:
+
+- library mode is used;
+- only the roll's clips and the prefetched next roll are requested;
+- a seed reproduces the same clips;
+- a shuffle plays the prefetched roll;
+- the clips' own audio plays after the first click;
+- an invalid manifest falls back to the built-in loops;
+- `?gen=1` forces the built-in loops.
