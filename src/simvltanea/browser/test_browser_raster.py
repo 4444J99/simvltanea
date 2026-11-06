@@ -573,13 +573,20 @@ class RasterBrowserTests(unittest.TestCase):
 
         def frozen(*args, **kwargs):
             context, page, errors = load(*args, **kwargs)
-            page.evaluate('[...compositionRuntime.nodes.values()][2].media.playbackRate = 0')
+            # The loop stops advancing, but repaints (a resize, as on the CI runner) keep firing frame
+            # callbacks from it: a stall is judged by the playback position, not by those callbacks.
+            page.evaluate("""() => { const n = [...compositionRuntime.nodes.values()][2];
+              n.media.playbackRate = 0; setInterval(() => { n.callbacks += 1; }, 100); }""")
             page.wait_for_timeout(200)   # let a frame already queued be presented first
             return context, page, errors
 
+        # One measurement per fresh freeze. After a resize the runtime re-seeks a loop that has drifted off
+        # its clock, which moves even a frozen loop's position, so a later row proves nothing either way.
+        rows = []
         with mock.patch.object(self.probe, 'open', frozen):
-            rows = self.probe.measure(hairlines.strips_plan(5, self.sources), 1, ((375, 812), (1280, 720)),
-                                      label='strips N=5 frozen loop-3')
+            for size in ((375, 812), (1280, 720)):
+                rows += self.probe.measure(hairlines.strips_plan(5, self.sources), 1, (size,),
+                                           label='strips N=5 frozen loop-3')
         self.assertEqual([row['stalled'] for row in rows], [1, 1])
         self.assertEqual(len(hairlines.failures(rows)), 2)
 
@@ -589,10 +596,12 @@ class RasterBrowserTests(unittest.TestCase):
 
         def late_frames(*args, **kwargs):
             context, page, errors = load(*args, **kwargs)
-            # Loop 3 stops presenting on its own, then a frame is "presented" every 700 ms, later than a
+            # Loop 3 stops advancing on its own, then its position moves every 700 ms, later than a
             # measurement that does not wait would look, and well inside the wait window.
             page.evaluate("""() => { const n = [...compositionRuntime.nodes.values()][2];
-              n.media.playbackRate = 0; setInterval(() => { n.callbacks += 1; }, 700); }""")
+              n.media.playbackRate = 0; let t = n.media.currentTime;
+              Object.defineProperty(n.media, 'currentTime', {configurable: true, get: () => t, set: () => {}});
+              setInterval(() => { t += 0.05; }, 700); }""")
             page.wait_for_timeout(200)
             return context, page, errors
 

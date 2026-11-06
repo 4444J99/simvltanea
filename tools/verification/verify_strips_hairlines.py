@@ -277,7 +277,9 @@ class RasterProbe:
         rows = []
         first = sizes[0]
         context, page, errors = self.open(plan, first[0], first[1], ratio)
-        frames = '() => [...compositionRuntime.nodes.values()].map(n => n.callbacks)'
+        # Progress is the playback position, not the frame-callback count: a resize repaint can fire one
+        # callback from a loop that is frozen, but it cannot move a frozen loop's currentTime.
+        frames = '() => [...compositionRuntime.nodes.values()].map(n => n.media.currentTime)'
         try:
             previous = page.evaluate(frames)
             for width, height in sizes:
@@ -293,7 +295,7 @@ class RasterProbe:
                 try:
                     page.wait_for_function('''previous => [...compositionRuntime.nodes.values()].every((n, i) =>
                       n.busy || n.media.ended || n.media.paused || n.kind !== 'video' || n.span.held ||
-                      n.callbacks !== previous[i])''', arg=previous, timeout=PROGRESS_WAIT_MS)
+                      n.media.currentTime !== previous[i])''', arg=previous, timeout=PROGRESS_WAIT_MS)
                 except PlaywrightTimeout:
                     pass  # the loop below counts the loops that did not progress
                 # A loop at native EOF waits on its last frame for the next frame-addressed
@@ -302,8 +304,8 @@ class RasterProbe:
                 stalled, previous = page.evaluate('''previous => {
                   const nodes = [...compositionRuntime.nodes.values()];
                   return [nodes.filter((n, i) => !n.busy && !n.media.ended && (n.media.paused ||
-                    (n.kind === 'video' && !n.span.held && n.callbacks === previous[i]))).length,
-                    nodes.map(n => n.callbacks)];
+                    (n.kind === 'video' && !n.span.held && n.media.currentTime === previous[i]))).length,
+                    nodes.map(n => n.media.currentTime)];
                 }''', previous)
                 rows.append(dict(case=label, viewport=f'{width}x{height}', ratio=ratio, **result,
                                  orientation=snapshot['orientation'], error=snapshot['error'],
