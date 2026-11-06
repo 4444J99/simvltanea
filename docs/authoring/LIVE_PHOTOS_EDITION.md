@@ -123,7 +123,7 @@ Receipt (`originals/<uuid>/.done`, schema `live-photo-export/v1`), under
 | --- | --- |
 | `width`, `height` | the CODED size, as the schema has always defined them |
 | `rotation` | display rotation in degrees, ffprobe's sign (`-90` clockwise, the phone-portrait case) |
-| `display_width`, `display_height` | the size after the rotation is applied |
+| `display_width`, `display_height` | the coded size after the rotation is applied, before any container clean-aperture crop (a modern FFmpeg decode of a phone clip is about 9% smaller per axis; the orientation word is unaffected) |
 
 `rotation`, `display_width` and `display_height` are optional: receipts written
 before issue #60 have only the coded `width` and `height`, and every tool still
