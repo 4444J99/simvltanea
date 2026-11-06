@@ -358,6 +358,19 @@ class StripsRenderTests(unittest.TestCase):
     def setUpClass(cls):
         prepare(ROOT)
         cls.ramps = ramp_sources(ROOT)
+        cls.plain_renders = {}
+
+    def plain(self, count, orientation, width, height):
+        """The frames of ``strips(count, overlap=0)`` rendered at the default CRF, rendered once per class.
+
+        The bleed and style tests both compare against exactly this render; the export is deterministic (the bleed
+        test asserts byte-identical frames across renders), so a repeated render would give the same bytes.
+        """
+        key = (count, orientation, width, height)
+        if key not in self.plain_renders:
+            self.plain_renders[key] = self.render(self.strips(count, overlap=0), f'plain-{count}', orientation,
+                                                  width, height)
+        return list(self.plain_renders[key])
 
     def strips(self, count, overlap=None, radius=None, jitter=None, offsets=None, zoom=True, frames=6, preset='strips'):
         state = build_strips(count, preset, sources=self.ramps[:count], frames=frames)
@@ -505,7 +518,7 @@ class StripsRenderTests(unittest.TestCase):
         for count in (1, 5, 8, 12):
             for orientation, width, height in (('portrait', 360, 640), ('landscape', 640, 360)):
                 with self.subTest(count=count, orientation=orientation):
-                    plain = self.render(self.strips(count, overlap=0), f'bleed-{count}-0', orientation, width, height)
+                    plain = self.plain(count, orientation, width, height)
                     for overlap in ((2, 8) if count > 1 else ()):
                         state = self.strips(count, overlap=overlap)
                         graphs = segment_graphs(state, orientation, width, height)
@@ -527,7 +540,7 @@ class StripsRenderTests(unittest.TestCase):
                     self.assertGreaterEqual(self.blue_floor(width, height), 72)
                     # A renderer that ignored presentation would also have no background pixel: the styled
                     # frame must differ from the same state drawn with no bleed, radius or jitter.
-                    plain = self.render(self.strips(count, overlap=0), f'styled-plain-{count}', orientation, width, height)
+                    plain = self.plain(count, orientation, width, height)
                     self.assertNotEqual(frames[0], plain[0], 'the export ignored the presentation styles')
 
     def test_rounded_corners_show_the_earlier_strip_only_in_the_corner(self):
