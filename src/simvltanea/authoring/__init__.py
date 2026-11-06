@@ -1,5 +1,6 @@
 """Public API for the authoring feature."""
-from . import composition, composition_model, artifact001_layouts
+from . import (composition, composition_model, artifact001_layouts, gravity_affinity, gravity_scheduler,
+               play_config, play_encode, play_engine, play_order, play_paths, play_pool, play_presets, play_rng)
 from .composition import (
     ENGINE_VERSION,
     SCHEMA_VERSION,
@@ -38,11 +39,46 @@ from .layout_presets import (
     validate_layout_pair,
     load_layout_file,
 )
+from .gravity_affinity import (
+    AFFINITY_SCALE,
+    DEFAULT_WEIGHTS,
+    AffinityModel,
+    ClipProfile,
+    build_affinity_model,
+    clip_profile,
+)
+from .gravity_scheduler import (
+    GRAVITY_PRESETS,
+    GravityError,
+    GravityParams,
+    SHARING_LEVELS,
+    UNTAGGED_POLICIES,
+    Schedule,
+    eligible_pool,
+    schedule_gravity,
+)
+from .play_config import (PlayError, apply_set, config_digest, config_to_json, describe_parameters,
+                          validate_config)
+from .play_encode import base_state_for, render_segment_bound, render_segment_estimate
+from .play_engine import schedule_play
+from .play_order import parse_captured_at
+from .play_presets import (DEFAULT_PRESET, PRESETS, PRESET_TABLE, descriptions, get_preset, load_presets_file,
+                           merged_table)
 
 __all__ = [
     'composition',
     'composition_model',
     'artifact001_layouts',
+    'gravity_affinity',
+    'gravity_scheduler',
+    'play_config',
+    'play_encode',
+    'play_engine',
+    'play_order',
+    'play_paths',
+    'play_pool',
+    'play_presets',
+    'play_rng',
     'ENGINE_VERSION',
     'SCHEMA_VERSION',
     'ORIENTATIONS',
@@ -73,4 +109,36 @@ __all__ = [
     'adjacency',
     'validate_layout_pair',
     'load_layout_file',
+    'AFFINITY_SCALE',
+    'DEFAULT_WEIGHTS',
+    'AffinityModel',
+    'ClipProfile',
+    'build_affinity_model',
+    'clip_profile',
+    'GRAVITY_PRESETS',
+    'GravityError',
+    'GravityParams',
+    'SHARING_LEVELS',
+    'UNTAGGED_POLICIES',
+    'Schedule',
+    'eligible_pool',
+    'schedule_gravity',
+    'PlayError',
+    'describe_parameters',
+    'validate_config',
+    'schedule_play',
+    'PRESETS',
+    'PRESET_TABLE',
+    'apply_set',
+    'config_digest',
+    'config_to_json',
+    'parse_captured_at',
+    'DEFAULT_PRESET',
+    'descriptions',
+    'get_preset',
+    'load_presets_file',
+    'merged_table',
+    'base_state_for',
+    'render_segment_bound',
+    'render_segment_estimate',
 ]
