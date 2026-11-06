@@ -10,8 +10,16 @@ ls:
   .continuity.js: snake_case
   .md: SCREAMING_SNAKE_CASE | kebab-case
 
+  # A directory entry replaces the inherited extension rules, so src repeats the file rules (issue #62).
   src:
     .dir: snake_case
+    .*: regex:[a-z0-9]+([_-][a-z0-9]+)*
+    .*.*: regex:[a-z0-9]+([_-][a-z0-9]+)*
+    .py: snake_case
+    .js: snake_case
+    .runtime.js: snake_case
+    .continuity.js: snake_case
+    .md: SCREAMING_SNAKE_CASE | kebab-case
 
   docs/provenance:
     .md: SCREAMING_SNAKE_CASE | kebab-case | regex:[A-Z][A-Z0-9_]*_[0-9]{4}-[0-9]{2}-[0-9]{2}
