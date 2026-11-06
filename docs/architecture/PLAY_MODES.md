@@ -43,6 +43,29 @@ Precedence, lowest to highest: the mode, then `--config FILE`, then each `--set`
 shortcut flags (`--seed`, `--anchor`, `--pin`, `--exclude-id`). `--presets-file FILE` adds
 modes or replaces built-in ones by name. A bad value fails with a message and writes nothing.
 
+### Strips layouts: 8 to 12 panels
+
+By default the panels are the authored Artifact 001 layouts, which exist for N = 2..7. `--layout-preset`
+builds the panels from a strips layout preset instead (a built-in name, `strips`, or the path of a
+`simvltanea.layout-preset/1` file): each panel is a cropped window in a mosaic of strips, and N may be
+anything the preset accepts, up to 12 for the built-in. In Python the same choice is
+`schedule_play(..., layout_preset="strips")`, which cannot be combined with `base_state`.
+
+```bash
+python3 -m tools.media.play_state --root /path/to/private-root --mode sticky \
+  --layout-preset strips --n 12 --duration 120 --seed 7 --out /path/to/private-root/play-state.json
+```
+
+Limits: with a preset, N is 2..12 for the built-in `strips` (a strips layout alone allows N = 1, but a play
+state needs at least two loops to relate); a count the preset refuses (13, say) stops with a message naming the
+preset's range and writes nothing. Without `--layout-preset`, N stays 2..7 and the output is byte-identical to
+earlier versions. The spatial gravity neighbours come from the strips cells (strips that share an edge, in
+either orientation; the bleed overlap is presentation only and the cell rectangles abut), the usual render
+segment and span limits apply, and the `.play.json` record keeps `layout_preset` so `--config` replays it.
+
+Known limitation (issue #61): the browser's client compiler cannot read play states yet. Only the Python
+`compile_plan` and the offline renderer do.
+
 ### Replaying a record
 
 `--config` also reads the `.play.json` record of an earlier run (the file labelled

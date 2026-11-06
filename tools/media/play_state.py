@@ -425,7 +425,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--set", dest="sets", action="append", default=[], metavar="SECTION.KEY=VALUE",
                         help="override one value, e.g. --set relation.strength=-2 (repeatable)")
     parser.add_argument("--seed", default=None, help="integer or string (default: the mode's seed, else 0)")
-    parser.add_argument("--n", type=int, default=None, help=f"number of simultaneous loops (2..7; default the record's, else {DEFAULT_N})")
+    parser.add_argument("--n", type=int, default=None, help=f"number of simultaneous loops (2..7, or 1..12 with --layout-preset strips; default the record's, else {DEFAULT_N})")
+    parser.add_argument("--layout-preset", default=None, metavar="NAME_OR_PATH",
+                        help="build the panels from a strips layout preset (built-in name such as 'strips', or the path of a "
+                             "simvltanea.layout-preset/1 file) instead of the authored layouts; N may then be anything the "
+                             "preset accepts (up to 12). Default: the authored layouts, N = 2..7")
     parser.add_argument("--duration", type=float, default=None,
                         help=f"seconds of composition (at most 600 at 24 fps; default the record's, else {DEFAULT_DURATION:g})")
     parser.add_argument("--fps", type=int, default=None, help=f"frames per second (default the record's, else {DEFAULT_FPS})")
@@ -471,10 +475,21 @@ def record_config(record: dict[str, Any], args: argparse.Namespace) -> dict[str,
 def apply_run_defaults(args: argparse.Namespace) -> None:
     """Fill n, duration and fps: the command line, else the replayed record, else the defaults."""
     record = getattr(args, "record", None) or {}
+    if args.layout_preset is None and record.get("layout_preset") is not None:
+        args.layout_preset = record["layout_preset"]
     for name, key, default in (("n", "n", DEFAULT_N), ("duration", "duration_seconds", DEFAULT_DURATION),
                                ("fps", "fps", DEFAULT_FPS)):
         if getattr(args, name) is None:
             setattr(args, name, record.get(key, default))
+
+
+def layout_preset_arg(value: str | None) -> Any:
+    """A value naming an existing file is a preset file path; anything else stays a name (the engine refuses
+    an unknown one). A JSON object is never taken from the command line."""
+    if value is None:
+        return None
+    path = Path(value).expanduser()
+    return path if path.is_file() else value
 
 
 def config_from_args(args: argparse.Namespace, table: dict[str, Any]) -> dict[str, Any]:
@@ -561,8 +576,9 @@ def main(argv: list[str] | None = None) -> int:
         if missing:
             raise PlayError(f"{missing} --exclude-id value(s) match no clip in the pool (letter case is ignored); "
                             "nothing was written")
+        preset = layout_preset_arg(args.layout_preset)
         result = schedule_play(pool, args.n, cfg, args.duration, fps=args.fps, extra_excluded_shas=shas,
-                               extra_known_ids=receipted)
+                               extra_known_ids=receipted, layout_preset=preset)
     except (PlayError, composition.StateError) as exc:
         raise SystemExit(f"play: {exc}") from None
     state, report, cfg = result["state"], result["report"], result["config"]
@@ -577,6 +593,8 @@ def main(argv: list[str] | None = None) -> int:
                "eligible_pool": {"count": len(ids), "ids_sha256": ids_sha},
                "state_sha256": digest, "render_segments": report["render_segments"],
                "renderable": report["renderable"], "render_segment_limit": report["render_segment_limit"]}
+    if args.layout_preset is not None:
+        sidecar["layout_preset"] = args.layout_preset
     out, side = play_guard.resolve_out(out), play_guard.resolve_out(side)   # the folder may have changed since the start
     play_guard.write_private_file(out, text.encode("utf-8"), args.force)
     side = play_guard.resolve_out(side)                                      # and again right before the second write

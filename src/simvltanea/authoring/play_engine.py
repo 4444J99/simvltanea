@@ -18,8 +18,9 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any, Callable, Iterable, Mapping
 
-from .composition import MAX_FRAMES, MAX_SEGMENTS, validate_state
+from .composition import MAX_FRAMES, MAX_SEGMENTS, StateError, validate_state
 from .gravity_affinity import AffinityModel, build_affinity_model, round_half_up_div, weight_milli
+from .layout_presets import build_strips
 from .play_config import CURSOR_SHAPES, PlayError, check_seed, config_digest, validate_config
 from .play_encode import (Schedule, base_state_for, check_base_state, count_plan_spans, encode_state, plan_span_parts,
                           estimate_events, estimate_render_segments)
@@ -398,7 +399,7 @@ def build_schedule(model: AffinityModel, eligible: list[str], seq: list[str], lo
 def schedule_play(pool: list[dict[str, Any]], n: int, config: Mapping[str, Any] | None = None,
                   duration_seconds: float = 60, fps: int = 24, seed: Any = None,
                   base_state: dict[str, Any] | None = None, extra_excluded_shas: Iterable[Any] = (),
-                  extra_known_ids: Iterable[str] = ()) -> dict[str, Any]:
+                  extra_known_ids: Iterable[str] = (), layout_preset: Any = None) -> dict[str, Any]:
     """Pure entry point. Returns ``{state, schedule, model, adjacency, order, excluded, config, report}``.
 
     ``config`` is a (possibly partial) play-mode dictionary; it is validated and completed.
@@ -407,6 +408,11 @@ def schedule_play(pool: list[dict[str, Any]], n: int, config: Mapping[str, Any] 
     is safe to store or print. ``extra_excluded_shas`` hides media whose record is not in the pool (the
     receipt of an excluded id that has no tag record); ``extra_known_ids`` names clips that exist outside
     the pool, so an exclude id naming one is not reported as unmatched.
+
+    ``layout_preset`` (a built-in strips preset name, a ``simvltanea.layout-preset/1`` object or a file path)
+    builds the base state with ``build_strips(n, layout_preset)`` instead of the authored layouts, so N may be
+    anything the preset accepts (1..12 for the built-in ``strips``); a count the preset refuses is a
+    ``PlayError``. Without it N stays 2..7 and the result is unchanged. It cannot be combined with ``base_state``.
     """
     cfg = validate_config(config or {})
     if seed is not None:
@@ -414,8 +420,14 @@ def schedule_play(pool: list[dict[str, Any]], n: int, config: Mapping[str, Any] 
             raise PlayError("seed must be an integer or a string")
         cfg["seed"] = check_seed(seed)
     seed = cfg["seed"]
-    if not isinstance(n, int) or isinstance(n, bool) or not 2 <= n <= 7:
+    if layout_preset is not None and base_state is not None:
+        raise PlayError("layout_preset and base_state are alternatives; pass one of them")
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise PlayError("authored layouts exist for N = 2..7" if layout_preset is None else "n must be an integer")
+    if layout_preset is None and not 2 <= n <= 7:
         raise PlayError("authored layouts exist for N = 2..7")
+    if n < 2:
+        raise PlayError("play modes need at least N = 2 loops: relations are between loops (a strips preset alone allows N = 1)")
     if type(fps) is not int or not 1 <= fps <= 60:
         raise PlayError("fps must be an integer in 1..60")
     if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, (int, float)):
@@ -441,7 +453,13 @@ def schedule_play(pool: list[dict[str, Any]], n: int, config: Mapping[str, Any] 
                             "add the data (captured_at comes from tools.media.index_clips) or set order.missing")
     else:
         seq, dropped = sorted(records), 0
-    base = base_state if base_state is not None else base_state_for(n)
+    if layout_preset is not None:
+        try:
+            base = build_strips(n, layout_preset)
+        except StateError as exc:
+            raise PlayError(f"layout_preset refused N={n}: {exc}") from None
+    else:
+        base = base_state if base_state is not None else base_state_for(n)
     loop_ids = check_base_state(base, n)
     limits = cfg["limits"]
     _budget(cfg, n, frames, fps, len(eligible))
