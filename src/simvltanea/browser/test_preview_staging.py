@@ -59,6 +59,54 @@ class PreviewStagingTest(HermeticEngineFixture, unittest.TestCase):
             self.assertEqual(hashlib.sha256((self.output / relative).read_bytes()).hexdigest(), digest)
         self.assertEqual(receipt['files_verified'], len(self.pin['runtime_graph']))
 
+    def synthetic_sources(self, count):
+        """Tiny labelled lavfi clips beside the state; no personal media is read."""
+        media = self.state.parent / 'media'
+        media.mkdir(exist_ok=True)
+        sources = []
+        for k in range(count):
+            clip = media / f'clip-{k + 1}.mp4'
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
+                            f'color=c=0x{60 + 40 * k:02x}8040:s=64x48:r=24:d=1', '-c:v', 'libx264',
+                            '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', str(clip)], check=True)
+            sources.append(dict(id=f'source-{k + 1}', path=f'media/{clip.name}', kind='video', duration='1',
+                                sha256=hashlib.sha256(clip.read_bytes()).hexdigest()))
+        return sources
+
+    def test_full_bleed_layout_fields_pass_through_a_real_generation(self):
+        from simvltanea.authoring import build_artifact001, build_strips, composition
+        preset = {'format': 'simvltanea.layout-preset/1', 'name': 'strips', 'family': 'strips',
+                  'style': {'corner_radius': '1/20', 'lateral_jitter': '1/40'}}
+        sources = self.synthetic_sources(3)
+        state = build_strips(3, preset, sources=sources, frames=24)
+        # Equivalent spellings are emitted canonically, exactly like rect and focal.
+        state['layouts']['portrait']['presentation']['corner_radius'] = '0.05'
+        offset = composition.rational(state['layouts']['portrait']['cells'][0]['lateral_offset'], 'offset')
+        state['layouts']['portrait']['cells'][0]['lateral_offset'] = str(int(offset * 1000) / 1000)  # decimal spelling
+        composition.save_state(state, self.state)
+        plan = runtime.build_preview(self.state, self.output)
+        staged = json.loads((self.output / 'plan.json').read_text())
+        self.assertEqual(staged['layout_keyframes'], plan['layout_keyframes'])
+        expected = build_strips(3, preset, sources=sources, frames=24)['layouts']
+        self.assertEqual(staged['layout_keyframes'], [{'frame': 0, 'layouts': expected}])
+        for layout in staged['layout_keyframes'][0]['layouts'].values():
+            self.assertIs(layout['full_bleed'], True)
+            self.assertEqual(set(layout['presentation']), {'overlap_px', 'corner_radius', 'lateral_jitter'})
+            self.assertTrue(all('lateral_offset' in cell for cell in layout['cells']))
+
+        # A legacy (authored) state keeps a plan without any of the new keys.
+        legacy = composition.from_authoring_model(build_artifact001(3), {
+            f'fixtures/loop-{k + 1}.mp4': source for k, source in enumerate(sources)})
+        legacy['frames'] = 24
+        composition.save_state(legacy, self.state)
+        legacy_output = self.generated / 'legacy-preview'
+        legacy_plan = runtime.build_preview(self.state, legacy_output)
+        layouts = legacy_plan['layout_keyframes'][0]['layouts']
+        self.assertEqual(layouts, legacy['layouts'])
+        for layout in layouts.values():
+            self.assertEqual(set(layout), {'name', 'cells'})
+            self.assertTrue(all(set(cell) == {'loop', 'rect', 'fit', 'focal'} for cell in layout['cells']))
+
     def test_checkout_mutation_during_copy_preserves_existing_preview(self):
         self.build()
         before = self.snapshot()

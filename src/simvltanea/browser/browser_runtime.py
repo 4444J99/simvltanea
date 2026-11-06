@@ -171,11 +171,20 @@ def compile_plan(state: dict) -> dict:
               'browser span resource guard exceeded; no loops were dropped')
     # State permits Fraction-compatible spelling (including decimal strings).
     # Emit only canonical rationals so the browser need not reproduce that parser.
+    # Optional full-bleed fields (full_bleed, presentation, cell lateral_offset) pass
+    # through unchanged apart from the same canonical spelling; absent keys stay absent,
+    # so plans of states without them are byte-identical.
     for keyframe in layouts:
         for layout in keyframe['layouts'].values():
+            presentation = layout.get('presentation')
+            if presentation is not None:
+                for field in ('corner_radius', 'lateral_jitter'):
+                    presentation[field] = str(c.rational(presentation[field], f'presentation.{field}'))
             for cell in layout['cells']:
                 for field in ('rect', 'focal'):
                     cell[field] = [str(c.rational(value, field)) for value in cell[field]]
+                if 'lateral_offset' in cell:
+                    cell['lateral_offset'] = str(c.rational(cell['lateral_offset'], 'lateral_offset'))
     sources = copy.deepcopy(state['sources'])
     for source in sources:
         source['duration'] = str(c.rational(source['duration'], 'duration'))
