@@ -17,10 +17,19 @@ Layout under --root (private; never committed; may live outside the checkout):
   analysis/failed/<uuid>.json           clip whose frames could not be made; never retried (delete to retry)
   analysis/batches/<batch>.json         which clips went into which batch
   analysis/tags/<uuid>.json             final per-clip record (analysis + safety + features + cost)
-  analysis/tags.jsonl                   append-only copy of the above
+  analysis/tags.jsonl                   append-only copy of the above, as of collection time (historical: it keeps
+                                        the geometry it was collected with and is never rewritten)
   analysis/ledger.jsonl                 one line per collected batch with the cost estimate
 
-Commands: prepare | submit | collect | run | report
+Geometry in ``features``: ``width``, ``height`` and ``orientation`` describe the DISPLAYED clip. Phone portrait
+video is a landscape-coded stream with a display rotation of 90 or 270 degrees, so the coded size would say
+"landscape". ``rotation`` (ffprobe's sign), ``coded_width`` and ``coded_height`` keep the stored facts. The
+frames are extracted already rotated, so luma, saturation, hue, motion and palette were never affected.
+
+Commands: prepare | submit | collect | run | report | refresh-local
+`refresh-local` (no API, no Pillow, no frames) re-probes each tagged clip's original video and rewrites only the
+geometry keys of ``features`` in ``analysis/tags/<uuid>.json`` and ``analysis/features/<uuid>.json``; run it with
+--dry-run first. It prints counts only.
 `collect --pending` collects every batch that has no line in the ledger yet. `submit` and `run` never
 send a clip that sits in such a batch, so re-running after an interrupted `run` cannot upload twice;
 `run` also collects those pending batches. Exit codes: 0 ok, 5 a local file error (type only, no path).
@@ -43,6 +52,7 @@ import time
 from typing import Literal
 
 from tools.media.private_root import resolve_private_root
+from tools.media.video_geometry import geometry_from_stream, probe_geometry
 
 SCHEMA_ID = "clip-analysis/v2"  # v2: privacy.sharing_sensitivity is separate from the safety verdict
 UUID_RE = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")  # fullmatch only
@@ -291,6 +301,20 @@ def pick_frame_indices(count: int) -> list[int]:
     return [min(count - 1, int(count * fraction)) for fraction in FRAME_FRACTIONS]
 
 
+def original_video(root: pathlib.Path, uuid: str, receipt: dict) -> pathlib.Path:
+    return root / "originals" / uuid / pathlib.Path(receipt["video"]["name"]).name
+
+
+def geometry_from_receipt(receipt: dict) -> dict | None:
+    """Geometry from a receipt that records ``rotation`` (new receipts), else None: older receipts hold only
+    the coded size, which says nothing about how the clip is displayed, so the caller must probe the video."""
+    video = receipt.get("video") if isinstance(receipt, dict) else None
+    if not isinstance(video, dict) or "rotation" not in video:
+        return None
+    return geometry_from_stream({"width": video.get("width"), "height": video.get("height"),
+                                 "side_data_list": [{"rotation": video["rotation"]}]})
+
+
 def extract(root: pathlib.Path, uuid: str, px: int) -> list[pathlib.Path]:
     """Three downscaled JPEG frames (start / middle / end) of the clip's VIDEO stream via ffmpeg.
 
@@ -301,7 +325,7 @@ def extract(root: pathlib.Path, uuid: str, px: int) -> list[pathlib.Path]:
     """
     d = dirs(root)
     receipt = read_receipt(root, uuid)
-    mov = root / "originals" / uuid / pathlib.Path(receipt["video"]["name"]).name
+    mov = original_video(root, uuid, receipt)
     out_dir = d["frames"] / uuid
     shutil.rmtree(out_dir, ignore_errors=True)  # never reuse frames of another size or a partial earlier file
     out_dir.mkdir(parents=True)
@@ -347,9 +371,28 @@ def extract(root: pathlib.Path, uuid: str, px: int) -> list[pathlib.Path]:
     return [out_dir / f"f{index}.jpg" for index in range(len(wanted))]
 
 
-def local_features(frames: list[pathlib.Path], receipt: dict) -> dict:
-    """Deterministic features that need no API (also usable client-side for any visitor's loops)."""
+GEOMETRY_KEYS = ("width", "height", "orientation", "rotation", "coded_width", "coded_height")
+
+
+def geometry_features(geometry: dict) -> dict:
+    """The geometry keys of ``features``: the DISPLAYED size and orientation, then the coded facts."""
+    return {"width": geometry["display_width"], "height": geometry["display_height"],
+            "orientation": geometry["orientation"], "rotation": geometry["rotation"],
+            "coded_width": geometry["coded_width"], "coded_height": geometry["coded_height"]}
+
+
+def local_features(frames: list[pathlib.Path], receipt: dict, geometry: dict | None = None) -> dict:
+    """Deterministic features that need no API (also usable client-side for any visitor's loops).
+
+    ``geometry`` (``video_geometry.probe_geometry`` of the original) gives the displayed size. Without it the
+    receipt must record ``rotation``; a receipt that holds only the coded size raises ``ValueError``, because
+    the coded size would tag a rotated portrait clip as landscape.
+    """
     from PIL import Image
+
+    geometry = geometry or geometry_from_receipt(receipt)
+    if geometry is None:
+        raise ValueError("displayed geometry unknown")
 
     def pixels(image):  # Pillow 13 deprecates getdata() in favour of get_flattened_data()
         return list(image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata())
@@ -383,9 +426,7 @@ def local_features(frames: list[pathlib.Path], receipt: dict) -> dict:
         "motion": round(motion, 4),
         "palette": palette,
         "duration": video.get("duration"),
-        "width": video.get("width"),
-        "height": video.get("height"),
-        "orientation": "portrait" if (video.get("height") or 0) > (video.get("width") or 0) else "landscape",
+        **geometry_features(geometry),
     }
 
 
@@ -415,10 +456,14 @@ def prepare_clip(root: pathlib.Path, uuid: str, px: int) -> None:
     try:
         receipt = read_receipt(root, uuid)
         frames = extract(root, uuid, px)
+        # A receipt without ``rotation`` (written before issue #60) holds only the coded size: ask the video.
+        geometry = geometry_from_receipt(receipt) or probe_geometry(original_video(root, uuid, receipt))
     except (ValueError, KeyError, TypeError, AttributeError):  # a malformed receipt; OSError stays fatal
         raise ClipUnusable(0) from None
+    if geometry is None:  # never guess from the coded size
+        raise ClipUnusable(0)
     try:
-        features = local_features(frames, receipt)
+        features = local_features(frames, receipt, geometry)
     except (OSError, ValueError, ArithmeticError, IndexError, TypeError):  # Pillow cannot read a frame
         raise ClipUnusable(0) from None
     write_json(dirs(root)["features"] / f"{uuid}.json", features, indent=1)
@@ -626,9 +671,103 @@ def cmd_report(args) -> None:
     print(f"clips failed frame extraction: {failed}")
 
 
+def corrected_features(features: dict, geometry: dict) -> dict:
+    """``features`` with only the geometry keys replaced: existing keys keep their position and every other
+    feature stays as it was; keys it did not have yet are appended in ``GEOMETRY_KEYS`` order."""
+    wanted = geometry_features(geometry)
+    updated = {key: wanted.get(key, value) for key, value in features.items()}
+    updated.update({key: value for key, value in wanted.items() if key not in updated})
+    return updated
+
+
+def orientation_bucket(features: dict) -> str:
+    value = features.get("orientation")
+    return value if value in ("portrait", "landscape") else "other"  # never echo an arbitrary stored string
+
+
+def cmd_refresh_local(args) -> dict:
+    """Correct the geometry of clips that are already tagged; no API, no Pillow, no frames.
+
+    For every ``analysis/tags/<uuid>.json`` with a ``features`` block (and the matching
+    ``analysis/features/<uuid>.json`` when present) a fresh ffprobe run on the original video gives the
+    displayed geometry, and only ``GEOMETRY_KEYS`` inside ``features`` are rewritten. A clip whose geometry
+    is already right is not rewritten. ``tags.jsonl`` and ``ledger.jsonl`` are historical and untouched. A
+    clip with no readable original or an unreadable probe is skipped and counted, never guessed. Only
+    counts are printed.
+    """
+    if shutil.which("ffprobe") is None:
+        raise SystemExit("ffprobe is required to read the displayed geometry; install FFmpeg first.")
+    d = dirs(args.root, create=False)
+    counts = {"examined": 0, "changed": 0, "unchanged": 0, "missing": 0, "unreadable": 0}
+    before = {"portrait": 0, "landscape": 0, "other": 0}
+    after = dict(before)
+    for tag_path in sorted(d["tags"].glob("*.json")):
+        uuid = tag_path.stem
+        if not UUID_RE.fullmatch(uuid):
+            continue
+        try:
+            record = json.loads(tag_path.read_text(encoding="utf-8"))
+        except ValueError:
+            counts["examined"] += 1
+            counts["unreadable"] += 1
+            continue
+        if not isinstance(record, dict) or not isinstance(record.get("features"), dict):
+            continue  # no features block: nothing to correct
+        counts["examined"] += 1
+        old = orientation_bucket(record["features"])
+        before[old] += 1
+        features_path = d["features"] / f"{uuid}.json"
+        feature_file = None
+        if features_path.exists():
+            try:
+                feature_file = json.loads(features_path.read_text(encoding="utf-8"))
+            except ValueError:
+                feature_file = None
+            if not isinstance(feature_file, dict):
+                counts["unreadable"] += 1
+                after[old] += 1
+                continue
+        try:
+            receipt = read_receipt(args.root, uuid)
+            mov = original_video(args.root, uuid, receipt)
+            has_original = mov.is_file()
+        except (ValueError, KeyError, TypeError, AttributeError, FileNotFoundError):
+            has_original = False
+        if not has_original:
+            counts["missing"] += 1
+            after[old] += 1
+            continue
+        geometry = probe_geometry(mov)
+        if geometry is None:
+            counts["unreadable"] += 1
+            after[old] += 1
+            continue
+        fixed = corrected_features(record["features"], geometry)
+        after[orientation_bucket(fixed)] += 1
+        writes = []
+        if fixed != record["features"] or list(fixed) != list(record["features"]):
+            writes.append((tag_path, {**record, "features": fixed}))
+        if feature_file is not None:
+            fixed_file = corrected_features(feature_file, geometry)
+            if fixed_file != feature_file or list(fixed_file) != list(feature_file):
+                writes.append((features_path, fixed_file))
+        counts["changed" if writes else "unchanged"] += 1
+        if not args.dry_run:
+            for path, value in writes:
+                write_json(path, value, indent=1)
+    prefix = "dry run: would change" if args.dry_run else "changed"
+    print(f"examined {counts['examined']} clips")
+    print(f"{prefix} {counts['changed']}, unchanged {counts['unchanged']}")
+    print(f"skipped (missing original) {counts['missing']}, skipped (unreadable) {counts['unreadable']}")
+    print(f"orientation before: portrait {before['portrait']}, landscape {before['landscape']}, other {before['other']}")
+    print(f"orientation after{' (dry run)' if args.dry_run else ''}: portrait {after['portrait']}, "
+          f"landscape {after['landscape']}, other {after['other']}")
+    return counts
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["prepare", "submit", "collect", "run", "report"])
+    parser.add_argument("command", choices=["prepare", "submit", "collect", "run", "report", "refresh-local"])
     parser.add_argument("--root", type=pathlib.Path, required=True,
                         help="private storage root (outside the checkout, or under var/)")
     parser.add_argument("--model", default="claude-haiku-5-5", choices=sorted(PRICES))
@@ -642,7 +781,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="collect: also collect every batch that has no ledger line yet")
     parser.add_argument("--keychain-service", default=None,
                         help="macOS Keychain item holding the API key (default: ANTHROPIC_API_KEY via the SDK)")
-    parser.add_argument("--dry-run", action="store_true", help="prepare locally and print the projected cost; upload nothing")
+    parser.add_argument("--dry-run", action="store_true", help="prepare locally and print the projected cost; upload nothing "
+                             "(refresh-local: compute and print the counts, write nothing)")
     parser.add_argument("--confirm-upload", action="store_true",
                         help="REQUIRED to send frames to the API: 3 downscaled JPEG frames per clip + a fixed instruction")
     return parser
@@ -660,6 +800,8 @@ def run_command(args) -> int:
         cmd_submit(args, cmd_prepare(args))
     elif args.command == "collect":
         cmd_collect(args, args.batch)
+    elif args.command == "refresh-local":
+        cmd_refresh_local(args)
     elif args.command == "run":
         cmd_submit(args, cmd_prepare(args))
         if not args.dry_run and pending_batches(args.root):  # new batches and any left by an earlier run

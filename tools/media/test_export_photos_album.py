@@ -218,6 +218,7 @@ class FakeHost:
         self.interfaces = {"en0": WIFI_UNMETERED, "en5": ETHERNET_UNMETERED}  # name -> `ifconfig -v NAME`
         self.interface_list = "lo0 en0 en5 utun2"
         self.route_error: Exception | None = None
+        self.stream_extra: dict = {}  # merged into the fake video stream (side data, tags, ...)
         self.calls: list[list[str]] = []
         self.exports: list[str] = []
         self._lock = threading.Lock()
@@ -272,7 +273,8 @@ class FakeHost:
         data = pathlib.Path(command[-1]).read_bytes()
         if data.startswith(b"corrupt"):
             return subprocess.CompletedProcess(command, 1, "", "invalid data")
-        facts = {"streams": [{"codec_name": "hevc", "width": 1080, "height": 1920, "r_frame_rate": "30/1"}],
+        facts = {"streams": [{"codec_name": "hevc", "width": 1080, "height": 1920, "r_frame_rate": "30/1",
+                              **self.stream_extra}],
                  "format": {"duration": "1.8"}}
         return subprocess.CompletedProcess(command, 0, json.dumps(facts), "")
 
@@ -394,6 +396,59 @@ class ExportLayoutTests(ExporterTestCase):
         self.assertAlmostEqual(receipt["video"]["duration"], 1.8)
         self.assertEqual(self.log_lines("export-manifest.jsonl"), [receipt])
         self.assertFalse((self.folder(1) / ".done.tmp").exists())
+
+    def test_receipt_keeps_the_coded_size_and_adds_rotation_and_the_displayed_size(self):
+        # A phone portrait clip: landscape-coded 1920x1080 with a clockwise display rotation.
+        self.host.stream_extra = {"width": 1920, "height": 1080,
+                                  "side_data_list": [{"side_data_type": "Display Matrix", "rotation": -90}]}
+        self.seed({1: live_photo(b"a")})
+        self.assertEqual(self.run_main(), 0)
+        receipt = json.loads((self.folder(1) / ".done").read_text())
+        video = receipt["video"]
+        self.assertEqual(receipt["schema"], "live-photo-export/v1")
+        self.assertEqual((video["width"], video["height"]), (1920, 1080))  # still the CODED size
+        self.assertEqual((video["rotation"], video["display_width"], video["display_height"]), (-90, 1080, 1920))
+
+    def test_receipt_without_a_display_matrix_records_rotation_zero_and_the_same_size(self):
+        self.seed({1: live_photo(b"a")})
+        self.assertEqual(self.run_main(), 0)
+        video = json.loads((self.folder(1) / ".done").read_text())["video"]
+        self.assertEqual((video["rotation"], video["display_width"], video["display_height"]), (0, 1080, 1920))
+
+    def test_a_legacy_rotate_tag_and_a_malformed_rotation_are_read_the_safe_way(self):
+        clip = pathlib.Path(self._tmp.name) / "clip.mov"
+        clip.write_bytes(b"movie")
+        for extra, rotation, shown in (({"tags": {"rotate": "90"}}, -90, (1920, 1080)),
+                                       ({"tags": {"rotate": "ninety"}}, 0, (1080, 1920)),
+                                       ({"side_data_list": [{"rotation": 45}]}, 0, (1080, 1920)),
+                                       ({"side_data_list": [{"rotation": "nan"}]}, 0, (1080, 1920))):
+            with self.subTest(extra=extra):
+                self.host.stream_extra = extra
+                video = exporter.probe(clip)
+                self.assertEqual((video["rotation"], video["display_width"], video["display_height"]),
+                                 (rotation, *shown))
+                self.assertEqual((video["width"], video["height"]), (1080, 1920))  # always the coded size
+
+    def test_probe_asks_for_streams_and_format_not_side_data_entries(self):
+        self.seed({1: live_photo(b"a")})
+        self.run_main()
+        command = next(call for call in self.host.calls if call[0] == "ffprobe")
+        self.assertEqual(command[1:-1], ["-v", "error", "-select_streams", "v:0", "-show_streams", "-show_format",
+                                         "-of", "json"])
+        self.assertNotIn("-show_entries", command)
+
+    def test_a_receipt_written_before_the_rotation_keys_still_loads_in_the_tagger_helpers(self):
+        from tools.media import tag_clips
+
+        folder = self.root / "originals" / uid(1)
+        folder.mkdir(parents=True)
+        legacy = {"schema": "live-photo-export/v1", "uuid": uid(1),
+                  "video": {"name": f"{uid(1)}.mov", "codec": "hevc", "width": 1920, "height": 1080, "fps": "30/1",
+                            "duration": 1.8}}
+        (folder / ".done").write_text(json.dumps(legacy))
+        self.assertEqual(tag_clips.read_receipt(self.root, uid(1)), legacy)
+        self.assertIsNone(tag_clips.geometry_from_receipt(legacy))  # rotation unknown: the tagger probes the video
+        self.assertEqual(exporter.RECEIPT_SCHEMA, "live-photo-export/v1")
 
     def test_nothing_but_uuids_is_logged_or_recorded(self):
         self.seed({1: live_photo(b"a"), 2: live_photo(b"b")})

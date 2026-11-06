@@ -88,11 +88,11 @@ the folder.
 │       └── .done                  JSON receipt: sizes, sha256, ffprobe facts
 └── analysis/                      written by tag_clips.py
     ├── frames/<uuid>/f0-f2.jpg    temporary; deleted once the clip is tagged
-    ├── features/<uuid>.json       local features (palette, luma, motion)
+    ├── features/<uuid>.json       local features (palette, luma, motion, displayed geometry)
     ├── failed/<uuid>.json         clip with no usable frames; skipped until deleted
     ├── batches/<batch>.json       which clips went into which batch
-    ├── tags/<uuid>.json           final per-clip record
-    ├── tags.jsonl                 append-only copy of the records
+    ├── tags/<uuid>.json           final per-clip record (the authoritative one)
+    ├── tags.jsonl                 append-only copy as of collection time (historical)
     └── ledger.jsonl               cost estimate per collected batch
 ```
 
@@ -108,6 +108,39 @@ Only one export can run per root. The exporter takes an exclusive lock on
 `album-ids.json` are exported once, in first-seen order. Ctrl-C cancels the
 items still queued (one line says how many), lets in-flight items finish, and
 exits with code 130; re-run to resume.
+
+### Receipt and feature geometry
+
+A phone portrait clip is a landscape-coded stream with a display rotation of
+90 or 270 degrees, so its coded size says "landscape" for a clip that plays
+upright as portrait. The receipt and the tag features therefore keep the coded
+and the displayed geometry apart.
+
+Receipt (`originals/<uuid>/.done`, schema `live-photo-export/v1`), under
+`video`:
+
+| Key | Meaning |
+| --- | --- |
+| `width`, `height` | the CODED size, as the schema has always defined them |
+| `rotation` | display rotation in degrees, ffprobe's sign (`-90` clockwise, the phone-portrait case) |
+| `display_width`, `display_height` | the size after the rotation is applied |
+
+`rotation`, `display_width` and `display_height` are optional: receipts written
+before issue #60 have only the coded `width` and `height`, and every tool still
+reads them. The exporter reads the rotation from a plain
+`ffprobe -show_streams -show_format -of json` run (the stream's display-matrix
+side data first, then the legacy `rotate` tag). A missing, unreadable, non-finite
+or not-a-multiple-of-90 rotation counts as 0.
+
+Features (`analysis/features/<uuid>.json`, and the `features` block of
+`analysis/tags/<uuid>.json`): `width`, `height` and `orientation` describe the
+DISPLAYED clip. `orientation` is `portrait` when the displayed height exceeds
+the width and `landscape` otherwise, so a square clip is `landscape`. The keys
+`rotation`, `coded_width` and `coded_height` keep the stored facts. When a
+receipt has no `rotation`, `prepare` asks `ffprobe` about the original video
+itself; if that fails the clip is marked failed rather than tagged from the
+coded size. Luma, saturation, hue, motion and palette were never affected: the
+frames are extracted already rotated.
 
 ### Private material
 
@@ -169,7 +202,8 @@ The commands are `prepare` (frames and local features), `submit`, `collect
 every batch that has no line in `ledger.jsonl` yet), `run` (prepare, submit,
 collect every pending batch, and report), and `report`. Options are `--model`,
 `--frame-px` (default 640, at most 1024), `--batch-size` (default 200),
-`--poll`, and `--limit`. A local file error exits with code 5 and prints only
+`--poll`, and `--limit`. `refresh-local` (below) corrects the geometry of clips
+that are already tagged. A local file error exits with code 5 and prints only
 the error type.
 
 `prepare` extracts the three frames of a clip afresh each time (it deletes the
@@ -194,6 +228,35 @@ marker holds only `uuid`, `error` (`frame_extraction_failed`) and `attempts`
 A clip with a marker is not retried automatically. Delete its marker to try it
 again. `report` prints `clips failed frame extraction: N`. A file error on the
 root itself still exits with code 5.
+
+#### Correcting clips tagged with the coded orientation
+
+Clips tagged before issue #60 carry the coded geometry. `refresh-local`
+corrects them without the API, a key, Pillow or frames. It runs a fresh
+`ffprobe` on each original and rewrites only `width`, `height`, `orientation`,
+`rotation`, `coded_width` and `coded_height` inside `features` in
+`analysis/tags/<uuid>.json` and `analysis/features/<uuid>.json`. Every other key
+and feature, including the model's analysis, the safety and privacy fields and
+the cost, stays as it was, in the same order. Copy `analysis/` before running
+it, and run it with `--dry-run` first:
+
+```sh
+cp -R "$LIVE_ROOT/analysis" "$LIVE_ROOT/analysis.backup"
+python3 -m tools.media.tag_clips refresh-local --root "$LIVE_ROOT" --dry-run
+python3 -m tools.media.tag_clips refresh-local --root "$LIVE_ROOT"
+```
+
+The command uses the same private-root guard as the other commands. It prints
+counts only: clips examined, changed, unchanged, skipped because the original
+is missing, skipped because the probe was unreadable, and the portrait and
+landscape counts before and after. A skipped clip is never guessed. It is
+idempotent: a clip whose geometry is already right is not rewritten, so a
+second run reports 0 changed. Clips under `analysis/failed/` are ignored.
+
+The per-clip files in `analysis/tags/` are the authoritative records.
+`analysis/tags.jsonl` is a historical copy as of collection time and keeps the
+old geometry; `refresh-local` does not touch it, `ledger.jsonl` or the
+`tags-v1-pilot*` files. Read `analysis/tags/<uuid>.json`, not `tags.jsonl`.
 
 Credentials use the SDK's standard resolution: set `ANTHROPIC_API_KEY`. On
 macOS you can instead pass `--keychain-service NAME` to read the key from a

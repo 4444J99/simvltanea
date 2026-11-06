@@ -11,7 +11,8 @@ Layout under --root (private; never committed; may live outside the checkout):
   album-ids.json              Photos media item ids in album order
   originals/<uuid>/<uuid>.mov the paired motion clip
   originals/<uuid>/<uuid>.<still extension>
-  originals/<uuid>/.done      JSON receipt (sizes, sha256, ffprobe facts)
+  originals/<uuid>/.done      JSON receipt (sizes, sha256, ffprobe facts: coded width/height, plus rotation and
+                              display_width/display_height for receipts written since issue #60)
   export-manifest.jsonl       one line per completed item
   export-failures.jsonl       one line per failed attempt
 Create <root>/STOP to finish in-flight items and exit; remove it and re-run to resume.
@@ -48,6 +49,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from tools.media.private_root import resolve_private_root
+from tools.media.video_geometry import display_size, first_stream, run_ffprobe, stream_rotation
 
 VIDEO_EXT = {".mov", ".mp4", ".m4v"}
 IMAGE_EXT = {".heic", ".jpg", ".jpeg", ".png"}  # candidates for the primary still; sidecars (.aae) are not
@@ -113,22 +115,26 @@ def sha256(path: pathlib.Path) -> str:
 
 
 def probe(path: pathlib.Path) -> dict:
-    """ffprobe facts for the first video stream, or ``{}`` when the file is unreadable."""
-    try:
-        proc = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-             "stream=codec_name,width,height,r_frame_rate:format=duration", "-of", "json", str(path)],
-            capture_output=True, text=True, timeout=120,
-        )
-        if proc.returncode != 0:
-            return {}
-        data = json.loads(proc.stdout or "{}")
-        stream = (data.get("streams") or [{}])[0]
-        duration = float((data.get("format") or {}).get("duration") or 0)
-    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+    """ffprobe facts for the first video stream, or ``{}`` when the file is unreadable.
+
+    ``width`` and ``height`` are the CODED size (what ``live-photo-export/v1`` always meant). ``rotation``
+    (ffprobe's sign: -90 is a clockwise display rotation) and the displayed ``display_width`` /
+    ``display_height`` are added for new receipts; receipts written earlier lack them.
+    """
+    data = run_ffprobe(path)
+    if data is None:
         return {}
+    stream = first_stream(data)
+    try:
+        duration = float((data.get("format") or {}).get("duration") or 0)
+    except (ValueError, TypeError, AttributeError):
+        return {}
+    width, height = stream.get("width"), stream.get("height")
+    rotation = stream_rotation(stream)
+    display_width, display_height = display_size(width, height, rotation)
     return {
-        "codec": stream.get("codec_name"), "width": stream.get("width"), "height": stream.get("height"),
+        "codec": stream.get("codec_name"), "width": width, "height": height, "rotation": rotation,
+        "display_width": display_width, "display_height": display_height,
         "fps": stream.get("r_frame_rate"), "duration": duration,
     }
 

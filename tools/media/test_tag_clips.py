@@ -4,11 +4,13 @@ Tests that need the optional ``analysis`` extra (anthropic, Pillow) are skipped 
 when that package is genuinely absent.
 """
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -17,7 +19,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from tools.media import tag_clips
+from tools.media import tag_clips, video_geometry
 from tools.paths import REPO_ROOT
 
 HAS_SDK = importlib.util.find_spec("anthropic") is not None and importlib.util.find_spec("pydantic") is not None
@@ -53,8 +55,14 @@ def save_frame(path: pathlib.Path, color, size=(96, 64)) -> None:
     Image.new("RGB", size, color).save(path, "JPEG", quality=95)
 
 
-def make_receipt(width=1080, height=1920, duration=1.8) -> dict:
-    return {"video": {"name": "clip.mov", "duration": duration, "width": width, "height": height}}
+def make_receipt(width=1080, height=1920, duration=1.8, rotation=0) -> dict:
+    """A receipt as the exporter writes it today: coded size plus rotation. ``rotation=None`` gives the
+    legacy shape (written before issue #60) that has no ``rotation`` key at all."""
+    video = {"name": "clip.mov", "duration": duration, "width": width, "height": height}
+    if rotation is not None:
+        video.update(rotation=rotation, **dict(zip(("display_width", "display_height"),
+                                                   (height, width) if abs(rotation) % 180 == 90 else (width, height))))
+    return {"video": video}
 
 
 def succeeded(uuid: str, text: str, stop_reason="end_turn", input_tokens=1000, output_tokens=300):
@@ -453,11 +461,11 @@ class ShortAndBrokenClipTests(TaggerTestCase):
         real = tag_clips.local_features
         broken = {"count": 0}
 
-        def flaky(frames, receipt):
+        def flaky(frames, receipt, *geometry):
             if frames[0].parent.name == UUID_C:
                 broken["count"] += 1
                 raise OSError("image file is truncated: /private/path/f0.jpg")
-            return real(frames, receipt)
+            return real(frames, receipt, *geometry)
 
         with mock.patch.object(tag_clips, "local_features", side_effect=flaky):
             self.assertEqual(self.run_main("prepare"), 0)
@@ -1077,6 +1085,445 @@ class PrivateRootTests(TaggerTestCase):
         with self.assertRaises(SystemExit):
             self.run_main("report")
         self.assertFalse(self.root.exists())
+
+
+# --- displayed orientation (issue #60) -------------------------------------------------------------------------
+
+def rotated_facts(coded_width: int, coded_height: int, rotation: int | None) -> dict:
+    """What ``ffprobe -show_streams -show_format -of json`` returns for one phone clip."""
+    stream = {"codec_type": "video", "width": coded_width, "height": coded_height}
+    if rotation is not None:
+        stream["side_data_list"] = [{"side_data_type": "Display Matrix", "rotation": rotation}]
+    return {"streams": [stream], "format": {"duration": "1.0"}}
+
+
+def make_rotated_clip(path: pathlib.Path, rotation: int) -> None:
+    """A real 64x48 coded clip with a display matrix (the two-step form FFmpeg 6.1 accepts)."""
+    staging = path.with_name("staging.mov")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=0.5",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(staging)], check=True)
+    option = ["-display_rotation:v:0", str(rotation)] if rotation else []
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *option, "-i", str(staging), "-c", "copy", str(path)], check=True)
+    staging.unlink()
+
+
+class DisplayedGeometryFeatureTests(TaggerTestCase):
+    def features(self, receipt, geometry=None):
+        frames = []
+        for index in range(3):
+            frames.append(self.root / f"f{index}.jpg")
+            save_frame(frames[-1], (20 * index, 90, 160))
+        return tag_clips.local_features(frames, receipt, geometry)
+
+    @needs_pillow
+    def test_a_rotated_receipt_gives_the_displayed_size_and_keeps_the_coded_one(self):
+        for rotation, orientation in ((0, "landscape"), (90, "portrait"), (-90, "portrait"), (180, "landscape"),
+                                      (270, "portrait")):
+            with self.subTest(rotation=rotation):
+                features = self.features(make_receipt(width=1920, height=1080, rotation=rotation))
+                shown = (1080, 1920) if orientation == "portrait" else (1920, 1080)
+                self.assertEqual((features["width"], features["height"], features["orientation"]),
+                                 (*shown, orientation))
+                self.assertEqual((features["rotation"], features["coded_width"], features["coded_height"]),
+                                 (rotation, 1920, 1080))
+
+    @needs_pillow
+    def test_features_keep_their_old_key_order_with_the_new_keys_after_orientation(self):
+        keys = list(self.features(make_receipt(rotation=-90)))
+        self.assertEqual(keys[keys.index("duration"):],
+                         ["duration", "width", "height", "orientation", "rotation", "coded_width", "coded_height"])
+
+    @needs_pillow
+    def test_a_square_clip_stays_landscape(self):
+        self.assertEqual(self.features(make_receipt(width=720, height=720))["orientation"], "landscape")
+
+    @needs_pillow
+    def test_a_legacy_receipt_without_rotation_cannot_be_featured_from_its_coded_size(self):
+        legacy = make_receipt(width=1920, height=1080, rotation=None)
+        self.assertNotIn("rotation", legacy["video"])
+        with self.assertRaises(ValueError):
+            self.features(legacy)
+        features = self.features(legacy, geometry=video_geometry.geometry_from_stream(
+            rotated_facts(1920, 1080, -90)["streams"][0]))
+        self.assertEqual((features["orientation"], features["width"], features["height"]), ("portrait", 1080, 1920))
+
+    def test_a_legacy_receipt_still_loads(self):
+        self.add_clip(UUID_A, rotation=None)
+        receipt = tag_clips.read_receipt(self.root, UUID_A)
+        self.assertEqual(receipt["video"]["width"], 1080)
+        self.assertIsNone(tag_clips.geometry_from_receipt(receipt))
+        self.assertEqual(tag_clips.ready_clips(self.root), [UUID_A])
+
+    def test_receipt_geometry_is_derived_from_the_coded_size_and_rotation(self):
+        geometry = tag_clips.geometry_from_receipt(make_receipt(width=1920, height=1080, rotation=-90))
+        self.assertEqual((geometry["display_width"], geometry["display_height"], geometry["orientation"]),
+                         (1080, 1920, "portrait"))
+        self.assertIsNone(tag_clips.geometry_from_receipt({}))
+        self.assertIsNone(tag_clips.geometry_from_receipt({"video": {"rotation": 0}}))
+
+
+class PrepareGeometryTests(TaggerTestCase):
+    """``prepare_clip`` takes the displayed size from the receipt when it has ``rotation``, else from the video."""
+
+    def setUp(self):
+        super().setUp()
+        for patcher in (mock.patch.object(tag_clips, "extract", return_value=[self.root / "f.jpg"] * 3),
+                        mock.patch.object(tag_clips, "local_features",
+                                          side_effect=lambda frames, receipt, geometry=None: {"geometry": geometry})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def prepared(self, uuid=UUID_A) -> dict:
+        return json.loads((self.root / "analysis" / "features" / f"{uuid}.json").read_text())
+
+    def test_a_legacy_receipt_makes_the_tagger_probe_the_original(self):
+        self.add_clip(UUID_A, width=1920, height=1080, rotation=None)
+        asked = []
+
+        def fake(path):
+            asked.append(path)
+            return video_geometry.geometry_from_stream(rotated_facts(1920, 1080, -90)["streams"][0])
+
+        with mock.patch.object(tag_clips, "probe_geometry", side_effect=fake):
+            tag_clips.prepare_clip(self.root, UUID_A, 640)
+        self.assertEqual(asked, [self.root / "originals" / UUID_A / "clip.mov"])
+        geometry = self.prepared()["geometry"]
+        self.assertEqual((geometry["orientation"], geometry["display_width"], geometry["display_height"]),
+                         ("portrait", 1080, 1920))
+
+    def test_a_receipt_with_rotation_needs_no_probe(self):
+        self.add_clip(UUID_A, width=1920, height=1080, rotation=-90)
+        with mock.patch.object(tag_clips, "probe_geometry") as probe:
+            tag_clips.prepare_clip(self.root, UUID_A, 640)
+        probe.assert_not_called()
+        self.assertEqual(self.prepared()["geometry"]["orientation"], "portrait")
+
+    def test_an_unreadable_probe_never_falls_back_to_the_coded_size(self):
+        self.add_clip(UUID_A, width=1920, height=1080, rotation=None)
+        with mock.patch.object(tag_clips, "probe_geometry", return_value=None):
+            with self.assertRaises(tag_clips.ClipUnusable):
+                tag_clips.prepare_clip(self.root, UUID_A, 640)
+        self.assertFalse((self.root / "analysis" / "features" / f"{UUID_A}.json").exists())
+
+
+@needs_pillow
+@needs_ffmpeg
+class RealRotatedPrepareTests(TaggerTestCase):
+    def test_a_legacy_receipt_of_a_real_rotated_clip_is_tagged_portrait(self):
+        for uuid, rotation, expected in ((UUID_A, -90, ("portrait", 48, 64)), (UUID_B, 0, ("landscape", 64, 48)),
+                                         (UUID_C, 180, ("landscape", 64, 48)), (UUID_D, 270, ("portrait", 48, 64))):
+            with self.subTest(rotation=rotation):
+                self.add_clip(uuid, width=64, height=48, duration=0.5, rotation=None)
+                make_rotated_clip(self.root / "originals" / uuid / "clip.mov", rotation)
+                tag_clips.prepare_clip(self.root, uuid, 64)
+                features = json.loads((self.root / "analysis" / "features" / f"{uuid}.json").read_text())
+                self.assertEqual((features["orientation"], features["width"], features["height"]), expected)
+                self.assertEqual((features["coded_width"], features["coded_height"]), (64, 48))
+                self.assertEqual(features["rotation"] % 360, rotation % 360)
+
+
+class RefreshLocalTestCase(TaggerTestCase):
+    """A fake root of tagged clips whose features were computed from the CODED size."""
+
+    def setUp(self):
+        super().setUp()
+        self.facts: dict[str, dict | None] = {}
+        for patcher in (mock.patch.object(video_geometry, "run_ffprobe",
+                                          side_effect=lambda path, timeout=120: self.facts.get(path.parent.name)),
+                        mock.patch.object(tag_clips.shutil, "which",
+                                          side_effect=lambda name: "/usr/bin/ffprobe" if name == "ffprobe"
+                                          else REAL_WHICH(name))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def old_features(self) -> dict:
+        return {"luma": 0.4321, "luma_spread": 0.0123, "saturation": 0.31, "hue": 0.6, "motion": 0.05,
+                "palette": [{"hex": "#102030", "share": 0.5}], "duration": 1.8,
+                "width": 1920, "height": 1080, "orientation": "landscape"}
+
+    def add_tagged(self, uuid: str, rotation: int | None, coded=(1920, 1080), with_original=True,
+                   probe=True, legacy_receipt=True, feature_file=True) -> None:
+        self.add_clip(uuid, width=coded[0], height=coded[1], rotation=None if legacy_receipt else 0)
+        if with_original:
+            (self.root / "originals" / uuid / "clip.mov").write_bytes(b"placeholder, never decoded")
+        if probe:
+            self.facts[uuid] = rotated_facts(coded[0], coded[1], rotation)
+        tags = self.root / "analysis" / "tags"
+        tags.mkdir(parents=True, exist_ok=True)
+        record = {"uuid": uuid, "schema": tag_clips.SCHEMA_ID, "model": "claude-haiku-5-5", "batch": "msgbatch_test1",
+                  "analysis": GOOD_ANALYSIS, "error": None, "usd": 0.00123, "features": self.old_features(),
+                  "needs_review": False}
+        tag_clips.write_json(tags / f"{uuid}.json", record, indent=1)
+        if feature_file:
+            features = self.root / "analysis" / "features"
+            features.mkdir(parents=True, exist_ok=True)
+            tag_clips.write_json(features / f"{uuid}.json", self.old_features(), indent=1)
+
+    def digest(self, uuid: str, kind="tags") -> str:
+        return hashlib.sha256((self.root / "analysis" / kind / f"{uuid}.json").read_bytes()).hexdigest()
+
+    def counts(self) -> dict:
+        numbers = {"examined": r"examined (\d+)", "changed": r"changed (\d+)", "unchanged": r"unchanged (\d+)",
+                   "missing": r"missing original\) (\d+)", "unreadable": r"unreadable\) (\d+)"}
+        return {name: int(re.search(pattern, self.output).group(1)) for name, pattern in numbers.items()}
+
+    def snapshot(self) -> dict[str, bytes]:
+        return {str(p.relative_to(self.root)): p.read_bytes() for p in sorted(self.root.rglob("*")) if p.is_file()}
+
+
+class RefreshLocalTests(RefreshLocalTestCase):
+    def test_a_wrong_landscape_record_of_a_rotated_clip_becomes_portrait_and_nothing_else_changes(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        original_tag, original_feature = self.tag(UUID_A), self.old_features()
+        self.assertEqual(self.run_main("refresh-local"), 0, self.output)
+
+        tag = self.tag(UUID_A)
+        # Positive control: the refresh really changed the record. Only then do the "unchanged" checks mean anything.
+        self.assertEqual(original_tag["features"]["orientation"], "landscape")
+        self.assertEqual(tag["features"]["orientation"], "portrait")
+        self.assertEqual((tag["features"]["width"], tag["features"]["height"]), (1080, 1920))
+        self.assertEqual((tag["features"]["rotation"], tag["features"]["coded_width"], tag["features"]["coded_height"]),
+                         (-90, 1920, 1080))
+
+        self.assertEqual(list(tag), list(original_tag))  # key order of the record
+        for key in original_tag:
+            if key != "features":
+                self.assertEqual(tag[key], original_tag[key], key)  # analysis, safety/privacy, error, usd, batch ...
+        self.assertEqual(tag["analysis"]["safety"], GOOD_ANALYSIS["safety"])
+        self.assertEqual(tag["analysis"]["privacy"], GOOD_ANALYSIS["privacy"])
+        old_keys = list(original_feature)
+        self.assertEqual(list(tag["features"]), old_keys + ["rotation", "coded_width", "coded_height"])
+        for key in old_keys:
+            if key not in ("width", "height", "orientation"):
+                self.assertEqual(tag["features"][key], original_feature[key], key)  # luma, motion, palette ...
+        self.assertEqual(json.loads((self.root / "analysis" / "features" / f"{UUID_A}.json").read_text()),
+                         tag["features"])
+        self.assertEqual(self.counts(), {"examined": 1, "changed": 1, "unchanged": 0, "missing": 0, "unreadable": 0})
+        self.assertIn("orientation before: portrait 0, landscape 1", self.output)
+        self.assertIn("orientation after: portrait 1, landscape 0", self.output)
+
+    def test_the_files_are_written_the_way_the_tagger_writes_them(self):
+        self.add_tagged(UUID_A, rotation=90)
+        self.run_main("refresh-local")
+        text = (self.root / "analysis" / "tags" / f"{UUID_A}.json").read_text()
+        self.assertEqual(text, json.dumps(json.loads(text), indent=1))
+        self.assertEqual(list((self.root / "analysis" / "tags").glob("*.tmp")), [])
+
+    def test_a_clip_without_a_display_matrix_gets_rotation_zero_and_its_coded_orientation(self):
+        self.add_tagged(UUID_A, rotation=None, coded=(1080, 1920))  # coded portrait, no matrix
+        self.add_tagged(UUID_B, rotation=None)  # coded landscape, stored landscape: only the new keys are added
+        self.run_main("refresh-local")
+        features = self.tag(UUID_A)["features"]
+        self.assertEqual((features["orientation"], features["rotation"], features["width"], features["height"]),
+                         ("portrait", 0, 1080, 1920))
+        features = self.tag(UUID_B)["features"]
+        self.assertEqual((features["orientation"], features["rotation"], features["coded_width"]),
+                         ("landscape", 0, 1920))
+
+    def test_a_second_run_changes_nothing_and_leaves_the_files_byte_identical(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        self.add_tagged(UUID_B, rotation=None)
+        self.run_main("refresh-local")
+        before = self.snapshot()
+        self.assertEqual(self.run_main("refresh-local"), 0)
+        self.assertEqual(self.counts(), {"examined": 2, "changed": 0, "unchanged": 2, "missing": 0, "unreadable": 0})
+        self.assertEqual(self.snapshot(), before)  # includes sha256 of every tag and feature file
+
+    def test_a_clip_that_is_already_right_is_not_rewritten(self):
+        self.add_tagged(UUID_A, rotation=None)  # landscape stays landscape ...
+        self.run_main("refresh-local")  # ... apart from the new keys, added once
+        digests = (self.digest(UUID_A), self.digest(UUID_A, "features"))
+        with mock.patch.object(tag_clips, "write_json") as write:
+            self.run_main("refresh-local")
+        write.assert_not_called()
+        self.assertEqual((self.digest(UUID_A), self.digest(UUID_A, "features")), digests)
+
+    def test_dry_run_computes_the_result_and_writes_nothing(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        self.add_tagged(UUID_B, rotation=None)
+        before = self.snapshot()
+        self.assertEqual(self.run_main("refresh-local", "--dry-run"), 0, self.output)
+        self.assertEqual(self.snapshot(), before)
+        self.assertIn("dry run: would change 2, unchanged 0", self.output)  # both lack the new keys; one flips
+        self.assertIn("orientation before: portrait 0, landscape 2", self.output)
+        self.assertIn("orientation after (dry run): portrait 1, landscape 1", self.output)
+
+    def test_only_the_features_block_of_tag_and_features_files_is_touched(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        analysis = self.root / "analysis"
+        (analysis / "tags.jsonl").write_text(json.dumps({**self.tag(UUID_A)}) + "\n")
+        (analysis / "ledger.jsonl").write_text(json.dumps({"batch": "msgbatch_test1", "usd": 0.1}) + "\n")
+        (analysis / "tags-v1-pilot.json").write_text("{}")
+        (analysis / "batches").mkdir()
+        (analysis / "batches" / "msgbatch_test1.json").write_text(json.dumps({"uuids": [UUID_A]}))
+        keep = {name: (self.root / name).read_bytes() for name in (
+            "analysis/tags.jsonl", "analysis/ledger.jsonl", "analysis/tags-v1-pilot.json",
+            "analysis/batches/msgbatch_test1.json", f"originals/{UUID_A}/.done", f"originals/{UUID_A}/clip.mov")}
+        self.run_main("refresh-local")
+        self.assertEqual(self.tag(UUID_A)["features"]["orientation"], "portrait")  # control: something did change
+        for name, data in keep.items():
+            self.assertEqual((self.root / name).read_bytes(), data, name)
+        self.assertEqual(json.loads((analysis / "tags.jsonl").read_text())["features"]["orientation"], "landscape")
+
+    def test_a_missing_original_is_skipped_and_counted_and_its_record_is_left_alone(self):
+        self.add_tagged(UUID_A, rotation=-90, with_original=False)
+        self.add_tagged(UUID_B, rotation=-90)
+        before = self.digest(UUID_A), self.digest(UUID_A, "features")
+        self.run_main("refresh-local")
+        self.assertEqual(self.counts(), {"examined": 2, "changed": 1, "unchanged": 0, "missing": 1, "unreadable": 0})
+        self.assertEqual((self.digest(UUID_A), self.digest(UUID_A, "features")), before)
+        self.assertEqual(self.tag(UUID_B)["features"]["orientation"], "portrait")
+
+    def test_a_missing_or_malformed_receipt_counts_as_a_missing_original(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        self.add_tagged(UUID_B, rotation=-90)
+        (self.root / "originals" / UUID_A / ".done").unlink()
+        (self.root / "originals" / UUID_B / ".done").write_text("{not json")
+        self.run_main("refresh-local")
+        self.assertEqual((self.counts()["missing"], self.counts()["changed"]), (2, 0))
+
+    def test_an_unreadable_probe_is_skipped_and_counted_never_guessed(self):
+        self.add_tagged(UUID_A, rotation=-90, probe=False)  # ffprobe fails
+        self.add_tagged(UUID_B, rotation=-90)
+        self.facts[UUID_B] = {"streams": [{"codec_type": "audio"}], "format": {}}  # no video size
+        self.add_tagged(UUID_C, rotation=-90)
+        before = self.digest(UUID_A), self.digest(UUID_B)
+        self.run_main("refresh-local")
+        self.assertEqual(self.counts(), {"examined": 3, "changed": 1, "unchanged": 0, "missing": 0, "unreadable": 2})
+        self.assertEqual((self.digest(UUID_A), self.digest(UUID_B)), before)
+        self.assertEqual(self.tag(UUID_A)["features"]["orientation"], "landscape")
+
+    def test_failed_clips_and_records_without_features_are_ignored(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        failed = self.root / "analysis" / "failed"
+        failed.mkdir()
+        (failed / f"{UUID_B}.json").write_text(json.dumps({"uuid": UUID_B, "error": "frame_extraction_failed"}))
+        self.add_tagged(UUID_C, rotation=-90)
+        record = self.tag(UUID_C)
+        record["features"] = None
+        tag_clips.write_json(self.root / "analysis" / "tags" / f"{UUID_C}.json", record, indent=1)
+        stray = self.root / "analysis" / "tags" / "not-a-uuid.json"
+        stray.write_text("{}")
+        before = self.snapshot()
+        self.run_main("refresh-local")
+        self.assertEqual(self.counts()["examined"], 1)
+        after = self.snapshot()
+        self.assertEqual({k: v for k, v in after.items() if v != before[k]},
+                         {f"analysis/tags/{UUID_A}.json": after[f"analysis/tags/{UUID_A}.json"],
+                          f"analysis/features/{UUID_A}.json": after[f"analysis/features/{UUID_A}.json"]})
+
+    def test_a_clip_without_a_features_file_is_still_corrected_in_its_record(self):
+        self.add_tagged(UUID_A, rotation=-90, feature_file=False)
+        self.run_main("refresh-local")
+        self.assertEqual(self.tag(UUID_A)["features"]["orientation"], "portrait")
+        self.assertFalse((self.root / "analysis" / "features" / f"{UUID_A}.json").exists())
+
+    def test_an_unreadable_record_or_features_file_is_skipped_and_counted(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        self.add_tagged(UUID_B, rotation=-90)
+        (self.root / "analysis" / "tags" / f"{UUID_A}.json").write_text("{broken")
+        (self.root / "analysis" / "features" / f"{UUID_B}.json").write_text("[1]")
+        self.run_main("refresh-local")
+        self.assertEqual(self.counts(), {"examined": 2, "changed": 0, "unchanged": 0, "missing": 0, "unreadable": 2})
+        self.assertEqual(self.tag(UUID_B)["features"]["orientation"], "landscape")
+
+    def test_output_is_counts_only(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        self.add_tagged(UUID_B, rotation=-90, with_original=False)
+        self.add_tagged(UUID_C, rotation=-90, probe=False)
+        for argv in (("refresh-local", "--dry-run"), ("refresh-local",)):
+            self.run_main(*argv)
+            for text in (UUID_A, UUID_B, UUID_C, str(self.root), self._tmp.name, "clip.mov", "originals", "ffprobe",
+                         "Traceback", GOOD_ANALYSIS["caption"]):
+                self.assertNotIn(text, self.output)
+            self.assertLessEqual(len(self.output.splitlines()), 6)
+
+    def test_it_needs_no_pillow_no_sdk_no_key_and_no_frames(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        with mock.patch.dict(sys.modules, {"PIL": None, "PIL.Image": None, "anthropic": None, "pydantic": None}), \
+                mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(tag_clips, "make_client", side_effect=AssertionError("API client")), \
+                mock.patch.object(tag_clips, "extract", side_effect=AssertionError("frames")):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            self.assertEqual(self.run_main("refresh-local"), 0, self.output)
+        self.assertEqual(self.tag(UUID_A)["features"]["orientation"], "portrait")
+        self.assertFalse((self.root / "analysis" / "frames").exists())
+
+    def test_without_ffprobe_it_stops_before_touching_anything(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        before = self.snapshot()
+        with mock.patch.object(tag_clips.shutil, "which",
+                               side_effect=lambda name: None if name == "ffprobe" else REAL_WHICH(name)):
+            with self.assertRaises(SystemExit) as caught:
+                self.run_main("refresh-local")
+        self.assertIn("ffprobe", str(caught.exception))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_an_empty_root_reports_zero_and_creates_nothing(self):
+        self.root.mkdir(parents=True)
+        self.assertEqual(self.run_main("refresh-local"), 0)
+        self.assertEqual(self.counts(), {"examined": 0, "changed": 0, "unchanged": 0, "missing": 0, "unreadable": 0})
+        self.assertFalse((self.root / "analysis").exists())
+
+    def test_a_local_file_error_prints_the_type_and_no_path(self):
+        self.add_tagged(UUID_A, rotation=-90)
+        with mock.patch.object(tag_clips, "write_json", side_effect=PermissionError(13, "denied", str(self.root))):
+            code = self.run_main("refresh-local")
+        self.assertEqual(code, tag_clips.EXIT_IO_ERROR)
+        self.assertIn("PermissionError", self.output)
+        self.assertNotIn(self._tmp.name, self.output)
+
+
+class RefreshLocalGuardTests(RefreshLocalTestCase):
+    def test_an_unguarded_root_inside_the_checkout_is_refused_and_nothing_is_created(self):
+        self.root = REPO_ROOT / "tagging-output"
+        with self.assertRaises(SystemExit):
+            self.run_main("refresh-local")
+        self.assertFalse(self.root.exists())
+
+    def test_a_root_inside_a_photos_library_package_is_refused(self):
+        library = pathlib.Path(self._tmp.name) / "Photos Library.photoslibrary"
+        library.mkdir()
+        self.root = library / "analysis-root"
+        with self.assertRaises(SystemExit):
+            self.run_main("refresh-local", "--dry-run")
+        self.assertEqual(list(library.iterdir()), [])
+
+    def test_the_command_is_accepted_by_the_parser_and_goes_through_resolve_private_root(self):
+        self.assertEqual(tag_clips.build_parser().parse_args(["refresh-local", "--root", "x"]).command, "refresh-local")
+        self.root.mkdir(parents=True)
+        with mock.patch.object(tag_clips, "resolve_private_root", wraps=tag_clips.resolve_private_root) as guard:
+            self.run_main("refresh-local")
+        guard.assert_called_once()
+
+
+@needs_ffmpeg
+class RefreshLocalRealClipTests(RefreshLocalTestCase):
+    """The same refresh against real clips with a display matrix, no mocked ffprobe."""
+
+    def setUp(self):
+        super().setUp()
+        mock.patch.stopall()  # use the real ffprobe and the real shutil.which
+
+    def test_real_rotated_clips_are_corrected_from_their_display_matrix(self):
+        cases = {UUID_A: (0, "landscape", 64, 48), UUID_B: (-90, "portrait", 48, 64), UUID_C: (90, "portrait", 48, 64),
+                 UUID_D: (180, "landscape", 64, 48)}
+        for uuid, (rotation, *_rest) in cases.items():
+            self.add_tagged(uuid, rotation=rotation, coded=(64, 48), probe=False)
+            make_rotated_clip(self.root / "originals" / uuid / "clip.mov", rotation)
+        self.assertEqual(self.run_main("refresh-local", "--dry-run"), 0, self.output)
+        self.assertEqual(self.tag(UUID_B)["features"]["orientation"], "landscape")  # dry run wrote nothing
+        self.assertEqual(self.run_main("refresh-local"), 0, self.output)
+        for uuid, (rotation, orientation, width, height) in cases.items():
+            with self.subTest(rotation=rotation):
+                features = self.tag(uuid)["features"]
+                self.assertEqual((features["orientation"], features["width"], features["height"]),
+                                 (orientation, width, height))
+                self.assertEqual((features["coded_width"], features["coded_height"]), (64, 48))
+                self.assertEqual(features["rotation"] % 360, rotation % 360)
+        self.assertEqual(self.counts()["unreadable"], 0)
+        self.assertEqual(self.run_main("refresh-local"), 0)
+        self.assertEqual(self.counts()["changed"], 0)
 
 
 if __name__ == "__main__":
