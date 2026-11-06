@@ -1,91 +1,123 @@
 # Browser studio
 
-The SIMVLTANEA studio is a static, client-only web page. A visitor picks a
-layout family and a number of panels, then chooses or drops one of their own
-video loops per panel. The page plays them at the same time, each on its own
-clock, in the family's portrait or landscape layout for that count. The visitor
-needs no installation, Python, or FFmpeg. When the number of loops differs from
-the number of panels, the page says how many to add or remove. It never pads,
-repeats, or duplicates a loop to reach the chosen count.
+The SIMVLTANEA studio is a static, client-only web page that is already playing
+when it opens. It fills the screen with built-in generative loops, each on its
+own clock, in a composition chosen by chance: accidents waiting to happen. The
+first touch, click, or key press turns the sound on. Visitors may drop their own
+videos onto the page, but they never have to. Nothing needs installing, and no
+Python or FFmpeg is required.
 
-## Layout family and panels
+## What happens on load
 
-The page opens on **Strips** with **5** panels. Strips fill the stage edge to
-edge with one band per loop: rows in portrait, columns in landscape. Each
-strips count carries its zoom: the state-wide slice, which zooms in more the
-fewer panels there are (8 times at one panel, about 3 times at five, and 1.8
-times at twelve). Strips are engineering presets, not artist-approved designs.
+Each load rolls one composition:
 
-| Control | Effect |
+- a family, **strips** or **authored**;
+- a panel count that family offers (strips 1 to 12, authored 2 to 7);
+- which loops play, distinct and in a random order;
+- for strips, a zoom and a lateral jitter within the strips preset's ranges.
+
+Every panel plays a real, distinct loop. The compiler's rule holds: nothing is
+padded, repeated, or duplicated to fill a count.
+
+With `prefers-reduced-motion: reduce`, the page shows the first frame of the
+composition, paused, behind a single large play button.
+
+## Controls
+
+A small floating bar sits at the bottom of the screen, with full screen and
+**?** in the top corner. Both fade after about three seconds without pointer
+movement, and come back on movement, a touch, or keyboard focus. Every icon has
+an accessible name and a visible focus ring, and every target is at least 40
+pixels (44 on wider screens).
+
+| Control | Key | Effect |
+| --- | --- | --- |
+| Play / pause | Space | Pauses or resumes every loop together |
+| Shuffle | R | Rolls a new composition with a short crossfade |
+| Fewer / more panels | ← → (also ↓ ↑) | Removes the last loop, or adds an unused one |
+| Strips / authored | none | Switches family; the nearest count it offers is kept |
+| Speaker | M | Three states: tap for sound, sound on, muted by you |
+| Volume | none | Master level; appears when the speaker is hovered or focused |
+| Add yours | none | Opens the file picker for your own videos |
+| Full screen | F | Enters or leaves full screen where the browser allows it |
+| ? | Esc closes | Three short lines: what this is, privacy, the keys |
+| A panel | none | Swaps that panel's loop for one not on screen |
+
+Messages appear as one short toast that dismisses itself, for example
+"Authored: 7 panels." or a file refusal. Nothing stays on screen as text.
+
+## URL parameters
+
+| Parameter | Effect |
 | --- | --- |
-| **Strips / Authored** | Chooses the family. **Authored** plays the hand-placed engineering pairs |
-| **Panels** | Lists exactly the counts the chosen family offers: 1 to 12 for strips, 2 to 7 for authored |
-| **Use my own layout file** | Reads a preset or pair file and offers it as the **My file** family |
+| `?seed=<n>` | Repeats a roll exactly; `n` is a whole number up to 4294967295. The page writes the current seed into the address after every roll, so the address is shareable |
+| `&mix=s3.7.1` | Written after hand edits (panel taps, count, family): the family's initial and the built-in loops by number. Together with the seed it reproduces the edited composition |
+| `?seconds=<n>` | Length of one pass of the piece, in seconds (default 120). At the end it starts again |
 
-The families and their counts come from `layouts.json`, never from a constant
-in the page. A switch keeps the panel count when the new family offers it.
-Otherwise it moves to the nearest count and says so in one line, for example
-"Authored layouts cover 2 to 7 panels; Panels is now 7." A count is never moved
-silently from one family to another. When the loops do not match the panels,
-the message offers both remedies, for example "3 loops chosen for 5 panels.
-Add 2 more, or set Panels to 3."
+## Sound
 
-## Your own layout file
+Browsers refuse sound before a gesture, so the page starts with the silent
+field: every video is muted and inline, which every browser lets autoplay. The
+first click, tap, or key press on the page turns the sound on with no dialog.
+The page then plays the same composition with the runtime's `spatial_loops`
+mix: each loop's own audio, at about 1/√N each so twelve loops are no louder
+than one, panned by panel position in landscape. M, or the speaker, mutes and
+unmutes. A video element is unmuted only after that first gesture and only
+while the speaker is on. The mix passes through a gentle limiter, so its peaks
+stay well below clipping.
 
-**Use my own layout file** accepts a JSON file in one of two formats. Like the
-videos, it is read on the device and never uploaded.
+The built-in loops have generated voices in D major pentatonic. Each voice has
+its own register and figure: soft pads, filtered-noise swells, plucks, bells,
+and quiet granular ticks. Each voice is scheduled on its loop's clock, so it
+repeats with the picture. Web Audio produces the voices, which feed the
+runtime's per-loop pan and gain.
 
-- A `simvltanea.layout-preset/1` preset, for example
-  `examples/layout-presets/strips.json` with changed weights, zoom, jitter, or
-  corner radius. Panels then lists the counts the preset declares.
-- A `simvltanea.layout-pair/1` pair: one authored `{portrait, landscape}` pair
-  for one count. Panels then offers that count only.
+## Built-in loops
 
-The page validates the file exactly as Python `load_layout_file` does, with the
-compiler's `loadLayoutBytes`. A refused file leaves the current layout in place
-and shows one line that names the file, the location, and the reason, with the
-same reason code as Python. For example: "mine.json, count 3, portrait:
-full_bleed requires the rects to tile the unit square exactly; they cover
-2999999999/3000000000". Loop k (the k-th listed video) plays in the cell for
-`loop-k`. A pair whose cells use other loop names is relabelled in portrait
-cell order.
+Twelve canvas drawings (drift, bands, sweep, grain, tide, lattice, orbit, bloom,
+moire, aurora, weave, pulse) move in whole cycles of their own periods, from
+2.5 to 5.25 seconds, so the last frame meets the first. At load the page draws
+them live as the panels at once. Meanwhile `MediaRecorder` records each one,
+once, from `canvas.captureStream()` into a local WebM or MP4 blob. The
+recordings then fade in and play through `compiler.js` and `runtime.js` like
+any other video loop.
+
+Recording in the page keeps the studio to five small static files with no media
+to stage, but it costs a few seconds of drawing after load and depends on
+`MediaRecorder`. Where `MediaRecorder` or `captureStream` is missing, or every
+recording fails, the live canvases stay as the panels and their voices play
+through the page's own audio context instead of the runtime.
 
 ## Privacy
 
 **Your videos never leave this device. Nothing is uploaded.** The page reads,
-checks, hashes, and plays the chosen files inside the browser. Its content
-security policy permits only its own scripts and `layouts.json` from its own
-origin. The chosen videos play from local `blob:` URLs, and a chosen layout
-file is read in place. The page uses no
-analytics, fonts, CDNs, or other network requests.
+checks, hashes, and plays dropped or picked files inside the browser. Its
+content security policy permits only its own scripts and `layouts.json` from its
+own origin. Built-in loops and your own videos play from local `blob:` URLs. The
+page uses no analytics, fonts, CDNs, or other network requests. Its one
+typeface is the system UI stack.
 
-## What the studio does with each file
+## Your own videos
 
-1. **Size cap.** The chosen files may total 512 MiB. The browser holds about
-   twice that in memory while it plays them. A file that would exceed the cap
-   is refused by name.
+Drop video files anywhere on the page, or use the add-yours icon. They replace
+the built-in loops: all of them play at once, up to twelve, and later drops add
+to them. Shuffle then rolls among your loops. A dropped
+`simvltanea.layout-preset/1` or `simvltanea.layout-pair/1` JSON file becomes a
+third layout family.
+
+Each file passes four checks before it becomes a loop:
+
+1. **Size cap.** Your files may total 512 MiB; the browser holds about twice
+   that in memory. A file over the cap is refused by name.
 2. **Playability.** The page reads the container and the first video track's
-   codec. QuickTime and MP4 share one box structure, so both report a codec
-   string such as `avc1.64001E` or `hvc1.1.6.L93.B0`. The page asks
-   `video.canPlayType()` about that codec and then loads the file for real. It
-   accepts the file only after the browser decodes a frame. Otherwise the
-   message reads "This browser cannot play `name` (`type`, codec)".
-3. **Duration.** `video.duration` is a float. The page floors it to whole
-   frames of the composition (24 fps) and declares the exact fraction
-   `frames/24`. A loop therefore never seeks past its end, and the declared
-   duration stays within one frame of the real one. Loops must last at least
-   a quarter of a second.
-4. **Digest.** Each file is hashed once with `crypto.subtle.digest('SHA-256')`.
-   The runtime's integrity check reuses that digest. Two files with the same
-   bytes are refused, because every loop needs its own video.
-
-The list order is the cell order: the first listed loop plays in `loop-1`, the
-first strip. Each loop has Up, Down, and Remove buttons. Play compiles the
-composition, with the chosen layout and, for strips, its zoom slice, with
-`compiler.js`. It then starts the unmodified `runtime.js` through
-`window.compositionIO`. All loops start muted
-and inline, and only after the Play press. The studio never autoplays, which
-also respects `prefers-reduced-motion`.
+   codec (for example `avc1.64001E` or `hvc1.1.6.L93.B0`). It asks
+   `video.canPlayType()` about that codec, then loads the file for real. The
+   file is accepted only after a frame decodes.
+3. **Duration.** The duration is floored to whole frames at 24 fps and declared
+   as the exact fraction, so a loop never seeks past its end. Loops must last at
+   least a quarter of a second.
+4. **Digest.** Each file is hashed once with `crypto.subtle`, and the runtime's
+   integrity check reuses that digest. Two files with the same bytes are refused.
 
 ## Supported media
 
@@ -96,35 +128,9 @@ also respects `prefers-reduced-motion`.
 | Pixel formats | 8-bit `yuv420p` and full-range `yuvj420p` |
 | Rotation | Display-matrix rotation tags; the browser reports the rotated size |
 | Frame rate | Constant or variable; durations never assume an integer frame rate |
-| Audio | Allowed in the file and always muted; the composition is silent |
-| Count | One loop per panel: 1 to 12 with strips, 2 to 7 with authored, or the counts of your own layout file |
+| Audio | Played after the first gesture, each loop's own track in the spatial mix; AAC is declared to the runtime, and other tracks play where the browser decodes them |
+| Count | 1 to 12 loops with strips, 2 to 7 with authored, or your layout file's counts |
 | Total size | 512 MiB |
-
-Firefox and many Linux or Windows browsers cannot decode HEVC. Those browsers
-name the file and its codec in the refusal message. An H.264 ("Most
-Compatible") export plays almost everywhere.
-
-## Playback controls
-
-- **Play/Pause** uses the same gesture as a click on the stage. Space toggles
-  playback anywhere outside a focused control.
-- **Restart** returns every loop to the beginning of the piece.
-- **Layout: Auto/Portrait/Landscape.** Auto follows the stage shape. The other
-  two pin the family's portrait or landscape layout through
-  `runtime.setOrientation()`. Switching moves loop boxes only. No loop is reset, duplicated, or substituted, and
-  every clock keeps advancing.
-- **Auto-repeat** is on by default. When the piece finishes, the studio
-  restarts it through the runtime's restart-after-finish path.
-- **Change loops** releases the media and returns to the list.
-
-The piece lasts two minutes by default. The `seconds` query parameter sets
-another length, capped at the compiler's 14400 frames (600 seconds at 24 fps).
-For example, `index.html?seconds=30` sets 30 seconds. Each pass through a loop
-starts it again, and the compiler allows at most 1024 starts per loop on
-average across the selection. A long piece with very short loops can exceed
-that budget: the quarter-second minimum fits only up to 256 seconds. The page
-then keeps Play disabled, says so before Play is pressed, and names the longest
-`seconds` value that fits the chosen loops.
 
 ## Runtime hook
 
@@ -137,18 +143,17 @@ MP4-only, 256 MiB rules.
 | `type(source)` | The Blob MIME type for a video source; the runtime falls back to the path suffix, then `video/mp4` |
 | `maxMediaBytes` | Raises the memory guard, capped at 512 MiB |
 
-Video paths may use any short lowercase alphanumeric suffix, such as
-`media/<sha256>.mov`.
+The studio compiles the silent v1 plan with `compiler.js`. After the first
+gesture it presents that same plan as plan v2 `spatial_loops`, with
+`master_volume`, `spatial_panning`, per-loop `gain` and `mute_on_hold`, and an
+`audio_stream` on every source.
 
 ## Run it locally
 
 `stage_studio(output)` writes five flat files with relative URLs:
-`index.html`, `runtime.js`, `compiler.js`, `studio.js`, and `layouts.json`.
-`layouts.json` is the `simvltanea.layout-bundle/2` from `layout_bundle_v2()`:
-the strips family (1 to 12, the default) and the authored family (2 to 7). The
-page also reads a legacy authored-only bundle, which offers the authored
-family alone. It refuses a directory that holds anything else, and staging
-twice yields identical bytes.
+`index.html`, `runtime.js`, `compiler.js`, `studio.js`, and `layouts.json`. It
+refuses a directory that holds anything else, and staging twice yields
+identical bytes.
 
 ```bash
 PYTHONPATH=src python3 -m simvltanea.browser.browser_studio --output var/site/studio
@@ -156,16 +161,18 @@ python3 -m http.server --directory var/site 8000
 # Open http://localhost:8000/studio/
 ```
 
-The page needs a secure context for `crypto.subtle`. Use `localhost` or HTTPS;
-GitHub Pages works under any subpath. In Python, call
-`simvltanea.browser.stage_studio(Path(...))`.
+The page needs a secure context for `crypto.subtle` and the recordings. Use
+`localhost` or HTTPS.
 
-`src/simvltanea/browser/test_browser_studio.py` serves the staged studio under
-a subpath and drives the real file input in Chrome. It uses synthetic loops
-and phone-like clips that FFmpeg generates at test time: H.264 and HEVC MOV, a
-rotation tag, variable frame rate, and audio. A ProRes file and a file larger
-than the cap exercise the refusals. The layout tests check the strips default
-at five panels and bundles served with other counts. They play strips with 1,
-3, 8, and 12 loops edge to edge with their zoom and play authored pairs for 2
-to 7 loops. They also load valid and invalid preset and pair files from
-`fixtures/layouts/`.
+`src/simvltanea/browser/test_browser_studio.py` serves the staged studio under a
+subpath in headless Chrome. It proves the following:
+
+- the page plays with no interaction;
+- a seed reproduces a roll, and shuffle changes it;
+- the first click turns sound on and M mutes;
+- a panel tap rerolls only that panel;
+- the picker and a drop replace the loops;
+- refusals (ProRes, over the cap, a duplicate) show a toast;
+- reduced motion starts paused;
+- the control bar fits from 360 pixels to 1440;
+- nothing is requested beyond the staged files.
