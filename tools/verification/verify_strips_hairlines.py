@@ -56,6 +56,7 @@ STYLES = {'flat': ('0', '0'), 'max': ('1/20', '1/20')}  # (corner_radius, latera
 FULL_COUNTS = (1, 5, 8, 12)
 DEFAULT_COUNTS = (5, 12)
 PLAN_FRAMES = 480  # 20 s at 24 fps: playback outlasts the measurement
+PROGRESS_WAIT_MS = 1500  # how long a playing loop may take to present its next frame before it counts as stalled
 CHROME_APP = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 
 
@@ -143,9 +144,13 @@ def strips_plan(count: int, sources: list[dict], *, style: str = 'flat', zoom: b
 def browser_executable() -> str:
     """A caller-pinned or preinstalled Chrome/Chromium; nothing is downloaded."""
     configured = os.environ.get('PORTVS_BROWSER_EXECUTABLE')
-    candidates = [configured] if configured else []
-    candidates += [CHROME_APP] + [shutil.which(name) for name in
-                                  ('google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser')]
+    if configured:  # an explicit pin is used or refused, never replaced by another browser
+        pinned = Path(configured).expanduser()
+        if not (pinned.is_absolute() and pinned.is_file() and os.access(pinned, os.X_OK)):
+            raise RuntimeError(f'PORTVS_BROWSER_EXECUTABLE is not an absolute executable file: {configured}')
+        return str(pinned)
+    candidates = [CHROME_APP] + [shutil.which(name) for name in
+                                 ('google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser')]
     for candidate in candidates:
         if candidate and Path(candidate).is_absolute() and Path(candidate).is_file() and os.access(candidate, os.X_OK):
             return candidate
@@ -180,6 +185,13 @@ class RasterProbe:
         self._stack = ExitStack()
 
     def __enter__(self) -> 'RasterProbe':
+        try:
+            return self._start()
+        except BaseException:
+            self._stack.close()
+            raise
+
+    def _start(self) -> 'RasterProbe':
         from playwright.sync_api import sync_playwright
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(_Quiet, directory=str(self.root)))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -203,6 +215,13 @@ class RasterProbe:
     def open(self, plan: dict, width: int, height: int, ratio: int, *, start: bool = True):
         """Load the runtime with ``plan``; return (context, page, page errors)."""
         context = self.browser.new_context(viewport={'width': width, 'height': height}, device_scale_factor=ratio)
+        try:
+            return self._load(context, plan, start)
+        except BaseException:
+            context.close()
+            raise
+
+    def _load(self, context, plan: dict, start: bool):
         page = context.new_page()
         errors: list[str] = []
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -225,7 +244,6 @@ class RasterProbe:
         page.wait_for_function('window.compositionRuntime?.ready || window.compositionRuntime?.error', timeout=60000)
         error = page.evaluate('compositionRuntime.error')
         if error:
-            context.close()
             raise RuntimeError(f'runtime refused the plan: {error}')
         # Status overlays are page chrome, not the field.
         page.evaluate("document.querySelectorAll('#runtime-status,#runtime-note').forEach(e => e.remove())")
@@ -255,10 +273,15 @@ class RasterProbe:
         })""")
 
     def measure(self, plan: dict, ratio: int, sizes, label: str = '') -> list[dict]:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout  # lazy: the module loads without Playwright
         rows = []
         first = sizes[0]
         context, page, errors = self.open(plan, first[0], first[1], ratio)
+        # Progress is the playback position, not the frame-callback count: a resize repaint can fire one
+        # callback from a loop that is frozen, but it cannot move a frozen loop's currentTime.
+        frames = '() => [...compositionRuntime.nodes.values()].map(n => n.media.currentTime)'
         try:
+            previous = page.evaluate(frames)
             for width, height in sizes:
                 self.settle(page, width, height)
                 result = count_background(page.screenshot())
@@ -266,10 +289,24 @@ class RasterProbe:
                 if result['size'] != expected:
                     raise RuntimeError(f'screenshot is {result["size"]}, expected {expected} device pixels')
                 snapshot = page.evaluate('compositionRuntime.snapshot()')
+                # The measurement can land between two video frames (41.7 ms apart at 24 fps), so an
+                # unchanged frame count alone proves nothing: give every playing video a bounded
+                # interval to present a frame before judging. A frozen one still times out and counts.
+                try:
+                    page.wait_for_function('''previous => [...compositionRuntime.nodes.values()].every((n, i) =>
+                      n.busy || n.media.ended || n.media.paused || n.kind !== 'video' || n.span.held ||
+                      n.media.currentTime !== previous[i])''', arg=previous, timeout=PROGRESS_WAIT_MS)
+                except PlaywrightTimeout:
+                    pass  # the loop below counts the loops that did not progress
                 # A loop at native EOF waits on its last frame for the next frame-addressed
-                # boundary, and a boundary seek pauses briefly; neither is a stall.
-                stalled = page.evaluate('''() => [...compositionRuntime.nodes.values()]
-                  .filter(n => n.media.paused && !n.busy && !n.media.ended).length''')
+                # boundary, and a boundary seek pauses briefly; neither is a stall. An unpaused
+                # video that presented no frame since the previous measurement is one.
+                stalled, previous = page.evaluate('''previous => {
+                  const nodes = [...compositionRuntime.nodes.values()];
+                  return [nodes.filter((n, i) => !n.busy && !n.media.ended && (n.media.paused ||
+                    (n.kind === 'video' && !n.span.held && n.media.currentTime === previous[i]))).length,
+                    nodes.map(n => n.media.currentTime)];
+                }''', previous)
                 rows.append(dict(case=label, viewport=f'{width}x{height}', ratio=ratio, **result,
                                  orientation=snapshot['orientation'], error=snapshot['error'],
                                  running=snapshot['running'], stalled=stalled,

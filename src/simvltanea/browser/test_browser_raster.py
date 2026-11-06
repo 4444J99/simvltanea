@@ -16,10 +16,14 @@ import copy
 import hashlib
 import json
 import math
+import os
 import subprocess
+import tempfile
+import threading
 import unittest
 from fractions import Fraction
 from pathlib import Path
+from unittest import mock
 
 import simvltanea.authoring.composition as c
 from simvltanea.authoring import adjacency, build_artifact001, build_strips, strips_layouts
@@ -110,6 +114,23 @@ console.log(JSON.stringify(input.map(cells => canonical(runtime.adjacency(cells)
         for edge in ('bottom', 'right', 'top'):
             self.assertTrue(any(f'"edge":"{edge}"' in item for item in expected), edge)
         self.assertTrue(any('"span":["1/2","1"]' in item for item in expected))
+
+    def test_runtime_adjacency_is_exact_below_float_resolution(self):
+        # Denominators near 10^9: a shared span shorter than 1e-12, and a gap of about 1e-18 that is no edge.
+        tiny_span = [['0', '0', '999999999/1000000000', '1/2'], ['999999998/999999999', '1/2', '1/999999999', '1/2']]
+        gap = [['0', '0', '1', '999999998/999999999'], ['0', '999999999/1000000000', '1', '1/1000000000']]
+        layouts = [[dict(rect=rect) for rect in rects] for rects in (tiny_span, gap)]
+        expected = [c.canonical_json(adjacency(cells)) for cells in layouts]
+        self.assertNotEqual(expected[0], '[]')
+        self.assertEqual(expected[1], '[]')
+        actual = run_node(r'''
+const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` :
+  value && typeof value === 'object' ?
+    `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` :
+    JSON.stringify(value);
+console.log(JSON.stringify(input.map(cells => canonical(runtime.adjacency(cells)))));
+''', layouts)
+        self.assertEqual(actual, expected)
 
     def test_spec_example_for_three_portrait_strips(self):
         cells = strips_layouts(3)['portrait']['cells']
@@ -324,6 +345,30 @@ console.log(JSON.stringify(input.map(plan => {
                                          'presentation needs exactly'),
             'non-canonical rational': (lambda p: portrait(p)['presentation'].__setitem__('corner_radius', '0.025'),
                                        'canonical rational'),
+            # In 0..1/20 exactly, but beyond composition.rational's 10^9 bounds and number()'s range.
+            'radius of 800 digits': (lambda p: portrait(p)['presentation'].__setitem__(
+                'corner_radius', f'{10**400}/{40 * 10**400 + 1}'), 'corner_radius: out of bounds'),
+            'jitter of 800 digits': (lambda p: portrait(p)['presentation'].__setitem__(
+                'lateral_jitter', f'{10**400}/{40 * 10**400 + 1}'), 'lateral_jitter: out of bounds'),
+            'offset of 800 digits': (lambda p: portrait(p)['cells'][0].__setitem__(
+                'lateral_offset', f'{10**400}/{80 * 10**400 + 1}'), 'lateral_offset: out of bounds'),
+            'radius denominator above 10^9': (lambda p: portrait(p)['presentation'].__setitem__(
+                'corner_radius', '1/1000000001'), 'corner_radius: out of bounds'),
+            # Reduces to 1/40 (within bounds, as Python accepts), but the raw spelling is not finite as a float.
+            'unreduced radius of 800 digits': (lambda p: portrait(p)['presentation'].__setitem__(
+                'corner_radius', f'{10**400}/{40 * 10**400}'), 'corner_radius must be a canonical rational'),
+            'unreduced jitter of 800 digits': (lambda p: portrait(p)['presentation'].__setitem__(
+                'lateral_jitter', f'{10**400}/{40 * 10**400}'), 'lateral_jitter must be a canonical rational'),
+            'unreduced offset of 800 digits': (lambda p: portrait(p)['cells'][0].__setitem__(
+                'lateral_offset', f'{10**400}/{80 * 10**400}'), 'lateral_offset must be a canonical rational'),
+            # A finite numerator over a denominator that overflows a float: number() reads 0 although the
+            # reduced value (1/40, 1/80) is in range, so the requested radius, jitter or offset would vanish.
+            'finite numerator, overflowing denominator (radius)': (lambda p: portrait(p)['presentation'].__setitem__(
+                'corner_radius', f'1{"0" * 307}/4{"0" * 308}'), 'corner_radius must be a canonical rational'),
+            'finite numerator, overflowing denominator (jitter)': (lambda p: portrait(p)['presentation'].__setitem__(
+                'lateral_jitter', f'1{"0" * 307}/4{"0" * 308}'), 'lateral_jitter must be a canonical rational'),
+            'finite numerator, overflowing denominator (offset)': (lambda p: portrait(p)['cells'][0].__setitem__(
+                'lateral_offset', f'1{"0" * 307}/8{"0" * 308}'), 'lateral_offset must be a canonical rational'),
             'interior overlap': (lambda p: portrait(p)['cells'][1]['rect'].__setitem__(1, '1/10'), 'overlapping cells'),
         }
         plans, expected = [], []
@@ -336,6 +381,27 @@ console.log(JSON.stringify(input.map(plan => {
             with self.subTest(case=name):
                 self.assertIsNotNone(outcome)
                 self.assertIn(message, outcome)
+
+    def test_thirteen_cells_are_refused_even_without_the_builder(self):
+        """build_strips stops at 12; validatePlan must hold the same ceiling on a hand-built plan."""
+        plan = node_plan(12)
+        source = copy.deepcopy(plan['sources'][-1]) | {'id': 'source-13', 'sha256': 'f' * 64,
+                                                       'path': f"media/{'f' * 64}.mp4"}
+        track = copy.deepcopy(plan['tracks'][-1]) | {'id': 'loop-13'}
+        for span in track['spans']:
+            span.update(id='loop-13', source='source-13')
+        plan['sources'].append(source)
+        plan['tracks'].append(track)
+        for keyframe in plan['layout_keyframes']:
+            for orientation, layout in keyframe['layouts'].items():
+                layout['cells'].append(copy.deepcopy(layout['cells'][-1]) | {'loop': 'loop-13'})
+                for k, cell in enumerate(layout['cells']):
+                    start = str(Fraction(k, 13))
+                    cell['rect'] = ['0', start, '1', '1/13'] if orientation == 'portrait' else [start, '0', '1/13', '1']
+        accepted, refused = self.outcomes([node_plan(12), plan])
+        self.assertIsNone(accepted)
+        self.assertIsNotNone(refused)
+        self.assertIn('full_bleed and presentation are supported for 1..12 cells, not 13', refused)
 
     def test_single_strip_bleed_and_corner_rules(self):
         one = node_plan(1)
@@ -358,6 +424,94 @@ console.log(JSON.stringify(input.map(plan => {
         self.assertIn('corner_radius > 0 requires cells that share an edge', outcomes[1])
         self.assertIn('has no earlier-drawn neighbour beneath it', outcomes[2])
         self.assertIsNone(outcomes[3])
+
+    def test_rounded_corner_needs_earlier_spans_along_the_whole_radius(self):
+        # rasterLayout backs a corner by the earlier cells' bleed depth only; a 1/100 corner cell next to a later
+        # 1/50 cell left 95 px of the wide cell's 50 px cutout over the background at 1000x1000 (CodeRabbit #57).
+        def plan(edge):
+            result = node_plan(5, '1/20')
+            rects = [['0', '0', edge, '1/2'], [str(1 - Fraction(edge)), '0', edge, '1/2'], ['0', '1/2', '1', '1/2'],
+                     [edge, '0', '1/50', '1/2'], [str(Fraction(edge) + Fraction(1, 50)), '0',
+                                                  str(1 - 2 * Fraction(edge) - Fraction(1, 50)), '1/2']]
+            for cell, rect in zip(result['layout_keyframes'][0]['layouts']['portrait']['cells'], rects):
+                cell['rect'] = rect
+            return result
+        narrow, exact_radius = self.outcomes([plan('1/100'), plan('1/20')])
+        self.assertIsNotNone(narrow)
+        self.assertIn('cell 2: rounded top corner at 0 has earlier-drawn neighbours beneath only 1/100 from it, '
+                      'less than corner_radius 1/20', narrow)
+        self.assertIsNone(exact_radius)
+
+    def test_full_bleed_needs_exact_bounds_and_disjoint_interiors(self):
+        # Each slack is below the float check's 1e-12, the area is exactly 1 and every denominator is within 10^9.
+        def plan(first, second):
+            result = node_plan(2)
+            cells = result['layout_keyframes'][0]['layouts']['landscape']['cells']
+            cells[0]['rect'], cells[1]['rect'] = first, second
+            return result
+        overlap = plan(['0', '0', '500001/1000001', '1'], ['500002/1000003', '0', '500000/1000001', '1'])
+        overflow = plan(['0', '0', '500002/1000003', '1'], ['500001/1000001', '0', '500001/1000003', '1'])
+        flush = plan(['0', '0', '500001/1000001', '1'], ['500001/1000001', '0', '500000/1000001', '1'])
+        overlapped, overflowed, accepted = self.outcomes([overlap, overflow, flush])
+        self.assertIsNotNone(overlapped)
+        self.assertIn('landscape layout "strips-2-landscape": full_bleed cells 0 and 1 overlap', overlapped)
+        self.assertIsNotNone(overflowed)
+        self.assertIn('landscape layout "strips-2-landscape": full_bleed cell 1 extends past the unit square',
+                      overflowed)
+        self.assertIsNone(accepted)
+
+
+class HairlineBrowserPinTests(unittest.TestCase):
+    """The matrix's PORTVS_BROWSER_EXECUTABLE pin is used or refused, never replaced by another browser."""
+
+    def test_an_invalid_pin_is_refused(self):
+        for value in ('chrome', '/nonexistent/portvs-chrome'):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {'PORTVS_BROWSER_EXECUTABLE': value}):
+                with self.assertRaises(RuntimeError) as caught:
+                    hairlines.browser_executable()
+                self.assertIn(value, str(caught.exception))
+
+    def test_a_valid_pin_is_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = Path(tmp) / 'chrome'
+            executable.write_text('#!/bin/sh\n')
+            executable.chmod(0o700)
+            with mock.patch.dict(os.environ, {'PORTVS_BROWSER_EXECUTABLE': str(executable)}):
+                self.assertEqual(hairlines.browser_executable(), str(executable))
+
+
+class RasterProbeCleanupTests(unittest.TestCase):
+    """A probe that fails to start or to load a plan releases what it has opened."""
+
+    def test_a_failed_launch_releases_the_server_and_playwright(self):
+        from playwright.sync_api import sync_playwright
+        before = set(threading.enumerate())
+        probe = hairlines.RasterProbe(executable='/bin/echo')   # exists, but is no browser
+        with self.assertRaises(Exception):
+            probe.__enter__()
+        self.assertEqual([thread.name for thread in set(threading.enumerate()) - before
+                          if 'serve_forever' in thread.name], [])
+        with sync_playwright():   # refused inside a leaked Playwright asyncio loop
+            pass
+
+    def test_open_closes_its_context_when_loading_fails(self):
+        for step in ('goto', 'wait_for_function'):
+            with self.subTest(step=step):
+                probe = hairlines.RasterProbe.__new__(hairlines.RasterProbe)
+                probe.browser, probe.base, probe.runtime_js = mock.MagicMock(), 'http://127.0.0.1:1', ''
+                context = probe.browser.new_context.return_value
+                getattr(context.new_page.return_value, step).side_effect = TimeoutError(step)
+                with self.assertRaises(TimeoutError):
+                    probe.open({}, 375, 812, 1)
+                context.close.assert_called_once_with()
+
+    def test_open_hands_its_context_to_the_caller_on_success(self):
+        probe = hairlines.RasterProbe.__new__(hairlines.RasterProbe)
+        probe.browser, probe.base, probe.runtime_js = mock.MagicMock(), 'http://127.0.0.1:1', ''
+        context = probe.browser.new_context.return_value
+        context.new_page.return_value.evaluate.return_value = None
+        self.assertIs(probe.open({}, 375, 812, 1)[0], context)
+        context.close.assert_not_called()
 
 
 class RasterBrowserTests(unittest.TestCase):
@@ -412,6 +566,50 @@ class RasterBrowserTests(unittest.TestCase):
         for row in rows:
             with self.subTest(case=row['case'], viewport=row['viewport'], ratio=row['ratio']):
                 self.assertGreater(row['background'], 0)
+
+    def test_a_frozen_unpaused_loop_counts_as_stalled(self):
+        """Negative control for the playback gate: a loop that stops presenting frames is a stall unpaused too."""
+        load = self.probe.open
+
+        def frozen(*args, **kwargs):
+            context, page, errors = load(*args, **kwargs)
+            # The loop stops advancing, but repaints (a resize, as on the CI runner) keep firing frame
+            # callbacks from it: a stall is judged by the playback position, not by those callbacks.
+            page.evaluate("""() => { const n = [...compositionRuntime.nodes.values()][2];
+              n.media.playbackRate = 0; setInterval(() => { n.callbacks += 1; }, 100); }""")
+            page.wait_for_timeout(200)   # let a frame already queued be presented first
+            return context, page, errors
+
+        # One measurement per fresh freeze. After a resize the runtime re-seeks a loop that has drifted off
+        # its clock, which moves even a frozen loop's position, so a later row proves nothing either way.
+        rows = []
+        with mock.patch.object(self.probe, 'open', frozen):
+            for size in ((375, 812), (1280, 720)):
+                rows += self.probe.measure(hairlines.strips_plan(5, self.sources), 1, (size,),
+                                           label='strips N=5 frozen loop-3')
+        self.assertEqual([row['stalled'] for row in rows], [1, 1])
+        self.assertEqual(len(hairlines.failures(rows)), 2)
+
+    def test_a_loop_that_presents_a_frame_within_the_wait_is_not_stalled(self):
+        """Measuring between two video frames must not read as a stall: a frame that arrives a little later counts."""
+        load = self.probe.open
+
+        def late_frames(*args, **kwargs):
+            context, page, errors = load(*args, **kwargs)
+            # Loop 3 stops advancing on its own, then its position moves every 700 ms, later than a
+            # measurement that does not wait would look, and well inside the wait window.
+            page.evaluate("""() => { const n = [...compositionRuntime.nodes.values()][2];
+              n.media.playbackRate = 0; let t = n.media.currentTime;
+              Object.defineProperty(n.media, 'currentTime', {configurable: true, get: () => t, set: () => {}});
+              setInterval(() => { t += 0.05; }, 700); }""")
+            page.wait_for_timeout(200)
+            return context, page, errors
+
+        with mock.patch.object(self.probe, 'open', late_frames):
+            rows = self.probe.measure(hairlines.strips_plan(5, self.sources), 1, ((375, 812), (1280, 720)),
+                                      label='strips N=5 late frames loop-3')
+        self.assertEqual([row['stalled'] for row in rows], [0, 0])
+        self.assertEqual(hairlines.failures(rows), [])
 
     def test_slice_is_crop_then_cover_without_stretch(self):
         count = 5
@@ -470,6 +668,37 @@ class RasterBrowserTests(unittest.TestCase):
                             self.assertEqual(item['radii'], [rounded, rounded, '0px', '0px'])
                         else:  # columns: left corners rounded
                             self.assertEqual(item['radii'], [rounded, '0px', '0px', rounded])
+
+    def test_reverse_order_bleeds_from_the_start_edge_and_leaves_no_background(self):
+        """order: reverse draws strip N-1 first, so each strip's bleed grows its top/left under strip k-1."""
+        count, ratio = 5, 2
+        for style, radius_fraction in (('flat', 0), ('max', Fraction(1, 20))):
+            plan = hairlines.strips_plan(count, self.sources, style=style)
+            for keyframe in plan['layout_keyframes']:
+                for layout in keyframe['layouts'].values():
+                    layout['cells'].reverse()   # what layout_presets._expand does for order: reverse
+            page = self.open(plan, 375, 812, ratio)
+            for width, height, portrait in ((375, 812, True), (1280, 720, False)):
+                self.probe.settle(page, width, height)
+                radius = float(radius_fraction) * min(width, height)
+                bleed = (2 + (math.ceil(radius * ratio - 1e-9) if radius_fraction else 0)) / ratio
+                extent = height if portrait else width
+                for k, item in enumerate(self.boxes(page)):
+                    with self.subTest(style=style, viewport=(width, height), strip=k):
+                        box = item['box']
+                        start, end = (box['y'], box['bottom']) if portrait else (box['x'], box['right'])
+                        self.assertAlmostEqual(start, extent * k / count - (bleed if k > 0 else 0), delta=1 / 32)
+                        self.assertAlmostEqual(end, extent * (k + 1) / count, delta=1 / 32)
+                        rounded = f'{radius:g}px' if radius_fraction else '0px'
+                        if k == count - 1 or not radius_fraction:
+                            self.assertEqual(item['radii'], ['0px'] * 4)
+                        elif portrait:  # the earlier strip is below: bottom corners rounded
+                            self.assertEqual(item['radii'], ['0px', '0px', rounded, rounded])
+                        else:  # the earlier strip is to the right: right corners rounded
+                            self.assertEqual(item['radii'], ['0px', rounded, rounded, '0px'])
+            rows = self.probe.measure(plan, ratio, ((375, 812), (1280, 720)), label=f'reverse N={count} {style}')
+            self.assertEqual([hairlines.format_row(row) for row in hairlines.failures(rows)], [])
+            self.assertEqual(sum(row['background'] for row in rows), 0)
 
     def test_lateral_jitter_overscans_the_media_inside_the_unchanged_cell(self):
         count, jitter = 5, 1 / 20

@@ -364,7 +364,7 @@
     }));
   }
 
-  function cornerRule(boxes, edges, where) {
+  function cornerRule(boxes, edges, radius, where) {
     check(edges.length, where, 'corner-rule',
       'presentation.corner_radius > 0 requires cells that share an edge; no corner can be rounded');
     // Python iterates sorted((index, side) -> spans): by cell index, then side name.
@@ -378,9 +378,24 @@
     for (const {index, side, covered} of ordered) {
       const [x, y, w, h] = boxes[index];
       const [low, high] = side === 'top' || side === 'bottom' ? [x, add(x, w)] : [y, add(y, h)];
-      for (const corner of [low, high]) {
-        check(covered.some(([a, b]) => cmp(a, corner) <= 0 && cmp(corner, b) <= 0), {...where, cell: index},
+      // As in Python: the earlier spans run without a gap from each corner for corner_radius, or to the far corner.
+      for (const [corner, inward] of [[low, true], [high, false]]) {
+        let reach = corner;
+        for (let grew = true; grew;) {
+          grew = false;
+          for (const [a, b] of covered) {
+            if (inward ? cmp(a, reach) <= 0 && cmp(reach, b) < 0 : cmp(a, reach) < 0 && cmp(reach, b) <= 0) {
+              reach = inward ? b : a;
+              grew = true;
+            }
+          }
+        }
+        const run = inward ? sub(reach, corner) : sub(corner, reach), length = sub(high, low);
+        check(cmp(run, ZERO) > 0, {...where, cell: index},
           'corner-rule', `rounded ${side} corner at ${text(corner)} has no earlier-drawn neighbour beneath it`);
+        check(cmp(run, cmp(radius, length) <= 0 ? radius : length) >= 0, {...where, cell: index}, 'corner-rule',
+          `rounded ${side} corner at ${text(corner)} has earlier-drawn neighbours beneath only ${text(run)} ` +
+          `from it, less than corner_radius ${text(radius)}`);
       }
     }
   }
@@ -444,7 +459,7 @@
       const radius = read(presentation.corner_radius, 'presentation.corner_radius', where, 'corner-radius');
       check(styleRange(radius), where, 'corner-radius',
         'presentation.corner_radius must be in 0..1/20 of the canvas minor dimension');
-      if (radius[0] !== 0n) cornerRule(boxes, edges, where);
+      if (radius[0] !== 0n) cornerRule(boxes, edges, radius, where);
       jitter = read(presentation.lateral_jitter, 'presentation.lateral_jitter', where, 'lateral-jitter');
       check(styleRange(jitter), where, 'lateral-jitter',
         'presentation.lateral_jitter must be in 0..1/20 of the canvas extent along the strip');

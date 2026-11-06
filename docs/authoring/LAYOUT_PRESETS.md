@@ -167,8 +167,10 @@ with a stable `code`. The message names the file, the count, the orientation and
 - `overlap_px` is an integer in 0..8 (`overlap-px`). A value above 0 needs at least one
   shared edge (`overlap-px-no-shared-edge`).
 - `corner_radius` is in 0..1/20 (`corner-radius`). Only corners on a side shared with
-  an earlier-drawn neighbour are rounded. Each such corner must have an earlier
-  neighbour beneath it, and a radius above 0 needs a shared edge (`corner-rule`).
+  an earlier-drawn neighbour are rounded. Each such corner must have earlier
+  neighbours beneath it, running without a gap along the side for at least
+  `corner_radius` or to the far corner, and a radius above 0 needs a shared edge
+  (`corner-rule`).
 - `lateral_jitter` is in 0..1/20 (`lateral-jitter`); `|lateral_offset| <= J`
   (`lateral-offset`).
 - Layouts declaring `full_bleed` or `presentation` have 1..12 cells (`count-range`).
@@ -186,7 +188,9 @@ and the error code each invalid file must produce.
 
 The browser runtime (`src/simvltanea/browser/browser.runtime.js`) draws the optional
 fields as follows. A layout without `full_bleed`, `presentation` and `lateral_offset`
-is drawn exactly as before, and `compile_plan` emits it byte for byte as before.
+keeps its previous cell boxes, and `compile_plan` emits it byte for byte as before.
+Its slice previews still change, because every slice is now cropped and fitted (see
+**Slices** below).
 
 - **Bleed.** On each side a cell shares with a neighbour drawn later, the cell box
   grows `overlap_px` device pixels under that neighbour
@@ -229,7 +233,7 @@ is drawn exactly as before, and `compile_plan` emits it byte for byte as before.
 The hairline matrix plays strips in real headless Chrome on synthetic clips and
 counts background pixels in each screenshot. The always-on suite runs N=5 and N=12
 (`src/simvltanea/browser/test_browser_raster.py`). The full matrix (N=1, 5, 8 and 12
-at seven viewports, including the near-square 360x360, 744x768 and 800x800, and up to three
+at eight viewports, including the near-square 360x360, 744x768 and 800x800, and up to three
 pixel ratios, with radius and jitter at 0 and at 1/20) prints a report:
 
 ```bash

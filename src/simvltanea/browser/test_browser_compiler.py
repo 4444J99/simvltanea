@@ -927,6 +927,29 @@ class LayoutFileErrorParityTests(unittest.TestCase):
                 self.assertSameFailure(CORPUS / name, result, code)
         self.assertEqual(len(results), 39)
 
+    def test_corner_rule_needs_earlier_spans_along_the_whole_radius(self):
+        # A 1/100 corner cell backs the wide cell's rounded corner for 1/100 of the width, not the 1/20 radius.
+        def pair_file(directory, edge):
+            e = Fraction(edge)
+            rects = [['0', '0', edge, '1/2'], [str(1 - e), '0', edge, '1/2'], ['0', '1/2', '1', '1/2'],
+                     [edge, '0', '1/50', '1/2'], [str(e + Fraction(1, 50)), '0', str(1 - 2 * e - Fraction(1, 50)), '1/2']]
+            layout = {'name': f'corner-{edge}', 'full_bleed': True,
+                      'presentation': {'overlap_px': 2, 'corner_radius': '1/20', 'lateral_jitter': '0'},
+                      'cells': [{'loop': f'loop-{k + 1}', 'rect': rect, 'fit': 'cover', 'focal': ['1/2', '1/2']}
+                                for k, rect in enumerate(rects)]}
+            path = Path(directory) / f"corner-{edge.replace('/', '-')}.json"
+            path.write_text(json.dumps({'format': 'simvltanea.layout-pair/1', 'count': 5,
+                                        'portrait': layout, 'landscape': layout}))
+            return path
+        with tempfile.TemporaryDirectory() as tmp:
+            narrow, exact_radius = pair_file(tmp, '1/100'), pair_file(tmp, '1/20')
+            results = node_layout_files((path, str(path)) for path in (narrow, exact_radius))
+            self.assertSameFailure(narrow, results[0], 'corner-rule')
+            self.assertIn('has earlier-drawn neighbours beneath only 1/100 from it, less than corner_radius 1/20',
+                          results[0]['message'])
+            self.assertTrue(python_layout_file(exact_radius)['ok'])
+            self.assertTrue(results[1]['ok'], results[1])
+
     def test_pair_files_beyond_the_compiler_subset_are_refused_when_described(self):
         # Python accepts pairs of up to 32 loops; the studio asks describeLayoutFile what a file offers, so a pair
         # the compiler cannot play must be refused there, before anyone picks videos for it.

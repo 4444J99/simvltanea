@@ -9,6 +9,7 @@ import copy
 import base64
 import hashlib
 import os
+import re
 import functools
 import http.server
 import json
@@ -594,7 +595,8 @@ class BrowserTests(unittest.TestCase):
                       .filter(n => n.box.dataset.sliceRect).map(n => ({
                         box:n.box.getBoundingClientRect().toJSON(), media:n.media.getBoundingClientRect().toJSON(),
                         slice:n.box.dataset.sliceRect.split(',').map(Number), vw:n.media.videoWidth,
-                        vh:n.media.videoHeight, fit:n.cell.fit, clip:n.media.style.clipPath}))""")
+                        vh:n.media.videoHeight, fit:n.cell.fit, clip:n.media.style.clipPath,
+                        origin:['--slice-x', '--slice-y'].map(p => Number(n.media.style.getPropertyValue(p)))}))""")
                     self.assertTrue(geometry)
                     for item in geometry:
                         box, media, (sx, sy, sw, sh) = item['box'], item['media'], item['slice']
@@ -609,7 +611,15 @@ class BrowserTests(unittest.TestCase):
                         self.assertLessEqual(bottom, box['bottom'] + 0.5)
                         self.assertTrue(abs((right - left) - box['width']) < 1 or
                                         abs((bottom - top) - box['height']) < 1)
-                        self.assertTrue(item['clip'].startswith('inset('), item['clip'])
+                        # The clip must cut the element down to the (possibly panned) window.
+                        number = r'-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?'
+                        self.assertRegex(item['clip'], rf'^inset\((?:{number}%\s*){{1,4}}\)$')
+                        values = [float(v) for v in re.findall(rf'({number})%', item['clip'])]
+                        values += {1: values * 3, 2: values, 3: values[1:2]}.get(len(values), [])
+                        ox, oy = item['origin']
+                        expected = [100 * oy, 100 * (1 - ox - sw), 100 * (1 - oy - sh), 100 * ox]
+                        for got, want in zip(values[:4], expected):
+                            self.assertAlmostEqual(got, want, delta=1e-3, msg=item['clip'])
 
     def test_pr34_retry_releases_nodes_and_can_retry_again_after_failure(self):
         page = self.open_preview(3)
@@ -1155,6 +1165,37 @@ console.log(JSON.stringify({ok: true}));
         result = subprocess.run(['node', '-e', script, str(runtime_js)],
                                 check=True, capture_output=True, text=True, timeout=15)
         self.assertTrue(json.loads(result.stdout).get('ok'))
+
+    def test_apply_slice_full_frame_restores_cell_fit_and_focal(self):
+        # A partial slice forces cover at 50% 50%; going back to the full frame must letterbox a contain cell
+        # at its focal again, even when applySlice is called without applyLayout.
+        script = r'''
+const vm = require('node:vm'), fs = require('node:fs'), assert = require('node:assert/strict');
+const stage = {dataset:{}, style:{setProperty(){}, removeProperty(){}}, addEventListener(){}};
+const context = vm.createContext({
+  window:{}, document:{querySelector(){return stage;}, addEventListener(){}},
+  performance:{now(){return 1000;}},
+  ResizeObserver:class {observe(){}}, fetch(){return new Promise(()=>{});},
+  setTimeout, clearTimeout, URL, Blob, console,
+});
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+const applySlice = context.window.compositionRuntime.applySlice;
+const style = () => ({setProperty() {}, removeProperty() {}});
+const node = {
+  id: 'loop-1', cell: {fit: 'contain', focal: ['0', '1']}, geometry: {width: 640, height: 720, overscan: null},
+  box: {dataset: {}, style: style()},
+  media: {dataset: {}, style: style(), videoWidth: 1920, videoHeight: 1080},
+  span: {slice_rect: ['1/4', '0', '1/2', '1']}
+};
+applySlice(node);
+assert.equal(node.media.style.objectFit, 'cover');
+node.span.slice_rect = ['0', '0', '1', '1'];
+applySlice(node);
+console.log(JSON.stringify([node.media.style.objectFit, node.media.style.objectPosition]));
+'''
+        result = subprocess.run(['node', '-e', script, str(HERE / 'browser.runtime.js')],
+                                check=True, capture_output=True, text=True, timeout=15)
+        self.assertEqual(json.loads(result.stdout), ['contain', '0% 100%'])
 
     def test_pr34_decoded_frame_callback_after_dispose_is_inert(self):
         script = r"""

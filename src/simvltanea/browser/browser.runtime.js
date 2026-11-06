@@ -244,29 +244,28 @@ const exactAdd = ([a, b], [c, d]) => exactReduce(a*d + c*b, b*d);
 const exactMul = ([a, b], [c, d]) => exactReduce(a*c, b*d);
 const exactCmp = ([a, b], [c, d]) => { const l = a*d, r = c*b; return l < r ? -1 : l > r ? 1 : 0; };
 const exactText = ([n, d]) => d === 1n ? String(n) : `${n}/${d}`;
-const exactFloat = ([n, d]) => Number(n) / Number(d);
 /* Shared edges in draw order, the same output as Python
  * simvltanea.authoring.adjacency: side `edge` of cell `a` lies on the opposite side
- * of the later cell `b` (equal within 1e-12) over the positive-length `span`. */
+ * of the later cell `b` (exact rational equality) over the positive-length `span`. */
 function adjacency(cells) {
   if (!Array.isArray(cells)) throw new Error('cells must be an array');
   const boxes = cells.map((cell, index) => {
     if (!cell || !Array.isArray(cell.rect) || cell.rect.length !== 4)
       throw new Error(`cell ${index}: rect must be [x,y,width,height]`);
     const [x, y, w, h] = cell.rect.map(exact), x2 = exactAdd(x, w), y2 = exactAdd(y, h);
-    return {x, y, x2, y2, f:[x, y, x2, y2].map(exactFloat)};
+    return {x, y, x2, y2};
   });
-  const near = (p, q) => Math.abs(p - q) <= EDGE_EPSILON;
+  const same = (p, q) => exactCmp(p, q) === 0;
   const larger = (p, q) => exactCmp(p, q) >= 0 ? p : q, smaller = (p, q) => exactCmp(p, q) <= 0 ? p : q;
   const result = [];
   boxes.forEach((A, i) => {
     for (let j = i + 1; j < boxes.length; j++) {
       const B = boxes[j];
       const horizontal = [larger(A.x, B.x), smaller(A.x2, B.x2)], vertical = [larger(A.y, B.y), smaller(A.y2, B.y2)];
-      for (const [edge, touches, span] of [['bottom', near(A.f[3], B.f[1]), horizontal],
-        ['top', near(A.f[1], B.f[3]), horizontal], ['right', near(A.f[2], B.f[0]), vertical],
-        ['left', near(A.f[0], B.f[2]), vertical]]) {
-        if (touches && exactFloat(span[1]) - exactFloat(span[0]) > EDGE_EPSILON)
+      for (const [edge, touches, span] of [['bottom', same(A.y2, B.y), horizontal],
+        ['top', same(A.y, B.y2), horizontal], ['right', same(A.x2, B.x), vertical],
+        ['left', same(A.x, B.x2), vertical]]) {
+        if (touches && exactCmp(span[0], span[1]) < 0)
           result.push({a:i, b:j, edge, span:span.map(exactText)});
       }
     }
@@ -412,16 +411,19 @@ function placeMedia(node, origin) {
   const rawRect = resolveSliceRect(node);
   const geometry = boxGeometry(node);
   if (!isPartialSlice(rawRect)) {
+    // A partial slice forced cover at 50% 50%; CSS object-fit fits a full frame, so restore the cell's.
+    const fitting = node.cell ? {objectFit:node.cell.fit ?? 'cover',
+      objectPosition:(node.cell.focal ?? ['1/2', '1/2']).map(v => `${number(v)*100}%`).join(' ')} : {};
     if (!geometry || !geometry.overscan) {
       Object.assign(media.style, {width:'100%', height:'100%', left:'0', top:'0', marginLeft:'0', marginTop:'0',
-        position:'', transform:'', clipPath:'', visibility:''});
+        position:'', transform:'', clipPath:'', visibility:'', ...fitting});
       return;
     }
     const target = mediaTarget(geometry), guard = COVER_GUARD;
     Object.assign(media.style, {position:'absolute', left:percent(target.x - guard, geometry.width),
       top:percent(target.y - guard, geometry.height), width:percent(target.w + 2*guard, geometry.width),
       height:percent(target.h + 2*guard, geometry.height), marginLeft:'0', marginTop:'0', transform:'',
-      clipPath:'', visibility:''});
+      clipPath:'', visibility:'', ...fitting});
     return;
   }
   const [sliceX, sliceY, sw, sh] = sliceValues(rawRect);
@@ -1218,13 +1220,27 @@ function validatePlan(plan) {
 }
 /* Optional full-bleed fields, mirroring layout_presets.validate_layout_pair. A
  * full_bleed layout is refused, by name, unless every cell covers and the rects
- * tile the unit square exactly (disjoint interiors are checked by the caller). */
+ * tile the unit square exactly: exact bounds, disjoint interiors and unit area. */
 function validateRasterLayout(layout, orientation) {
   const where = `${orientation} layout ${JSON.stringify(layout.name ?? orientation)}`;
   const need = (test, reason) => { if (!test) throw new Error(`Invalid compiled plan: ${where}: ${reason}`); };
   const cells = layout.cells, has = key => Object.prototype.hasOwnProperty.call(layout, key);
+  // composition.rational's bounds (|value| <= 10^9, denominator <= 10^9), then the float read
+  // rasterLayout and overscanFor make with number() on the raw spelling: an unreduced spelling
+  // such as 10^400/(40*10^400) is within bounds once reduced but is not finite as a float, and
+  // would otherwise pass here and fail only after media loads.
   const fraction = (value, label) => {
-    try { return exact(value); } catch (_) { need(false, `${label} must be a canonical rational`); }
+    let result;
+    try { result = exact(value); } catch (_) { need(false, `${label} must be a canonical rational`); }
+    const [n, d] = result, limit = 1000000000n;
+    need(d <= limit && (n < 0n ? -n : n) <= limit * d, `${label}: out of bounds`);
+    let read;
+    try { read = number(value); } catch (_) { need(false, `${label} must be a canonical rational`); }
+    // A finite numerator over an overflowing denominator reads as 0 from the raw spelling although the
+    // reduced value is not 0: the float must agree with the exact value, or rendering would drop it.
+    const exactFloat = Number(n) / Number(d);
+    need(Math.abs(read - exactFloat) <= 1e-12 * Math.max(1, Math.abs(exactFloat)), `${label} must be a canonical rational`);
+    return result;
   };
   const bounded = (value, label) => {
     const result = fraction(value, label);
@@ -1238,11 +1254,19 @@ function validateRasterLayout(layout, orientation) {
   if (layout.full_bleed === true) {
     cells.forEach((cell, index) => need(cell.fit === 'cover',
       `full_bleed requires fit cover on every cell; cell ${index} is ${JSON.stringify(cell.fit)} (contain exposes background)`));
-    let area = [0n, 1n];
-    for (const cell of cells) {
-      const [, , w, h] = cell.rect.map((value, axis) => fraction(value, `rect[${axis}]`));
+    // The caller's float checks allow 1e-12 slack; a tiling needs exact bounds and disjoint interiors.
+    const boxes = cells.map(cell => cell.rect.map((value, axis) => fraction(value, `rect[${axis}]`)));
+    const zero = [0n, 1n], one = [1n, 1n];
+    let area = zero;
+    boxes.forEach(([x, y, w, h], index) => {
+      need(exactCmp(x, zero) >= 0 && exactCmp(y, zero) >= 0 && exactCmp(exactAdd(x, w), one) <= 0 &&
+        exactCmp(exactAdd(y, h), one) <= 0, `full_bleed cell ${index} extends past the unit square`);
+      boxes.slice(0, index).forEach(([a, b, c, d], other) => need(
+        exactCmp(exactAdd(a, c), x) <= 0 || exactCmp(exactAdd(x, w), a) <= 0 ||
+        exactCmp(exactAdd(b, d), y) <= 0 || exactCmp(exactAdd(y, h), b) <= 0,
+        `full_bleed cells ${other} and ${index} overlap`));
       area = exactAdd(area, exactMul(w, h));
-    }
+    });
     need(exactCmp(area, [1n, 1n]) === 0,
       `full_bleed requires the rects to tile the unit square exactly; they cover ${exactText(area)}`);
   }
@@ -1260,7 +1284,8 @@ function validateRasterLayout(layout, orientation) {
     const radius = bounded(presentation.corner_radius, 'presentation.corner_radius');
     if (radius[0] !== 0n) {
       need(edges.length > 0, 'presentation.corner_radius > 0 requires cells that share an edge');
-      // Each rounded corner (on a side shared with an earlier cell) needs that cell beneath it.
+      // Each rounded corner (on a side shared with an earlier cell) needs earlier cells beneath its whole
+      // cutout: their spans run without a gap from the corner for corner_radius, or to the far corner.
       const covered = new Map();
       for (const edge of edges) {
         const key = `${edge.b}:${OPPOSITE_SIDE[edge.edge]}`;
@@ -1270,10 +1295,24 @@ function validateRasterLayout(layout, orientation) {
       for (const [key, spans] of covered) {
         const [index, side] = key.split(':');
         const [x, y, w, h] = cells[Number(index)].rect.map(exact);
-        const ends = side === 'top' || side === 'bottom' ? [x, exactAdd(x, w)] : [y, exactAdd(y, h)];
-        for (const corner of ends)
-          need(spans.some(([low, high]) => exactCmp(low, corner) <= 0 && exactCmp(corner, high) <= 0),
+        const [low, high] = side === 'top' || side === 'bottom' ? [x, exactAdd(x, w)] : [y, exactAdd(y, h)];
+        const minus = (p, [n, d]) => exactAdd(p, [-n, d]), length = minus(high, low);
+        for (const [corner, inward] of [[low, true], [high, false]]) {
+          let reach = corner;
+          for (let grew = true; grew;) {
+            grew = false;
+            for (const [a, b] of spans) {
+              if (inward ? exactCmp(a, reach) <= 0 && exactCmp(reach, b) < 0 :
+                exactCmp(a, reach) < 0 && exactCmp(reach, b) <= 0) { reach = inward ? b : a; grew = true; }
+            }
+          }
+          const run = inward ? minus(reach, corner) : minus(corner, reach);
+          need(exactCmp(run, [0n, 1n]) > 0,
             `cell ${index}: rounded ${side} corner at ${exactText(corner)} has no earlier-drawn neighbour beneath it`);
+          need(exactCmp(run, exactCmp(radius, length) <= 0 ? radius : length) >= 0,
+            `cell ${index}: rounded ${side} corner at ${exactText(corner)} has earlier-drawn neighbours beneath ` +
+            `only ${exactText(run)} from it, less than corner_radius ${exactText(radius)}`);
+        }
       }
     }
     jitter = bounded(presentation.lateral_jitter, 'presentation.lateral_jitter');
