@@ -202,27 +202,11 @@ def rect_values(rect: Any) -> tuple[Fraction, ...]:
 
 
 def validate_layouts(layouts: dict, loop_ids: set[str]) -> None:
-    keys(layouts, set(ORIENTATIONS), set(ORIENTATIONS), "layouts")
-    for orientation, layout in layouts.items():
-        keys(layout, {"name", "cells"}, {"name", "cells"}, orientation)
-        require(isinstance(layout["name"], str) and bool(layout["name"]), "layout name is required")
-        require(isinstance(layout["cells"], list), "cells must be an array")
-        seen, boxes = [], []
-        for cell in layout["cells"]:
-            keys(cell, {"loop", "rect", "fit", "focal"}, {"loop", "rect", "fit", "focal"}, "cell")
-            identifier(cell["loop"], "cell.loop")
-            seen.append(cell["loop"])
-            require(cell["fit"] in ("contain", "cover"), "only contain/cover fit is implemented")
-            require(isinstance(cell["focal"], list) and len(cell["focal"]) == 2, "focal needs two coordinates")
-            require(all(0 <= rational(v, "focal") <= 1 for v in cell["focal"]), "focal must be in 0..1")
-            box = rect_values(cell["rect"])
-            x, y, w, h = box
-            for a, b, c, d in boxes:
-                require(not (x < a + c and a < x + w and y < b + d and b < y + h),
-                        "overlapping/occluded panels are not supported in schema v1")
-            boxes.append(box)
-        require(len(seen) == len(loop_ids) and set(seen) == loop_ids,
-                "each orientation must map every loop exactly once")
+    # One reference validator (layout_presets.validate_layout_pair). Legacy keys keep their
+    # exact checks and messages; optional full_bleed, presentation and cell lateral_offset
+    # are checked declarations. Imported here because layout_presets imports this module.
+    from simvltanea.authoring.layout_presets import validate_layout_pair
+    validate_layout_pair(layouts, loop_ids)
 
 
 def validate_slice(value: Any) -> None:

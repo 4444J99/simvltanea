@@ -1,0 +1,75 @@
+{
+  "format": "simvltanea.layout-pair/1",
+  "count": 2,
+  "portrait": {
+    "name": "apart-portrait",
+    "presentation": {
+      "overlap_px": 2,
+      "corner_radius": "0",
+      "lateral_jitter": "0"
+    },
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "0",
+          "0",
+          "1",
+          "2/5"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-2",
+        "rect": [
+          "0",
+          "1/2",
+          "1",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  },
+  "landscape": {
+    "name": "apart-landscape",
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "0",
+          "0",
+          "1/2",
+          "1"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-2",
+        "rect": [
+          "1/2",
+          "0",
+          "1/2",
+          "1"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  }
+}

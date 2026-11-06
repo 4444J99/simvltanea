@@ -1,0 +1,54 @@
+{
+  "format": "simvltanea.layout-pair/1",
+  "count": 1,
+  "portrait": {
+    "name": "strips-1-portrait",
+    "full_bleed": true,
+    "presentation": {
+      "overlap_px": 0,
+      "corner_radius": "0",
+      "lateral_jitter": "0"
+    },
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "0",
+          "0",
+          "1",
+          "1"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  },
+  "landscape": {
+    "name": "strips-1-landscape",
+    "full_bleed": true,
+    "presentation": {
+      "overlap_px": 0,
+      "corner_radius": "0",
+      "lateral_jitter": "0"
+    },
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "0",
+          "0",
+          "1",
+          "1"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "format": "simvltanea.layout-pair/1",
+  "count": 2,
+  "portrait": {
+    "name": "authored-2-portrait",
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "1/25",
+          "3/100",
+          "23/25",
+          "11/25"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-2",
+        "rect": [
+          "1/25",
+          "13/25",
+          "23/25",
+          "11/25"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ],
+    "full_bleed": true
+  },
+  "landscape": {
+    "name": "authored-2-landscape",
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "3/100",
+          "1/20",
+          "23/50",
+          "9/10"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-2",
+        "rect": [
+          "51/100",
+          "1/20",
+          "23/50",
+          "9/10"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  }
+}

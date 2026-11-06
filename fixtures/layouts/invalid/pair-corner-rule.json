@@ -1,0 +1,110 @@
+{
+  "format": "simvltanea.layout-pair/1",
+  "count": 3,
+  "portrait": {
+    "name": "corner-portrait",
+    "full_bleed": true,
+    "presentation": {
+      "overlap_px": 2,
+      "corner_radius": "1/40",
+      "lateral_jitter": "0"
+    },
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "0",
+          "0",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-2",
+        "rect": [
+          "0",
+          "1/2",
+          "1",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-3",
+        "rect": [
+          "1/2",
+          "0",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  },
+  "landscape": {
+    "name": "corner-landscape",
+    "full_bleed": true,
+    "presentation": {
+      "overlap_px": 2,
+      "corner_radius": "0",
+      "lateral_jitter": "0"
+    },
+    "cells": [
+      {
+        "loop": "loop-1",
+        "rect": [
+          "0",
+          "0",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-2",
+        "rect": [
+          "0",
+          "1/2",
+          "1",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      },
+      {
+        "loop": "loop-3",
+        "rect": [
+          "1/2",
+          "0",
+          "1/2",
+          "1/2"
+        ],
+        "fit": "cover",
+        "focal": [
+          "1/2",
+          "1/2"
+        ]
+      }
+    ]
+  }
+}

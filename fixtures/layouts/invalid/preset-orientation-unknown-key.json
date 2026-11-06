@@ -1,0 +1,40 @@
+{
+  "format": "simvltanea.layout-preset/1",
+  "name": "strips",
+  "family": "strips",
+  "counts": {
+    "min": 1,
+    "max": 12
+  },
+  "orientations": {
+    "portrait": {
+      "gutter": "0"
+    }
+  },
+  "weights": {
+    "default": "equal",
+    "by_count": {}
+  },
+  "fit": "cover",
+  "focal": {
+    "default": [
+      "1/2",
+      "1/2"
+    ],
+    "by_index": {}
+  },
+  "full_bleed": true,
+  "overlap_px": 2,
+  "zoom": {
+    "curve": "power",
+    "z1": "8",
+    "gamma": "3/5",
+    "min_zoom": "10/9",
+    "quantum": 1000,
+    "table": {}
+  },
+  "style": {
+    "corner_radius": "0",
+    "lateral_jitter": "0"
+  }
+}

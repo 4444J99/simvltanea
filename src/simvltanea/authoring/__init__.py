@@ -29,6 +29,15 @@ from .artifact001_layouts import (
     build_artifact001,
     AUTHORED,
 )
+from .layout_presets import (
+    LayoutError,
+    strips_layouts,
+    strips_slice,
+    build_strips,
+    adjacency,
+    validate_layout_pair,
+    load_layout_file,
+)
 
 __all__ = [
     'composition',
@@ -57,4 +66,11 @@ __all__ = [
     'SpatialLoopsAudio',
     'build_artifact001',
     'AUTHORED',
+    'LayoutError',
+    'strips_layouts',
+    'strips_slice',
+    'build_strips',
+    'adjacency',
+    'validate_layout_pair',
+    'load_layout_file',
 ]
