@@ -40,6 +40,7 @@ from simvltanea.browser.browser_studio import INDEX_HTML, STUDIO_FILES, studio_f
 from simvltanea.browser.layout_bundle import authored_layout_bundle, layout_bundle_v2
 from simvltanea.browser.test_browser_runtime import browser_executable
 from simvltanea.paths import WORK_DIR
+from tools.publishing.stage_library_site import stage_library_site
 from tools.verification.verify_public_site import private_path_fragments
 
 STUDIO_JS = HERE / 'browser.studio.js'
@@ -124,6 +125,57 @@ def prepare_fixtures() -> dict[str, Path]:
         with huge.open('wb') as handle:
             handle.truncate(513 * MIB)
     return paths
+
+
+LIBRARY = ROOT / 'library'
+LIBRARY_SITES = ROOT / 'library-sites'
+LIBRARY_CLIPS = 30
+# A keyword no page text, attribute, log line or snapshot may ever contain: tags stay private to selection.
+TAG_SENTINEL = 'zephyrine'
+FAMILIES = {'authored': list(range(2, 8)), 'strips': list(range(1, 13))}
+
+
+def library_shape(number: int) -> tuple[int, int]:
+    return (144, 192) if number % 2 == 0 else (192, 144)
+
+
+def library_tags(number: int) -> dict:
+    # Six palette+shot looks, each in both orientations, so a roll can always avoid a repeated look.
+    return {'keywords': [TAG_SENTINEL, f'word{number}'], 'mood': [('calm', 'bright', 'dark', 'still')[number % 4]],
+            'shot': ('wide', 'close')[(number // 6) % 2], 'palette': [('blue', 'red', 'green')[(number // 2) % 3]]}
+
+
+def library_entry(clip_id: str, number: int, size: int, seconds: float) -> dict:
+    width, height = library_shape(number)
+    return {'id': clip_id, 'file': f'clips/{clip_id}.mp4', 'width': width, 'height': height,
+            'orientation': 'portrait' if height > width else 'landscape', 'duration_seconds': round(seconds, 3),
+            'bytes': size, 'tags': library_tags(number)}
+
+
+def prepare_library() -> dict:
+    """A synthetic public-demo library: FFmpeg lavfi clips with a mono AAC tone, named by their digest."""
+    raw = FIXTURES / 'library-raw'
+    raw.mkdir(parents=True, exist_ok=True)
+    if LIBRARY.exists():
+        shutil.rmtree(LIBRARY)
+    (LIBRARY / 'clips').mkdir(parents=True)
+    clips = []
+    for number in range(LIBRARY_CLIPS):
+        width, height = library_shape(number)
+        source = raw / f'clip-{number:02d}.mp4'
+        if not source.exists():
+            ffmpeg('-f', 'lavfi', '-i', f'testsrc2=size={width}x{height}:rate=24,hue=h={number * 12}',
+                   '-f', 'lavfi', '-i', f'sine=frequency={220 + number * 20}:sample_rate=48000',
+                   '-t', f'{1 + (number % 7) * 0.2:.1f}', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+                   '-c:a', 'aac', '-ac', '1', '-b:a', '64k', '-shortest', '-map_metadata', '-1',
+                   '-movflags', '+faststart', str(source))
+        data = source.read_bytes()
+        clip_id = hashlib.sha256(data).hexdigest()[:12]
+        (LIBRARY / 'clips' / f'{clip_id}.mp4').write_bytes(data)
+        clips.append(library_entry(clip_id, number, len(data), float(probe(source)['format']['duration'])))
+    manifest = {'schema': 'simvltanea.public-demo/1', 'clips': clips}
+    (LIBRARY / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    return manifest
 
 
 def node(script: str, payload) -> object:
@@ -528,8 +580,9 @@ class StudioBrowserTests(unittest.TestCase):
         return self.snapshot(page)
 
     def allowed(self, page):
-        """Requests beyond the staged files (blob: and data: URLs are made on the device)."""
-        staged = {f'{self.origin}/{SUBPATH}/{name}' for name in ('', *STUDIO_FILES)}
+        """Requests beyond the staged files and the optional library manifest probe (blob: and data: URLs
+        are made on the device)."""
+        staged = {f'{self.origin}/{SUBPATH}/{name}' for name in ('', *STUDIO_FILES, 'library/manifest.json')}
         return [url for url in page.requests if not (url.split('?')[0] in staged or url.startswith(('blob:', 'data:')))]
 
     # ---- tests -------------------------------------------------------------
@@ -816,6 +869,306 @@ class StudioBrowserTests(unittest.TestCase):
         page.wait_for_function("() => document.querySelector('#studio').classList.contains('idle')", timeout=10000)
         page.mouse.move(20, 20)
         page.wait_for_function("() => !document.querySelector('#studio').classList.contains('idle')")
+
+
+ROLL_LIBRARY = r'''
+const S = require(process.argv[1]);
+let input = '';
+process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
+  const {manifest, families, seeds, exclude} = JSON.parse(input);
+  const clips = S.libraryClips(manifest);
+  process.stdout.write(JSON.stringify(seeds.map(seed => {
+    const rolled = S.rollLibrary(seed, families, clips, exclude || []);
+    return {...rolled, ids: rolled.loops.map(index => clips[index].id)};
+  })));
+});
+'''
+
+
+def fake_manifest(count: int = LIBRARY_CLIPS) -> dict:
+    """A manifest without media, for the pure selection rules."""
+    return {'schema': 'simvltanea.public-demo/1',
+            'clips': [library_entry(hashlib.sha256(bytes([number])).hexdigest()[:12], number, 100_000, 2.0)
+                      for number in range(count)]}
+
+
+class LibrarySelectionTests(unittest.TestCase):
+    """The manifest gate and the tag-weighted rolls, as pure functions under Node."""
+
+    def test_manifest_gate_accepts_only_a_well_formed_library(self):
+        manifest = fake_manifest(4)
+        clip = manifest['clips'][0]
+        variants = {
+            'valid': manifest,
+            'no-tags': {**manifest, 'clips': [{key: value for key, value in clip.items() if key != 'tags'}]},
+            'schema': {**manifest, 'schema': 'simvltanea.public-demo/2'},
+            'not-object': [manifest],
+            'no-clips': {**manifest, 'clips': []},
+            'clips-object': {**manifest, 'clips': {'a': clip}},
+            'traversal': {**manifest, 'clips': [{**clip, 'file': '../index.html'}]},
+            'absolute': {**manifest, 'clips': [{**clip, 'file': f'/clips/{clip["id"]}.mp4'}]},
+            'other-id': {**manifest, 'clips': [{**clip, 'file': 'clips/0123456789ab.mp4'}]},
+            'uppercase': {**manifest, 'clips': [{**clip, 'id': clip['id'].upper(),
+                                                 'file': f'clips/{clip["id"].upper()}.mp4'}]},
+            'duplicate': {**manifest, 'clips': [clip, clip]},
+            'fraction': {**manifest, 'clips': [{**clip, 'width': 144.5}]},
+            'zero-bytes': {**manifest, 'clips': [{**clip, 'bytes': 0}]},
+            'huge': {**manifest, 'clips': [{**clip, 'bytes': 65 * MIB}]},
+            'wide': {**manifest, 'clips': [{**clip, 'width': 5000}]},
+            'orientation': {**manifest, 'clips': [{**clip, 'orientation': 'landscape'}]},
+            'short': {**manifest, 'clips': [{**clip, 'duration_seconds': 0.1}]},
+            'long': {**manifest, 'clips': [{**clip, 'duration_seconds': 601}]},
+            'text-duration': {**manifest, 'clips': [{**clip, 'duration_seconds': '2'}]},
+            'tags-list': {**manifest, 'clips': [{**clip, 'tags': ['sea']}]},
+        }
+        out = node(r'''const S = require(process.argv[1]); let input = '';
+          process.stdin.on('data', d => input += d).on('end', () => {
+          const variants = JSON.parse(input), out = {};
+          for (const [name, data] of Object.entries(variants)) out[name] = S.libraryClips(data);
+          process.stdout.write(JSON.stringify(out)); });''', variants)
+        self.assertEqual([item['id'] for item in out['valid']], sorted(item['id'] for item in manifest['clips']))
+        # Only comparison keys survive from the tags: no keyword, caption or tag text is kept.
+        self.assertEqual(set(out['valid'][0]), {'id', 'file', 'bytes', 'orientation', 'look', 'mood'})
+        self.assertNotIn(TAG_SENTINEL, json.dumps(out))
+        self.assertEqual(len(out['no-tags']), 1)
+        self.assertIsNone(out['no-tags'][0]['look'])
+        for name, value in out.items():
+            if name not in ('valid', 'no-tags'):
+                with self.subTest(variant=name):
+                    self.assertIsNone(value)
+
+    def test_rolls_are_seeded_varied_and_mixed(self):
+        manifest = fake_manifest()
+        seeds = list(range(200))
+        rolls = node(ROLL_LIBRARY, dict(manifest=manifest, families=FAMILIES, seeds=seeds))
+        again = node(ROLL_LIBRARY, dict(manifest=manifest, families=FAMILIES, seeds=seeds))
+        self.assertEqual(rolls, again)
+        # The order of the manifest does not matter: clips are indexed by id.
+        shuffled = {**manifest, 'clips': list(reversed(manifest['clips']))}
+        self.assertEqual([roll['ids'] for roll in node(ROLL_LIBRARY, dict(manifest=shuffled, families=FAMILIES,
+                                                                            seeds=seeds))],
+                         [roll['ids'] for roll in rolls])
+        by_id = {clip['id']: clip for clip in manifest['clips']}
+        look = lambda clip_id: (tuple(by_id[clip_id]['tags']['palette']), by_id[clip_id]['tags']['shot'])
+        for seed, roll in zip(seeds, rolls):
+            with self.subTest(seed=seed):
+                self.assertIn(roll['panels'], FAMILIES[roll['family']])
+                self.assertEqual(len(roll['ids']), roll['panels'])
+                self.assertEqual(len(set(roll['ids'])), roll['panels'])
+                self.assertEqual(len({look(clip_id) for clip_id in roll['ids']}), min(roll['panels'], 6))
+                if roll['panels'] >= 2:
+                    self.assertEqual({by_id[clip_id]['orientation'] for clip_id in roll['ids']},
+                                     {'portrait', 'landscape'})
+        self.assertGreater(len({tuple(roll['ids']) for roll in rolls}), 150)
+        self.assertGreater(len({clip_id for roll in rolls for clip_id in roll['ids']}), LIBRARY_CLIPS - 2)
+        # Clips that failed to load are never chosen again.
+        excluded = node(ROLL_LIBRARY, dict(manifest=manifest, families=FAMILIES, seeds=seeds, exclude=list(range(20))))
+        ids = sorted(by_id)
+        self.assertTrue(all(ids.index(clip_id) >= 20 for roll in excluded for clip_id in roll['ids']))
+
+    def test_mix_addresses_large_libraries(self):
+        out = node(r'''const S = require(process.argv[1]);
+          process.stdout.write(JSON.stringify([S.parseMix('s1200.7.3', {strips: [1, 2, 3]}, 2000),
+            S.parseMix('s1200.7.3', {strips: [1, 2, 3]}, 1000), S.parseMix('s12345', {strips: [1]}, 20000),
+            S.LIBRARY_CACHE]));''', None)
+        self.assertEqual(out, [{'family': 'strips', 'loops': [1200, 7, 3]}, None, None, 24])
+
+
+class StudioLibraryTests(unittest.TestCase):
+    """Library mode: a staged studio with a synthetic public library beside it, served on one origin."""
+
+    @classmethod
+    def setUpClass(cls):
+        from playwright.sync_api import sync_playwright
+        cls.manifest = prepare_library()
+        cls.ids = sorted(clip['id'] for clip in cls.manifest['clips'])
+        cls.by_id = {clip['id']: clip for clip in cls.manifest['clips']}
+        if LIBRARY_SITES.exists():
+            shutil.rmtree(LIBRARY_SITES)
+        studio = LIBRARY_SITES / 'studio-out'
+        stage_studio(studio)
+        stage_library_site(studio, LIBRARY, LIBRARY_SITES / 'good')
+        # The deploy helper refuses an invalid manifest, so this site is assembled by hand.
+        bad = LIBRARY_SITES / 'bad'
+        shutil.copytree(LIBRARY_SITES / 'good', bad)
+        broken = json.loads((bad / 'library' / 'manifest.json').read_text())
+        broken['clips'][0]['file'] = '../index.html'
+        (bad / 'library' / 'manifest.json').write_text(json.dumps(broken))
+        cls.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0),
+                                                     functools.partial(QuietHandler, directory=str(LIBRARY_SITES)))
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.origin = f'http://127.0.0.1:{cls.server.server_port}'
+        cls.pw = sync_playwright().start()
+        cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(), headless=True,
+                                             args=['--no-sandbox', '--disable-dev-shm-usage'])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.browser.close()
+        cls.pw.stop()
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join()
+
+    snapshot = StudioBrowserTests.snapshot
+    playing = StudioBrowserTests.playing
+    unlock = StudioBrowserTests.unlock
+    tap = StudioBrowserTests.tap
+
+    def open(self, site='good', query='', width=1280, height=720):
+        context = self.browser.new_context(viewport={'width': width, 'height': height})
+        self.addCleanup(context.close)
+        page = context.new_page()
+        page.requests, page.errors, page.logs = [], [], []
+        page.on('request', lambda request: page.requests.append(request.url))
+        page.on('pageerror', lambda error: page.errors.append(str(error)))
+        page.on('console', lambda message: page.logs.append(message.text))
+        page.goto(f'{self.origin}/{site}/{query}')
+        page.wait_for_function('() => window.SimvltaneaStudio && window.SimvltaneaStudio.snapshot && '
+                               'window.compositionRuntime && SimvltaneaStudio.snapshot().seed !== null')
+        self.addCleanup(lambda: self.assertEqual(page.errors, []))
+        return page
+
+    def roll(self, seed):
+        return node(ROLL_LIBRARY, dict(manifest=self.manifest, families=FAMILIES, seeds=[seed]))[0]
+
+    def clip_requests(self, page):
+        return [url.rsplit('/', 1)[1][:-4] for url in page.requests if '/library/clips/' in url]
+
+    def showing(self, page, ids, timeout=45000):
+        """Wait until the runtime plays exactly these clips (by digest prefix), then return its state."""
+        page.wait_for_function('ids => { const r = compositionRuntime; return r.error || (r.plan && '
+                               'r.plan.sources.map(s => s.sha256.slice(0, 12)).join() === ids.join()); }',
+                               arg=ids, timeout=timeout)
+        state = self.playing(page, len(ids), timeout)
+        self.assertEqual([sha[:12] for sha in state['sha']], ids)
+        return state
+
+    def prefetched(self, page):
+        page.wait_for_function('() => { const l = SimvltaneaStudio.snapshot().library; '
+                               'return l.prefetch.length && !l.inflight.length && '
+                               'l.prefetch.every(id => l.cached.includes(id)); }', timeout=30000)
+        return self.snapshot(page)['library']
+
+    def private_tags_absent(self, page):
+        exposed = page.content() + json.dumps(self.snapshot(page)) + '\n'.join(page.logs)
+        self.assertNotIn(TAG_SENTINEL, exposed)
+        for word in ('palette', 'keywords', 'mood'):
+            self.assertNotIn(word, json.dumps(self.snapshot(page)))
+
+    def test_library_mode_fetches_only_the_rolls_clips(self):
+        page = self.open(query='?seed=424242')
+        expected = self.roll(424242)
+        snapshot = self.snapshot(page)
+        self.assertEqual((snapshot['source'], snapshot['record'], snapshot['builtinsReady']), ('library', 'library', 0))
+        self.assertEqual((snapshot['family'], snapshot['selection']), (expected['family'], expected['ids']))
+        state = self.showing(page, expected['ids'])
+        self.assertEqual(state['version'], 1)
+        self.assertEqual(state['muted'], [True] * len(expected['ids']))
+        self.assertEqual(page.evaluate("document.querySelectorAll('#preview canvas').length"), 0)
+        prefetch = self.prefetched(page)['prefetch']
+        requested = self.clip_requests(page)
+        self.assertEqual(len(requested), len(set(requested)), 'a clip was fetched twice')
+        self.assertEqual(set(requested), set(expected['ids']) | set(prefetch))
+        self.assertLess(len(set(requested)), LIBRARY_CLIPS)
+        staged = {f'{self.origin}/good/{name}' for name in ('', *STUDIO_FILES, 'library/manifest.json')}
+        others = [url for url in page.requests if not (url.split('?')[0] in staged or '/good/library/clips/' in url
+                                                       or url.startswith(('blob:', 'data:')))]
+        self.assertEqual(others, [])
+        looks = {(tuple(self.by_id[i]['tags']['palette']), self.by_id[i]['tags']['shot']) for i in expected['ids']}
+        self.assertEqual(len(looks), min(len(expected['ids']), 6))
+        if len(expected['ids']) >= 2:
+            self.assertEqual({self.by_id[i]['orientation'] for i in expected['ids']}, {'portrait', 'landscape'})
+        self.private_tags_absent(page)
+
+    def test_seed_reproduces_the_clips_and_shuffle_plays_the_next_roll(self):
+        first = self.open(query='?seed=99')
+        second = self.open(query='?seed=99', width=390, height=844)
+        expected = self.roll(99)
+        for page in (first, second):
+            self.assertEqual(self.snapshot(page)['selection'], expected['ids'])
+        self.showing(first, expected['ids'])
+        self.showing(second, expected['ids'])
+        ready = self.prefetched(first)
+        self.assertEqual(ready['prefetch'], self.roll(ready['next'])['ids'])
+        self.tap(first, '#shuffle')
+        first.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=99)
+        after = self.snapshot(first)
+        self.assertEqual(after['seed'], ready['next'])
+        self.assertEqual(after['selection'], ready['prefetch'])
+        self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}$')
+        self.showing(first, after['selection'])
+        later = self.prefetched(first)
+        requested = self.clip_requests(first)
+        self.assertEqual(len(requested), len(set(requested)), 'a clip was fetched twice')
+        self.assertTrue(set(after['selection']) <= set(requested))
+        self.assertTrue(set(requested) <= set(expected['ids']) | set(after['selection']) | set(later['prefetch']))
+        self.assertLessEqual(len(later['cached']), 24)
+        # Keys: R rolls again; arrows change the count, fetching only the clips that are added.
+        before = set(self.clip_requests(first))
+        self.assertIn(after['panels'], after['counts'])
+        first.locator('body').press('ArrowRight' if after['panels'] < max(after['counts']) else 'ArrowLeft')
+        first.wait_for_function('n => SimvltaneaStudio.snapshot().panels !== n', arg=after['panels'])
+        edited = self.snapshot(first)
+        self.showing(first, edited['selection'])
+        self.assertTrue(set(self.clip_requests(first)) - before <= set(edited['selection']) | set(later['prefetch']))
+        self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}&mix=[sa]\d')
+        self.private_tags_absent(first)
+
+    def test_clips_play_their_own_audio_after_the_first_click(self):
+        page = self.open(query='?seed=7')
+        expected = self.roll(7)
+        self.showing(page, expected['ids'])
+        self.assertEqual(page.get_attribute('#speaker', 'aria-label'), 'Tap for sound')
+        self.unlock(page)
+        page.wait_for_function('() => [...compositionRuntime.nodes.values()].every(n => n.audio && n.audio.gain.gain.value > 0)')
+        count = len(expected['ids'])
+        state = page.evaluate('''() => { const r = compositionRuntime;
+          return {mode: r.audio.mode, gains: [...r.nodes.values()].map(n => n.audio.gain.gain.value),
+                  perLoop: Object.values(r.plan.audio.per_loop).map(l => l.gain),
+                  muted: [...document.querySelectorAll('#stage video')].map(v => v.muted),
+                  audio: r.plan.sources.map(s => s.audio_stream)}; }''')
+        self.assertEqual(state['mode'], 'spatial_loops')
+        self.assertTrue(all(gain > 0 for gain in state['gains']), state)
+        self.assertEqual(state['audio'], [{'codec': 'aac', 'channels': 1}] * count)
+        self.assertEqual(set(state['perLoop']), {f'{max(1, round(1000 / math.sqrt(count)))}/1000'})
+        self.assertEqual(set(state['muted']), {False})
+        self.assertEqual(self.snapshot(page)['sound'], 'on')
+        page.keyboard.press('m')
+        page.wait_for_function('''() => SimvltaneaStudio.snapshot().sound === 'off' &&
+          [...document.querySelectorAll('#stage video')].every(v => v.muted)''')
+        page.keyboard.press('m')
+        page.wait_for_function('''() => SimvltaneaStudio.snapshot().sound === 'on' &&
+          [...document.querySelectorAll('#stage video')].every(v => !v.muted)''')
+        # A tapped panel gets a new clip, fetched on demand; the others stay.
+        before = self.snapshot(page)['selection']
+        box = page.locator('#stage .loop[data-loop-id="loop-1"]').bounding_box()
+        page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+        page.wait_for_function('b => SimvltaneaStudio.snapshot().selection.join() !== b.join()', arg=before)
+        after = self.snapshot(page)['selection']
+        self.assertNotEqual(after[0], before[0])
+        self.assertEqual(after[1:], before[1:])
+        self.showing(page, after)
+        self.assertEqual(page.evaluate('compositionRuntime.plan.plan_version'), 2)
+        self.assertIn(after[0], self.clip_requests(page))
+        self.private_tags_absent(page)
+
+    def test_invalid_manifest_falls_back_to_generated_loops(self):
+        page = self.open(site='bad')
+        snapshot = self.snapshot(page)
+        self.assertEqual((snapshot['source'], snapshot['library']), ('builtin', None))
+        self.playing(page, snapshot['panels'])
+        self.assertEqual(self.snapshot(page)['builtinsReady'], 12)
+        self.assertIn(f'{self.origin}/bad/library/manifest.json', page.requests)
+        self.assertEqual(self.clip_requests(page), [])
+
+    def test_gen_forces_the_generated_loops(self):
+        page = self.open(query='?gen=1&seed=5')
+        snapshot = self.snapshot(page)
+        self.assertEqual((snapshot['source'], snapshot['library']), ('builtin', None))
+        self.playing(page, snapshot['panels'])
+        self.assertEqual([url for url in page.requests if '/library/' in url], [])
 
 
 class RuntimeHookTests(unittest.TestCase):
