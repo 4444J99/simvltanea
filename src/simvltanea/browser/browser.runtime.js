@@ -1234,7 +1234,12 @@ function validateRasterLayout(layout, orientation) {
     try { result = exact(value); } catch (_) { need(false, `${label} must be a canonical rational`); }
     const [n, d] = result, limit = 1000000000n;
     need(d <= limit && (n < 0n ? -n : n) <= limit * d, `${label}: out of bounds`);
-    try { number(value); } catch (_) { need(false, `${label} must be a canonical rational`); }
+    let read;
+    try { read = number(value); } catch (_) { need(false, `${label} must be a canonical rational`); }
+    // A finite numerator over an overflowing denominator reads as 0 from the raw spelling although the
+    // reduced value is not 0: the float must agree with the exact value, or rendering would drop it.
+    const exactFloat = Number(n) / Number(d);
+    need(Math.abs(read - exactFloat) <= 1e-12 * Math.max(1, Math.abs(exactFloat)), `${label} must be a canonical rational`);
     return result;
   };
   const bounded = (value, label) => {

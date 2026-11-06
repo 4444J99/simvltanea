@@ -361,6 +361,14 @@ console.log(JSON.stringify(input.map(plan => {
                 'lateral_jitter', f'{10**400}/{40 * 10**400}'), 'lateral_jitter must be a canonical rational'),
             'unreduced offset of 800 digits': (lambda p: portrait(p)['cells'][0].__setitem__(
                 'lateral_offset', f'{10**400}/{80 * 10**400}'), 'lateral_offset must be a canonical rational'),
+            # A finite numerator over a denominator that overflows a float: number() reads 0 although the
+            # reduced value (1/40, 1/80) is in range, so the requested radius, jitter or offset would vanish.
+            'finite numerator, overflowing denominator (radius)': (lambda p: portrait(p)['presentation'].__setitem__(
+                'corner_radius', f'1{"0" * 307}/4{"0" * 308}'), 'corner_radius must be a canonical rational'),
+            'finite numerator, overflowing denominator (jitter)': (lambda p: portrait(p)['presentation'].__setitem__(
+                'lateral_jitter', f'1{"0" * 307}/4{"0" * 308}'), 'lateral_jitter must be a canonical rational'),
+            'finite numerator, overflowing denominator (offset)': (lambda p: portrait(p)['cells'][0].__setitem__(
+                'lateral_offset', f'1{"0" * 307}/8{"0" * 308}'), 'lateral_offset must be a canonical rational'),
             'interior overlap': (lambda p: portrait(p)['cells'][1]['rect'].__setitem__(1, '1/10'), 'overlapping cells'),
         }
         plans, expected = [], []

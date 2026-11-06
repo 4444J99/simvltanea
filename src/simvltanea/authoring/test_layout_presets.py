@@ -254,6 +254,25 @@ class SeamGeometryTests(unittest.TestCase):
         # Exactly the radius is enough; so is a whole side shorter than the radius (cell 3's 1/50 bottom).
         validate_layout_pair(pair("1/20"), loops)
 
+    def test_corner_backing_joins_touching_spans_but_not_across_a_gap(self):
+        loops = {f"loop-{k + 1}" for k in range(6)}
+        rects = {"A": ["0", "0", "1/40", "1/2"], "B": ["1/40", "0", "1/40", "1/2"], "M": ["1/20", "0", "9/10", "1/2"],
+                 "C": ["19/20", "0", "1/40", "1/2"], "D": ["39/40", "0", "1/40", "1/2"], "W": ["0", "1/2", "1", "1/2"]}
+
+        def pair(order):
+            layouts = strips_layouts(6, preset(style={"corner_radius": "1/20", "lateral_jitter": "0"}))
+            for cell, name in zip(layouts["portrait"]["cells"], order):
+                cell["rect"] = rects[name]
+            return layouts
+
+        # Two touching 1/40 spans together back the 1/20 radius from each corner, in either drawing order.
+        validate_layout_pair(pair("ABMCDW"), loops)
+        validate_layout_pair(pair("DCMBAW"), loops)
+        # B drawn after W leaves a gap between A and M: from the left corner only A's 1/40 backs the cutout.
+        message = raises_code(self, "corner-rule", validate_layout_pair, pair("AMCDWB"), loops)
+        self.assertIn("cell 4", message)
+        self.assertIn("less than corner_radius 1/20", message)
+
 
 class ZoomTests(unittest.TestCase):
     def test_zoom_table(self):
