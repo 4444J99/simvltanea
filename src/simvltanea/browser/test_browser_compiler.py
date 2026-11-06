@@ -1,12 +1,18 @@
 """Parity proofs for the client-side compiler browser.compiler.js.
 
 Supported subset, mirrored from the compiler header: schema_version 1 with
-silent audio; N=2..7 loops; exactly one source per bank, every source bound to
+silent audio; N=1..12 loops; exactly one source per bank, every source bound to
 one loop, distinct IDs and media digests, allow_source_reuse false; video and
-still sources; offset, rate, trim and initial held; fps 1..60; no events; slice
-and seam absent or disabled. Inside the subset the JavaScript plan must equal
-Python's compile_plan byte for byte. Outside it the JavaScript must throw a
-CompilerError, never return a differing plan.
+still sources; offset, rate, trim and initial held; fps 1..60; no events; layouts
+with the optional full_bleed, presentation and lateral_offset declarations; the
+state-wide slice, enabled or not; seam absent or disabled. Inside the subset the
+JavaScript plan must equal Python's compile_plan byte for byte. Outside it the
+JavaScript must throw a CompilerError, never return a differing plan.
+
+The layout-file half (strict JSON, presets, pairs, strips expansion, adjacency and
+the two bundle formats) is proven against authoring/layout_presets.py: the same
+canonical JSON for every valid input and the same LayoutError code (and message)
+for every invalid one, over examples/layout-presets/ and fixtures/layouts/.
 
 Every refusal is a CompilerError. Python-accepted states outside the subset throw with
 unsupported true; Python-accepted spellings and seeds the compiler will not read
@@ -25,16 +31,35 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from fractions import Fraction
 from pathlib import Path
 
 import simvltanea.authoring.composition as c
-from simvltanea.authoring import AUTHORED, build_artifact001, from_authoring_model
+from simvltanea.authoring import (
+    AUTHORED,
+    LayoutError,
+    adjacency,
+    build_artifact001,
+    build_strips,
+    from_authoring_model,
+    load_layout_file,
+    strips_layouts,
+    strips_slice,
+)
+from simvltanea.authoring.layout_presets import DEFAULT_STRIPS_PRESET
 from simvltanea.browser.browser_runtime import HERE, compile_plan
-from simvltanea.browser.layout_bundle import authored_layout_bundle
+from simvltanea.browser.layout_bundle import authored_layout_bundle, layout_bundle_v2, render_bundle, strips_entry
+from simvltanea.paths import WORK_DIR
 
 COMPILER = HERE / 'browser.compiler.js'
+REPOSITORY = HERE.parents[2]
+CORPUS = REPOSITORY / 'fixtures' / 'layouts'
+EXAMPLE_PRESET = REPOSITORY / 'examples' / 'layout-presets' / 'strips.json'
+PARITY_COUNTS = (1, 2, 3, 5, 8, 12)
+# sha256 of `python -m simvltanea.browser.layout_bundle` output, taken before bundle v2 existed.
+LEGACY_BUNDLE_SHA256 = 'ac4b534880b150acebaa128451c20660b7d43b6abfe108951d06a0e040e1e76b'
 # Each call is [function name, *JSON arguments]; {"$number": "NaN"} revives non-JSON numbers.
 DRIVER = r'''
 const C = require(process.argv[1]);
@@ -45,7 +70,8 @@ process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
   const results = JSON.parse(input, revive).map(([name, ...args]) => {
     try { return {ok: true, value: C[name](...args)}; }
     catch (error) {
-      return {ok: false, name: error.name, message: error.message, unsupported: error.unsupported === true};
+      return {ok: false, name: error.name, message: error.message, unsupported: error.unsupported === true,
+        code: error.code ?? null};
     }
   });
   process.stdout.write(JSON.stringify(results));
@@ -155,6 +181,85 @@ def node(*calls) -> list[dict]:
                                input=json.dumps(wire(list(calls))), capture_output=True,
                                text=True, check=True, timeout=300)
     return json.loads(completed.stdout)
+
+
+# Each item is [path, name]: the file's bytes go through loadLayoutBytes(bytes, name); a
+# preset is expanded at every count it declares. Canonical JSON is computed in JavaScript.
+LAYOUT_DRIVER = r'''
+const C = require(process.argv[1]); const fs = require('fs');
+let input = '';
+process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
+  const pairAdjacency = pair => ({portrait: C.adjacency(pair.portrait.cells), landscape: C.adjacency(pair.landscape.cells)});
+  const results = JSON.parse(input).map(([path, name]) => {
+    try {
+      const data = C.loadLayoutBytes(fs.readFileSync(path), name), info = C.describeLayoutFile(data, name);
+      const out = {ok: true, data: C.canonicalJson(data), info, counts: {}};
+      for (const count of info.counts) {
+        const entry = C.layoutFromFile(data, count, name);
+        out.counts[count] = {entry: C.canonicalJson(entry), adjacency: C.canonicalJson(pairAdjacency(entry.layouts))};
+        if (info.kind === 'preset') {
+          out.counts[count].layouts = C.canonicalJson(C.stripsLayouts(count, data, name));
+          out.counts[count].slice = C.canonicalJson(C.stripsSlice(count, data, name));
+        } else {
+          out.counts[count].adjacency_raw = C.canonicalJson(pairAdjacency(data));
+        }
+      }
+      return out;
+    } catch (error) {
+      return {ok: false, name: error.name, code: error.code ?? null, message: error.message};
+    }
+  });
+  process.stdout.write(JSON.stringify(results));
+});
+'''
+
+
+def node_layout_files(items) -> list[dict]:
+    completed = subprocess.run([node_executable(), '-e', LAYOUT_DRIVER, str(COMPILER)],
+                               input=json.dumps([[str(path), name] for path, name in items]),
+                               capture_output=True, text=True, check=True, timeout=300)
+    return json.loads(completed.stdout)
+
+
+def python_layout_file(path: Path) -> dict:
+    """The Python reference for one layout file, shaped like LAYOUT_DRIVER's result."""
+    try:
+        data = load_layout_file(path)
+    except LayoutError as error:
+        return {'ok': False, 'code': error.code, 'message': str(error)}
+    out = {'ok': True, 'data': c.canonical_json(data), 'counts': {}}
+    if data['format'] == 'simvltanea.layout-preset/1':
+        counts = {**DEFAULT_STRIPS_PRESET['counts'], **data.get('counts', {})}
+        for count in range(counts['min'], counts['max'] + 1):
+            layouts = strips_layouts(count, path)
+            out['counts'][str(count)] = {
+                'layouts': c.canonical_json(layouts), 'slice': c.canonical_json(strips_slice(count, path)),
+                'adjacency': c.canonical_json({o: adjacency(layouts[o]['cells']) for o in c.ORIENTATIONS})}
+    else:
+        out['counts'][str(data['count'])] = {
+            'adjacency': c.canonical_json({o: adjacency(data[o]['cells']) for o in c.ORIENTATIONS})}
+    return out
+
+
+def scratch() -> tempfile.TemporaryDirectory:
+    """A disposable directory under var/work (generated output never leaves var/)."""
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(prefix='compiler-layouts-', dir=WORK_DIR)
+
+
+def strips_state(count: int, slice_value='strips', *, preset='strips', fps: int = 24, frames: int = 240,
+                 seed=444499) -> dict:
+    """A strips state whose loops wrap several times: periods (9 + 2k)/8 s, rates 1 + 7k/100."""
+    sources = [dict(id=f'media-{k}', path=f'media/strip-{k}.mp4', sha256=digest(f'strip-{count}-{k}'),
+                    kind='video', duration=f'{9 + 2 * k}/8') for k in range(1, count + 1)]
+    state = build_strips(count, preset, sources=sources, frames=frames, fps=fps)
+    state['seed'] = seed
+    if slice_value is None:
+        del state['slice']
+    elif slice_value != 'strips':
+        state['slice'] = slice_value
+    c.validate_state(state)
+    return state
 
 
 def node_inheritance(state: dict) -> dict:
@@ -301,15 +406,16 @@ class CompilerParityTests(unittest.TestCase):
         }
         # Python compiles these; the JavaScript must refuse them instead of differing.
         python_accepts = {
-            'one-loop': (n_loops(1), 'N=2..7'),
-            'eight-loops': (n_loops(8), 'N=2..7'),
+            'thirteen-loops': (n_loops(13), 'N=1..12'),
+            'thirty-two-loops': (n_loops(32), 'N=1..12'),
             **{f'event-{name}': (edit(lambda s, e=event: s.__setitem__('events', [e])), 'events')
                for name, event in events.items()},
             'audio-v1.1': (edit(lambda s: s.update(schema_version='1.1', engine_version='1.1.0')), 'Audio v1.1'),
             'multi-source-bank': (edit(lambda s: (add_source(s), s['loops'][0].__setitem__(
                 'bank', ['media-1', 'extra']))), 'bank'),
-            'slice-enabled': (edit(lambda s: s.__setitem__('slice', {'enabled': True})), 'slice'),
-            'seam-enabled': (edit(lambda s: s.__setitem__('seam', {'enabled': True})), 'seam'),
+            'seam-enabled': (edit(lambda s: s.__setitem__('seam', {'enabled': True})), 'seams are compiled by Python'),
+            'seam-enabled-beside-slice': (edit(lambda s: s.update(slice={'enabled': True}, seam={'enabled': True})),
+                                          'seams are compiled by Python'),
             'explicit-reuse': (edit(lambda s: (s.__setitem__('allow_source_reuse', True),
                                                s['loops'][1].__setitem__('bank', ['media-1']))), 'reuse'),
             'unused-source': (edit(add_source), 'filler'),
@@ -340,6 +446,25 @@ class CompilerParityTests(unittest.TestCase):
             'trim-beyond-source': (edit(lambda s: s['loops'][0].__setitem__('trim', ['0', '9'])), 'trim'),
             'lone-surrogate': (edit(lambda s: s['layouts']['portrait'].__setitem__('name', 'x\ud800')),
                                'well-formed'),
+            'zero-loops': (edit(lambda s: s.update(loops=[], sources=s['sources'][:1])), 'loop count must be 1..32'),
+            'thirty-three-loops': (n_loops(33), 'loop count must be 1..32'),
+            'per-loop-slice': (edit(lambda s: s['loops'][0].__setitem__('slice', {'enabled': True})),
+                               'unsupported fields'),
+            'slice-full-width': (edit(lambda s: s.__setitem__('slice', {'enabled': True, 'width': '1'})),
+                                 'slice.width'),
+            'slice-unknown-key': (edit(lambda s: s.__setitem__('slice', {'enabled': True, 'x': '0'})),
+                                  'unsupported fields'),
+            'slice-enabled-string': (edit(lambda s: s.__setitem__('slice', {'enabled': 'yes'})), 'boolean'),
+            'layout-unknown-key': (edit(lambda s: s['layouts']['portrait'].__setitem__('gutter', '0')),
+                                   'unsupported fields'),
+            'cell-unknown-key': (edit(lambda s: s['layouts']['portrait']['cells'][0].__setitem__('z', 0)),
+                                 'unsupported fields'),
+            'full-bleed-with-gaps': (edit(lambda s: s['layouts']['portrait'].__setitem__('full_bleed', True)),
+                                     'tile the unit square'),
+            'presentation-missing-keys': (edit(lambda s: s['layouts']['portrait'].__setitem__(
+                'presentation', {'overlap_px': 2})), 'missing fields'),
+            'lateral-offset-without-jitter': (edit(lambda s: s['layouts']['portrait']['cells'][0].__setitem__(
+                'lateral_offset', '0')), 'lateral_jitter > 0'),
         }
         names = [*python_accepts, *python_rejects]
         states = [state for state, _ in (*python_accepts.values(), *python_rejects.values())]
@@ -483,6 +608,460 @@ class CompilerParityTests(unittest.TestCase):
         self.assertEqual(hashed['value'], hashlib.sha256(c.canonical_json(value).encode()).hexdigest())
 
 
+class LoopCountTests(unittest.TestCase):
+    """The browser subset is N=1..12: one and eight loops compile like Python; 0 and 13 refuse."""
+
+    def grid_state(self, count: int, frames: int = 48) -> dict:
+        sources = caller_sources(count, [f'{5 + k}/2' for k in range(count)])
+        cells = [dict(loop=f'loop-{i + 1}', rect=[f'{i}/{count}', '0', f'1/{count}', '1'], fit='cover',
+                      focal=['1/2', '1/2']) for i in range(count)]
+        return dict(schema_version=1, engine_version='1.0.0', rng='sha256-counter-v1', seed=7, fps=24,
+                    frames=frames, allow_source_reuse=False, sources=sources,
+                    loops=[dict(id=f'loop-{i}', bank=[f'media-{i}'], offset=f'{i}/3', rate=f'{20 + i}/20',
+                                period=sources[i - 1]['duration'], epoch=0, held=False) for i in range(1, count + 1)],
+                    layouts={o: dict(name=f'grid-{count}-{o}', cells=copy.deepcopy(cells)) for o in c.ORIENTATIONS},
+                    events=[], audio=dict(mode='none', routing=None, generative=None))
+
+    def test_supported_counts_are_one_to_twelve(self):
+        script = 'const C = require(process.argv[1]); process.stdout.write(JSON.stringify(' \
+                 '[C.SUPPORTED_LOOP_COUNTS, C.MIN_LOOPS, C.MAX_LOOPS, Object.isFrozen(C.SUPPORTED_LOOP_COUNTS)]))'
+        completed = subprocess.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
+                                   check=True, timeout=60)
+        self.assertEqual(json.loads(completed.stdout), [list(range(1, 13)), 1, 12, True])
+
+    def test_one_and_eight_loops_compile_like_python(self):
+        states = {count: self.grid_state(count) for count in (1, 8, 12)}
+        results = node(*(['compilePlan', state] for state in states.values()))
+        for (count, state), result in zip(states.items(), results):
+            with self.subTest(count=count):
+                self.assertTrue(result['ok'], result)
+                self.assertEqual(json.dumps(result['value']), json.dumps(compile_plan(state)))
+                self.assertEqual(len(result['value']['tracks']), count)
+
+    def test_zero_and_thirteen_loops_are_refused(self):
+        zero = self.grid_state(1)
+        zero.update(loops=[])
+        thirteen = self.grid_state(13)
+        compile_plan(thirteen)  # Python compiles it: the refusal is the browser subset, not the engine guard
+        with self.assertRaises(c.StateError):
+            compile_plan(zero)
+        refused_zero, refused_thirteen = node(['compilePlan', zero], ['compilePlan', thirteen])
+        self.assertFalse(refused_zero['ok'])
+        self.assertFalse(refused_zero['unsupported'])
+        self.assertRegex(refused_zero['message'], 'loop count must be 1..32')
+        self.assertFalse(refused_thirteen['ok'])
+        self.assertTrue(refused_thirteen['unsupported'])
+        self.assertEqual(refused_thirteen['message'], 'outside the browser compiler subset: 13 loops; the browser '
+                         'compiler covers N=1..12 independent loops (no filler, no implicit duplication)')
+
+
+class SliceParityTests(unittest.TestCase):
+    """An enabled state-wide slice compiles in JavaScript to exactly Python's plan."""
+
+    def assertSamePlan(self, javascript: dict, python: dict):
+        self.assertEqual(javascript, python)
+        self.assertEqual(json.dumps(javascript), json.dumps(python))
+
+    @staticmethod
+    def span_at(track: dict, frame: int) -> dict:
+        return [span for span in track['spans'] if span['frame'] <= frame][-1]
+
+    def test_global_slice_matches_python_over_counts_orientations_and_period_wraps(self):
+        custom = CORPUS / 'valid' / 'strips-custom-preset.json'
+        states = {}
+        for count in PARITY_COUNTS:
+            states[count, 'no-slice'] = strips_state(count, None)
+            states[count, 'disabled-slice'] = strips_state(count, {'enabled': False, 'width': '1/3'})
+            states[count, 'strips-zoom'] = strips_state(count)
+            states[count, 'strips-zoom-text-seed'] = strips_state(count, seed='graine-\u00e9t\u00e9')
+            if count >= 2:  # landscape rows, portrait reversed, jitter and radius at their maxima
+                states[count, 'custom-preset'] = strips_state(count, preset=custom, fps=25, frames=250)
+        states[3, 'default-size'] = strips_state(3, {'enabled': True})
+        states[5, 'height-only'] = strips_state(5, {'enabled': True, 'height': '1/3'})
+        states[8, 'limit-denominator'] = strips_state(8, {'enabled': True, 'width': '123456789/987654321',
+                                                          'height': '999999999/1000000000'})
+        states[2, 'non-canonical-size'] = strips_state(2, {'enabled': True, 'width': '2/4', 'height': '06/10'})
+        held = states[1, 'held'] = strips_state(1, seed=2**40)
+        held['loops'][0].update(held=True, offset='50')
+        trimmed = states[5, 'trimmed-fps-30'] = strips_state(5, fps=30, frames=300)
+        for index, loop in enumerate(trimmed['loops']):
+            loop['trim'] = [f'{index}/10', trimmed['sources'][index]['duration']]
+        long = states[12, 'fps-60-long'] = strips_state(12, fps=60, frames=1200)
+        long['loops'][11]['offset'] = '999999'
+        for state in states.values():
+            c.validate_state(state)
+        keys = list(states)
+        results = node(*(['compilePlan', states[key]] for key in keys))
+        wraps = {}
+        for key, result in zip(keys, results):
+            state = states[key]
+            with self.subTest(case=key):
+                self.assertTrue(result['ok'], result)
+                plan, expected = result['value'], compile_plan(state)
+                self.assertSamePlan(plan, expected)
+                layouts = plan['layout_keyframes'][0]['layouts']
+                self.assertEqual(set(layouts), {'portrait', 'landscape'})
+                self.assertEqual(layouts, json.loads(json.dumps(state['layouts'])))
+                enabled = state.get('slice', {}).get('enabled', False)
+                self.assertEqual(plan['slice']['enabled'], enabled)
+                # Several times, every period wrap included: the active span carries resolve_at's window.
+                frames = sorted({0, 1, state['fps'] - 1, state['fps'], state['frames'] - 1,
+                                 *range(0, state['frames'], 7),
+                                 *(span['frame'] for track in plan['tracks'] for span in track['spans'])})
+                for frame in frames:
+                    resolved = {loop['id']: loop for loop in c.resolve_at(state, frame)['loops']}
+                    for track in plan['tracks']:
+                        span = self.span_at(track, frame)
+                        self.assertEqual(span.get('slice_rect'), resolved[track['id']].get('slice_rect'),
+                                         (key, frame, track['id']))
+                if enabled:
+                    windows = [len({tuple(span['slice_rect']) for span in track['spans']}) for track in plan['tracks']]
+                    wraps[key] = windows
+                    self.assertTrue(all('slice_rect' in span for track in plan['tracks'] for span in track['spans']))
+                else:
+                    self.assertFalse(any('slice_rect' in span for track in plan['tracks'] for span in track['spans']))
+        # Periods wrap: every unheld loop draws several windows in one piece; a held loop keeps one.
+        for key, windows in wraps.items():
+            with self.subTest(wraps=key):
+                if key == (1, 'held'):
+                    self.assertEqual(windows, [1])
+                else:
+                    self.assertGreaterEqual(min(windows), 3, windows)
+        self.assertEqual(results[keys.index((5, 'height-only'))]['value']['slice'],
+                         {'enabled': True, 'height': '1/3', 'width': '1/2'})
+        self.assertEqual(results[keys.index((2, 'non-canonical-size'))]['value']['slice'],
+                         {'enabled': True, 'width': '1/2', 'height': '3/5'})
+        # limit_denominator really ran: x = (v/1000)(1 - w) has a denominator above 10**9 before it.
+        rects = {tuple(span['slice_rect']) for track in results[keys.index((8, 'limit-denominator'))]['value']['tracks']
+                 for span in track['spans']}
+        self.assertTrue(any(Fraction(rect[0]).denominator > 1000 for rect in rects))
+
+    def test_strips_states_built_in_javascript_compile_like_python(self):
+        """The studio path: a bundle entry (layouts + slice) through buildState and compilePlan."""
+        bundle = layout_bundle_v2()
+        calls, expected = [], []
+        for count in PARITY_COUNTS:
+            entry = bundle['families']['strips']['counts'][str(count)]
+            state = strips_state(count)
+            data = dict(sources=state['sources'], seed=state['seed'], fps=24, frames=240, slice=entry['slice'],
+                        layouts={'portrait': entry['portrait'], 'landscape': entry['landscape']},
+                        loops=[dict(id=loop['id'], source=loop['bank'][0], offset=loop['offset'], rate=loop['rate'])
+                               for loop in state['loops']])
+            calls += [['buildState', data], ['compile', data]]
+            expected.append(state)
+        results = node(*calls)
+        for index, count in enumerate(PARITY_COUNTS):
+            built, plan = results[2 * index:2 * index + 2]
+            with self.subTest(count=count):
+                self.assertTrue(built['ok'] and plan['ok'], (built, plan))
+                self.assertEqual(built['value'], expected[index])
+                self.assertEqual(json.dumps(plan['value']), json.dumps(compile_plan(built['value'])))
+
+
+class StripsExpansionParityTests(unittest.TestCase):
+    """stripsLayouts, stripsSlice and adjacency give Python's canonical JSON byte for byte."""
+
+    def test_default_strips_match_python_for_every_count(self):
+        calls = []
+        for count in range(1, 13):
+            calls += [['stripsLayouts', count], ['stripsSlice', count]]
+        results = node(*calls, ['canonicalJson', json.loads(EXAMPLE_PRESET.read_text())],
+                       ['stripsLayouts', 0], ['stripsLayouts', 13], ['stripsLayouts', 3, 'authored'])
+        for count in range(1, 13):
+            layouts, size = results[2 * count - 2:2 * count]
+            with self.subTest(count=count):
+                self.assertTrue(layouts['ok'] and size['ok'], (layouts, size))
+                self.assertEqual(c.canonical_json(layouts['value']), c.canonical_json(strips_layouts(count)))
+                self.assertEqual(json.dumps(layouts['value']), json.dumps(strips_layouts(count)))
+                self.assertEqual(json.dumps(size['value']), json.dumps(strips_slice(count)))
+        self.assertEqual(results[24]['value'], c.canonical_json(DEFAULT_STRIPS_PRESET))
+        for result, code in zip(results[25:], ('count-range', 'count-range', 'preset')):
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['code'], code)
+        self.assertEqual(results[26]['message'], "strips preset 'strips' supports N=1..12; count 13 is refused "
+                         '(no filler, no duplication, never moved to another family)')
+
+    def test_default_preset_data_is_python_data(self):
+        script = 'const C = require(process.argv[1]); process.stdout.write(C.canonicalJson(C.DEFAULT_STRIPS_PRESET))'
+        completed = subprocess.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
+                                   check=True, timeout=60)
+        self.assertEqual(completed.stdout, c.canonical_json(DEFAULT_STRIPS_PRESET))
+
+    def test_preset_objects_are_checked_at_every_advertised_count(self):
+        """A preset object is refused when any count it advertises fails, not only the requested one."""
+        # N=2 alone is fine (s = 1/2); N=1 rounds 1/5 to an empty slice at quantum 1/2.
+        preset = {'format': 'simvltanea.layout-preset/1', 'name': 'zoomy', 'family': 'strips',
+                  'counts': {'min': 1, 'max': 2}, 'zoom': {'z1': '5', 'gamma': '1', 'quantum': 2}}
+        results = node(['stripsLayouts', 2, preset], ['stripsSlice', 2, preset])
+        for result, function in zip(results, (strips_layouts, strips_slice)):
+            with self.subTest(function=function.__name__):
+                with self.assertRaises(LayoutError) as caught:
+                    function(2, preset)
+                self.assertEqual(caught.exception.code, 'zoom')
+                self.assertFalse(result['ok'], result)
+                self.assertEqual((result['code'], result['message']), (caught.exception.code, str(caught.exception)))
+
+    def test_oversized_count_keys_are_refused_with_the_call_site_code(self):
+        """A 5000-digit count key is refused before conversion, with a bounded key excerpt.
+
+        The message is the one layout_presets._count_key gives since it checks the length before int()
+        (origin/main 404a71c). An older _count_key raises ValueError past 4300 digits, so the codes are
+        compared with Python under an unlimited int() digit limit.
+        """
+        key = '9' * 5000
+        base = {'format': 'simvltanea.layout-preset/1', 'name': 'huge', 'family': 'strips'}
+        cases = [('weights', {'weights': {'default': 'equal', 'by_count': {key: ['1']}}}, 'weights.by_count', 1, 12),
+                 ('focal', {'focal': {'default': ['1/2', '1/2'], 'by_index': {key: ['0', '0']}}}, 'focal.by_index',
+                  0, 11),
+                 ('zoom', {'zoom': {'table': {key: '1/2'}}}, 'zoom.table', 1, 12)]
+        results = node(*(['stripsLayouts', 1, {**base, **change}] for _, change, _, _, _ in cases))
+        limit = sys.get_int_max_str_digits()
+        sys.set_int_max_str_digits(0)
+        self.addCleanup(sys.set_int_max_str_digits, limit)
+        for (code, change, label, low, high), result in zip(cases, results):
+            with self.subTest(code=code):
+                with self.assertRaises(LayoutError) as caught:
+                    strips_layouts(1, {**base, **change})
+                self.assertEqual(caught.exception.code, code)
+                self.assertFalse(result['ok'], result)
+                self.assertEqual(result['code'], code)
+                self.assertEqual(result['message'], f'{label} key {key[:40]!r} must be an integer string in {low}..{high}')
+
+    def generated_presets(self, root: Path) -> list[Path]:
+        def preset(name, **changes):
+            data = {'format': 'simvltanea.layout-preset/1', 'name': name, 'family': 'strips', **changes}
+            path = root / f'{name}.json'
+            path.write_text(json.dumps(data, indent=1))
+            return path
+        primes = ['2', '3', '5', '7', '11', '13', '17', '19', '23', '29', '31', '37']
+        return [
+            preset('jitter-max', style={'corner_radius': '1/20', 'lateral_jitter': '1/20'}, overlap_px=8),
+            preset('jitter-max-b', style={'corner_radius': '0', 'lateral_jitter': '1/20'}),
+            preset('jitter-step', style={'corner_radius': '0', 'lateral_jitter': '1/1000'}),
+            preset('jitter-below-step', style={'corner_radius': '0', 'lateral_jitter': '1/1999'}),
+            preset('unequal', weights={'default': 'equal', 'by_count': {
+                str(n): primes[:n][::-1] if n % 2 else [f'{k + 1}/{n}' for k in range(n)] for n in range(1, 13)}}),
+            # Edges and sizes at denominator exactly 10**9: the largest the weights bound accepts.
+            preset('weights-bound', weights={'default': 'equal', 'by_count': {'2': ['999999999', '1']}}),
+            preset('spelled', weights={'default': 'equal', 'by_count': {
+                '4': ['0.5', ' 1/3 ', '1_0', '1 / 3'], '3': ['1e1', '+2', '25E-1']}}),
+            preset('turned', orientations={'portrait': {'direction': 'columns', 'order': 'reverse'},
+                                           'landscape': {'direction': 'rows', 'order': 'reverse'}},
+                   focal={'default': ['0', '1'], 'by_index': {'0': ['1/3', '2/3'], '11': ['1', '0']}}),
+            preset('gamma-zero', zoom={'gamma': '0', 'z1': '7/2'}),
+            preset('gamma-two', zoom={'gamma': '2', 'z1': '50', 'quantum': 97}),
+            preset('gamma-fine', zoom={'gamma': '99/100', 'z1': '9', 'quantum': 999983, 'min_zoom': '1001/1000'}),
+            preset('gamma-tiny', zoom={'gamma': '1/100', 'z1': '3', 'quantum': 1000000}),
+            preset('tiny-z1', zoom={'z1': '1/1000000000', 'gamma': '3/5'}),
+            preset('table', counts={'min': 4, 'max': 9}, zoom={'table': {'9': '1/1000', '4': '9/10', '6': '1/2'}}),
+            preset('contain', fit='contain', full_bleed=False, overlap_px=0),
+        ]
+
+    def test_preset_files_expand_like_python(self):
+        with scratch() as tmp:
+            files = [EXAMPLE_PRESET, *(CORPUS / name for name in json.loads((CORPUS / 'corpus.json').read_text())['valid']),
+                     *self.generated_presets(Path(tmp))]
+            results = node_layout_files((path, str(path)) for path in files)
+            expanded = 0
+            for path, result in zip(files, results):
+                expected = python_layout_file(path)
+                with self.subTest(file=path.name):
+                    self.assertTrue(expected['ok'], expected)
+                    self.assertTrue(result['ok'], result)
+                    self.assertEqual(result['data'], expected['data'])
+                    self.assertEqual(sorted(result['counts'], key=int), sorted(expected['counts'], key=int))
+                    data = json.loads(path.read_text())
+                    for count, values in expected['counts'].items():
+                        mine = result['counts'][count]
+                        self.assertEqual(mine['adjacency'], values['adjacency'], count)
+                        if 'layouts' in values:
+                            expanded += 1
+                            self.assertEqual(mine['layouts'], values['layouts'], count)
+                            self.assertEqual(mine['slice'], values['slice'], count)
+                            self.assertEqual(mine['entry'], c.canonical_json(
+                                {'layouts': json.loads(values['layouts']), 'slice': json.loads(values['slice'])}))
+                        else:
+                            self.assertEqual(mine['adjacency_raw'], values['adjacency'])
+                            canonical = copy.deepcopy({o: data[o] for o in c.ORIENTATIONS})
+                            for layout in canonical.values():
+                                for cell in layout['cells']:
+                                    for key in ('rect', 'focal'):
+                                        cell[key] = [str(c.rational(v, key)) for v in cell[key]]
+                                    if 'lateral_offset' in cell:
+                                        cell['lateral_offset'] = str(c.rational(cell['lateral_offset'], 'offset'))
+                                for key in ('corner_radius', 'lateral_jitter'):
+                                    if 'presentation' in layout:
+                                        layout['presentation'][key] = str(c.rational(layout['presentation'][key], key))
+                            self.assertEqual(mine['entry'], c.canonical_json({'layouts': canonical, 'slice': None}))
+            self.assertGreater(expanded, 150)
+            # The maxima really are exercised: offsets reach both signs and the unequal weights differ.
+            jitter = json.loads(results[files.index(Path(tmp) / 'jitter-max.json')]['counts']['12']['layouts'])
+            offsets = [Fraction(cell['lateral_offset']) for cell in jitter['portrait']['cells']]
+            self.assertTrue(min(offsets) < 0 < max(offsets) and max(map(abs, offsets)) <= Fraction(1, 20))
+            unequal = json.loads(results[files.index(Path(tmp) / 'unequal.json')]['counts']['5']['layouts'])
+            self.assertEqual(len({cell['rect'][3] for cell in unequal['portrait']['cells']}), 5)
+
+
+class LayoutFileErrorParityTests(unittest.TestCase):
+    """Invalid layout files fail in JavaScript with Python's LayoutError code and message."""
+
+    def assertSameFailure(self, path: Path, result: dict, code: str | None = None):
+        expected = python_layout_file(path)
+        self.assertFalse(expected['ok'], f'{path.name} is valid in Python')
+        self.assertFalse(result['ok'], f'{path.name} loaded in JavaScript: {result}')
+        self.assertEqual(result['code'], expected['code'], (result['message'], expected['message']))
+        if code is not None:
+            self.assertEqual(expected['code'], code)
+        if expected['code'] == 'json':
+            # Syntax wording comes from each JSON decoder; both name the file first.
+            self.assertTrue(result['message'].startswith(f'{path}: '), result['message'])
+        else:
+            self.assertEqual(result['message'], expected['message'])
+
+    def test_conformance_corpus_fails_with_the_same_codes(self):
+        manifest = json.loads((CORPUS / 'corpus.json').read_text())
+        items = list(manifest['invalid'].items())
+        results = node_layout_files((CORPUS / name, str(CORPUS / name)) for name, _ in items)
+        for (name, code), result in zip(items, results):
+            with self.subTest(file=name):
+                self.assertSameFailure(CORPUS / name, result, code)
+        self.assertEqual(len(results), 39)
+
+    def test_pair_files_beyond_the_compiler_subset_are_refused_when_described(self):
+        # Python accepts pairs of up to 32 loops; the studio asks describeLayoutFile what a file offers, so a pair
+        # the compiler cannot play must be refused there, before anyone picks videos for it.
+        def pair_of(count):
+            cells = lambda: [{'loop': f'loop-{i + 1}', 'rect': ['0', f'{i}/{count}', '1', f'1/{count}'],
+                              'fit': 'cover', 'focal': ['1/2', '1/2']} for i in range(count)]
+            return {'format': 'simvltanea.layout-pair/1', 'count': count,
+                    'portrait': {'name': f'rows-{count}', 'cells': cells()},
+                    'landscape': {'name': f'rows-{count}', 'cells': cells()}}
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = {}
+            for count in (12, 13, 32):
+                paths[count] = Path(tmp) / f'rows-{count}.json'
+                paths[count].write_text(json.dumps(pair_of(count)))
+                self.assertTrue(python_layout_file(paths[count])['ok'], count)  # valid in Python at every count
+            results = node_layout_files((paths[count], str(paths[count])) for count in (12, 13, 32))
+        self.assertTrue(results[0]['ok'], results[0])
+        for count, result in zip((13, 32), results[1:]):
+            with self.subTest(count=count):
+                self.assertFalse(result['ok'], result)
+                self.assertEqual(result['name'], 'CompilerError')
+                self.assertIn(f'places {count} loops; the browser compiler covers N=1..12', result['message'])
+
+    def test_mutated_files_fail_like_python(self):
+        pair = json.loads((CORPUS / 'valid' / 'strips-3-pair.json').read_text())
+        base = {'format': 'simvltanea.layout-preset/1', 'name': 'm', 'family': 'strips'}
+
+        def mutate_pair(change):
+            data = copy.deepcopy(pair)
+            change(data)
+            return json.dumps(data)
+
+        texts = {
+            'float-overlap': json.dumps({**base, 'overlap_px': 2}).replace('"overlap_px": 2', '"overlap_px": 2.0'),
+            'float-count-min': json.dumps({**base, 'counts': {'min': 2, 'max': 4}}).replace('"min": 2', '"min": 2.0'),
+            'exponent-quantum': json.dumps({**base, 'zoom': {'quantum': 1000}}).replace('1000', '1e3'),
+            'nan': json.dumps(base)[:-1] + ', "overlap_px": NaN}',
+            'infinity': json.dumps(base)[:-1] + ', "overlap_px": -Infinity}',
+            'nested-duplicate': json.dumps(base)[:-1] + ', "counts": {"min": 1, "min": 2}}',
+            'bom': '\ufeff' + json.dumps(base),
+            'trailing-comma': json.dumps(base)[:-1] + ',}',
+            'empty': '',
+            'extra-data': json.dumps(base) + ' {}',
+            'top-level-array': '[]',
+            'no-format': json.dumps({'name': 'x'}),
+            'format-quote': json.dumps({**base, 'format': "it's"}),
+            'format-null': json.dumps({**base, 'format': None}),
+            'format-list': json.dumps({**base, 'format': [1, 'a', True, {'b': None}]}),
+            'format-float': json.dumps({**base, 'format': 1e16}),
+            'format-small-float': json.dumps({**base, 'format': 0.0001}),
+            'weights-order': '{"format": "simvltanea.layout-preset/1", "name": "m", "family": "strips", '
+                             '"weights": {"default": "equal", "by_count": {"12": ["1"], "3": ["1", "0", "1"]}}}',
+            'weights-key': json.dumps({**base, 'weights': {'default': 'equal', 'by_count': {'03': ['1', '1', '1']}}}),
+            'weights-huge-exponent': json.dumps({**base, 'weights': {'default': 'equal',
+                                                                     'by_count': {'2': ['1e999999', '1']}}}),
+            'weights-tiny-exponent': json.dumps({**base, 'weights': {'default': 'equal',
+                                                                     'by_count': {'2': ['1e-50000', '1']}}}),
+            'weights-bool': json.dumps({**base, 'weights': {'default': 'equal', 'by_count': {'2': [True, '1']}}}),
+            'weights-huge-integer': json.dumps({**base, 'weights': {'default': 'equal',
+                                                                    'by_count': {'2': [10**30, 1]}}}),
+            'weights-size-denominator': json.dumps({**base, 'weights': {'default': 'equal',
+                                                                        'by_count': {'2': ['1', '1000000000']}}}),
+            'weights-edge-denominator': json.dumps({**base, 'weights': {'default': 'equal',
+                                                                        'by_count': {'2': ['2', '999999999']}}}),
+            'focal-index-range': json.dumps({**base, 'counts': {'min': 1, 'max': 3},
+                                             'focal': {'default': ['1/2', '1/2'], 'by_index': {'3': ['0', '0']}}}),
+            'min-zoom-empty-slice': json.dumps({**base, 'zoom': {'min_zoom': '1000', 'quantum': 2}}),
+            'table-not-multiple': json.dumps({**base, 'zoom': {'table': {'3': '1/3'}}}),
+            'gamma-denominator': json.dumps({**base, 'zoom': {'gamma': '1/101'}}),
+            'curve': json.dumps({**base, 'zoom': {'curve': 'exponential'}}),
+            'orientation-not-object': json.dumps({**base, 'orientations': {'portrait': 'rows'}}),
+            'name-invalid': json.dumps({**base, 'name': 'has space'}),
+            'counts-inverted': json.dumps({**base, 'counts': {'min': 5, 'max': 4}}),
+            'radius-reverse-single': json.dumps({**base, 'counts': {'min': 1, 'max': 2},
+                                                 'style': {'corner_radius': '1/40', 'lateral_jitter': '0'},
+                                                 'orientations': {'portrait': {'order': 'reverse'}}}),
+            'pair-count-float': mutate_pair(lambda d: d.__setitem__('count', 3)).replace('"count": 3', '"count": 3.0'),
+            'pair-count-33': mutate_pair(lambda d: d.__setitem__('count', 33)),
+            # The cell count is checked before any per-cell geometry, so the bad fit on cell 0 is never reached.
+            'pair-count-before-geometry': mutate_pair(lambda d: (
+                d.__setitem__('count', 2), d['portrait']['cells'][0].__setitem__('fit', 'stretch'))),
+            'pair-portrait-string': mutate_pair(lambda d: d.__setitem__('portrait', 'rows')),
+            'pair-landscape-first': json.dumps({'format': pair['format'], 'count': 3,
+                                                'landscape': {**pair['landscape'], 'name': ''},
+                                                'portrait': {**pair['portrait'], 'gutter': 1}}),
+            'pair-rect-infinite': mutate_pair(lambda d: d['portrait']['cells'][0].__setitem__('rect', [0, 0, 1, 1e400])),
+            'pair-focal-bool': mutate_pair(lambda d: d['portrait']['cells'][1].__setitem__('focal', [True, '1/2'])),
+            'pair-focal-second-bad': mutate_pair(lambda d: d['portrait']['cells'][1].__setitem__('focal', ['1/2', 'x'])),
+            'pair-loop-id': mutate_pair(lambda d: d['landscape']['cells'][2].__setitem__('loop', 'loop 3')),
+            'pair-jitter-offset-decimal': mutate_pair(lambda d: (
+                d['portrait']['presentation'].__setitem__('lateral_jitter', '1/40'),
+                [cell.__setitem__('lateral_offset', '0.03') for cell in d['portrait']['cells']])),
+            'pair-radius-text': mutate_pair(lambda d: d['portrait']['presentation'].__setitem__('corner_radius', '1/0')),
+            'pair-overlap-bool': mutate_pair(lambda d: d['portrait']['presentation'].__setitem__('overlap_px', True)),
+            'pair-full-bleed-null': mutate_pair(lambda d: d['portrait'].__setitem__('full_bleed', None)),
+            'pair-cells-object': mutate_pair(lambda d: d['portrait'].__setitem__('cells', {})),
+            'pair-duplicate-loop': mutate_pair(lambda d: d['portrait']['cells'][2].__setitem__('loop', 'loop-1')),
+            'pair-control-character': json.dumps(pair).replace('strips-3-portrait', 'strips-3\\u0000') + '',
+            'pair-raw-control-character': json.dumps(pair).replace('strips-3-portrait', 'strips\t3'),
+            'pair-bad-escape': json.dumps(pair).replace('strips-3-portrait', 'strips\\q'),
+        }
+        with scratch() as tmp:
+            paths = {}
+            for name, value in texts.items():
+                paths[name] = Path(tmp) / f'{name}.json'
+                paths[name].write_text(value, encoding='utf-8')
+            paths['not-utf8'] = Path(tmp) / 'not-utf8.json'
+            paths['not-utf8'].write_bytes(b'{"format": "\xff"}')
+            results = node_layout_files((path, str(path)) for path in paths.values())
+            # An escaped NUL is a legal JSON string and layout name; a reversed pair rounds only shared corners.
+            valid = {'pair-control-character', 'radius-reverse-single'}
+            codes = {'weights-size-denominator': 'weights', 'weights-edge-denominator': 'weights',
+                     'pair-count-before-geometry': 'cell-count'}
+            for (name, path), result in zip(paths.items(), results):
+                with self.subTest(case=name):
+                    if name in valid:
+                        self.assertTrue(python_layout_file(path)['ok'])
+                        self.assertTrue(result['ok'], result)
+                    else:
+                        self.assertSameFailure(path, result, codes.get(name))
+
+    def test_valid_spellings_and_the_non_ascii_digit_deviation(self):
+        """Python's Fraction() spellings load; non-ASCII digits are the one documented refusal."""
+        base = {'format': 'simvltanea.layout-preset/1', 'name': 'digits', 'family': 'strips',
+                'weights': {'default': 'equal', 'by_count': {'2': ['\u0661', '1']}}}
+        with scratch() as tmp:
+            path = Path(tmp) / 'digits.json'
+            path.write_text(json.dumps(base, ensure_ascii=False), encoding='utf-8')
+            self.assertTrue(python_layout_file(path)['ok'])
+            (result,) = node_layout_files([(path, 'digits.json')])
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['code'], 'weights')
+        self.assertEqual(result['message'], 'digits.json, count 2: weights.by_count: invalid rational')
+
+
 class LayoutBundleTests(unittest.TestCase):
     def test_bundle_is_derived_from_authored_geometry(self):
         bundle = authored_layout_bundle()
@@ -502,12 +1081,80 @@ class LayoutBundleTests(unittest.TestCase):
                         self.assertEqual((cell['fit'], cell['focal']), ('cover', ['1/2', '1/2']))
             self.assertEqual(pair, authored_state(int(count))['layouts'])
 
-    def test_module_entry_prints_the_bundle(self):
+    def run_module(self, *arguments: str) -> bytes:
         src = Path(__file__).resolve().parents[2]
         env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(src), str(src.parent)]))
-        completed = subprocess.run([sys.executable, '-m', 'simvltanea.browser.layout_bundle'], env=env,
-                                   capture_output=True, text=True, check=True, timeout=120)
-        self.assertEqual(json.loads(completed.stdout), authored_layout_bundle())
+        return subprocess.run([sys.executable, '-m', 'simvltanea.browser.layout_bundle', *arguments], env=env,
+                              capture_output=True, check=True, timeout=120).stdout
+
+    def test_module_entry_prints_the_bundle(self):
+        output = self.run_module()
+        self.assertEqual(json.loads(output), authored_layout_bundle())
+
+    def test_default_output_is_the_legacy_bundle_byte_for_byte(self):
+        """No flag (and --format 1) keeps the pre-v2 bytes; the digest was taken before v2 existed."""
+        for arguments in ((), ('--format', '1')):
+            with self.subTest(arguments=arguments):
+                output = self.run_module(*arguments)
+                self.assertEqual(hashlib.sha256(output).hexdigest(), LEGACY_BUNDLE_SHA256)
+                self.assertEqual(output, (render_bundle(1) + '\n').encode())
+
+    def test_format_two_has_the_specified_shape(self):
+        output = self.run_module('--format', '2')
+        self.assertEqual(output, (render_bundle(2) + '\n').encode())
+        bundle = json.loads(output)
+        self.assertEqual(bundle, layout_bundle_v2())
+        self.assertEqual(list(bundle), ['format', 'default_family', 'families'])
+        self.assertEqual((bundle['format'], bundle['default_family']), ('simvltanea.layout-bundle/2', 'strips'))
+        self.assertEqual(list(bundle['families']), ['authored', 'strips'])
+        authored, strips = bundle['families']['authored'], bundle['families']['strips']
+        self.assertEqual(authored, {'counts': authored_layout_bundle()})
+        self.assertEqual(list(authored['counts']), [str(n) for n in range(2, 8)])
+        self.assertEqual(strips['preset'], {'format': 'simvltanea.layout-preset/1', 'name': 'strips'})
+        self.assertEqual(list(strips['counts']), [str(n) for n in range(1, 13)])
+        for count, entry in strips['counts'].items():
+            with self.subTest(count=count):
+                n = int(count)
+                self.assertEqual(list(entry), ['portrait', 'landscape', 'slice', 'adjacency'])
+                self.assertEqual({'portrait': entry['portrait'], 'landscape': entry['landscape']}, strips_layouts(n))
+                self.assertEqual(entry['slice'], strips_slice(n))
+                self.assertEqual(entry['adjacency'], {o: adjacency(entry[o]['cells']) for o in c.ORIENTATIONS})
+                self.assertEqual(len(entry['adjacency']['portrait']), n - 1)
+                self.assertEqual(entry, strips_entry(n))
+        self.assertEqual(strips['counts']['5']['slice'], {'enabled': True, 'width': '41/125', 'height': '41/125'})
+        self.assertEqual(strips['counts']['3']['adjacency']['portrait'],
+                         [{'a': 0, 'b': 1, 'edge': 'bottom', 'span': ['0', '1']},
+                          {'a': 1, 'b': 2, 'edge': 'bottom', 'span': ['0', '1']}])
+
+    def test_compiler_reads_both_bundle_formats(self):
+        legacy, v2 = authored_layout_bundle(), layout_bundle_v2()
+        broken = copy.deepcopy(v2)
+        broken['families']['strips']['counts']['13'] = broken['families']['strips']['counts']['12']
+        results = node(['layoutFamilies', legacy], ['layoutFamilies', v2],
+                       ['layoutEntry', legacy, 'authored', 3], ['layoutEntry', v2, 'authored', 3],
+                       ['layoutEntry', v2, 'strips', 5], ['layoutEntry', v2, 'authored', 8],
+                       ['layoutEntry', v2, 'strips', 13], ['layoutEntry', legacy, 'strips', 5],
+                       ['layoutFamilies', broken], ['layoutFamilies', dict(v2, format='simvltanea.layout-bundle/3')],
+                       ['layoutFamilies', dict(v2, default_family='grid')])
+        self.assertEqual(results[0]['value'], {'format': 'simvltanea.layout-bundle/1', 'default_family': 'authored',
+                                               'families': {'authored': {'counts': list(range(2, 8)), 'preset': None}}})
+        self.assertEqual(results[1]['value'], {'format': 'simvltanea.layout-bundle/2', 'default_family': 'strips',
+                                               'families': {'authored': {'counts': list(range(2, 8)), 'preset': None},
+                                                            'strips': {'counts': list(range(1, 13)),
+                                                                       'preset': v2['families']['strips']['preset']}}})
+        self.assertEqual(results[2]['value'], {'layouts': legacy['3'], 'slice': None, 'adjacency': None})
+        self.assertEqual(results[3]['value'], results[2]['value'])
+        entry = strips_entry(5)
+        self.assertEqual(results[4]['value'], {'layouts': {'portrait': entry['portrait'], 'landscape': entry['landscape']},
+                                               'slice': entry['slice'], 'adjacency': entry['adjacency']})
+        for result, pattern in zip(results[5:], ('authored family has no layout for 8 loops; it covers 2, 3, 4, 5, 6, 7',
+                                                  'strips family has no layout for 13 loops',
+                                                  'no family "strips"', 'count 13; the browser compiler covers N=1..12',
+                                                  'format must be simvltanea.layout-bundle/2', 'default_family')):
+            with self.subTest(pattern=pattern):
+                self.assertFalse(result['ok'], result)
+                self.assertEqual(result['name'], 'CompilerError')
+                self.assertIn(pattern, result['message'])
 
 
 class StagingParityTests(unittest.TestCase):
