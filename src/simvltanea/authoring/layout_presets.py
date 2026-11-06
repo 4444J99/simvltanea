@@ -230,7 +230,10 @@ def _validate_layout(layout: Any, loop_ids: set[str] | None, where: _Where) -> l
     _require(isinstance(layout["name"], str) and bool(layout["name"]), where, "wrong-type",
              "layout name is required", legacy=True)
     _require(isinstance(layout["cells"], list), where, "wrong-type", "cells must be an array", legacy=True)
-    # Count before geometry: the pairwise overlap loop is quadratic in len(cells).
+    # Count before geometry: the pairwise overlap loop is quadratic in len(cells). State validation
+    # (loop_ids) needs exactly one cell per loop, so a longer array is refused with the same mapping error.
+    _require(loop_ids is None or len(layout["cells"]) == len(loop_ids), where, "mapping",
+             "each orientation must map every loop exactly once", legacy=True)
     _require(loop_ids is not None or where.count is None or len(layout["cells"]) == where.count, where,
              "cell-count", f"has {len(layout['cells'])} cells, expected {where.count}")
     seen: list[str] = []
@@ -354,8 +357,11 @@ def _section(raw: Mapping, key: str, fields: set[str], where: _Where) -> dict[st
 
 
 def _count_key(key: Any, low: int, high: int, label: str, where: _Where, code: str) -> int:
-    _require(isinstance(key, str) and key.isascii() and key.isdigit() and str(int(key)) == key
-             and low <= int(key) <= high, where, code, f"{label} key {key!r} must be an integer string in {low}..{high}")
+    # The length check comes first: int() raises a plain ValueError for digit strings over 4300 characters,
+    # and every valid key has at most len(str(high)) digits.
+    _require(isinstance(key, str) and key.isascii() and key.isdigit() and len(key) <= len(str(high))
+             and str(int(key)) == key and low <= int(key) <= high, where, code,
+             f"{label} key {str(key)[:40]!r} must be an integer string in {low}..{high}")
     return int(key)
 
 
