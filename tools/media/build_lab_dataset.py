@@ -93,7 +93,7 @@ def opaque_ids(root: pathlib.Path):
         except FileExistsError:
             pass
         temporary.unlink()
-    key = bytes.fromhex(path.read_text().strip())
+    key = bytes.fromhex(path.read_text(encoding="utf-8").strip())
     return lambda uuid: hmac.new(key, uuid.lower().encode(), hashlib.sha256).hexdigest()[:20]
 
 
@@ -183,7 +183,7 @@ def convert_still(source: pathlib.Path, target: pathlib.Path) -> bool:
 def audio_screen(root: pathlib.Path, uuid: str) -> dict:
     """Derived fields only from screen_audio.py, never the transcript; ``{"screened": false}`` without a record."""
     try:
-        record = json.loads((root / "analysis" / "audio" / f"{uuid}.json").read_text())
+        record = json.loads((root / "analysis" / "audio" / f"{uuid}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"screened": False}
     if not isinstance(record, dict) or record.get("screened") is not True:
@@ -209,7 +209,7 @@ def eligible(record) -> dict | None:
 
 def write_json(path: pathlib.Path, value) -> None:
     temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(value, separators=(",", ":")))
+    temporary.write_text(json.dumps(value, separators=(",", ":")), encoding="utf-8")
     os.replace(temporary, path)
 
 
@@ -247,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     seen_ids: set[str] = set()
     for tag_file in sorted((root / "analysis" / "tags").glob("*.json")):
         try:
-            record = json.loads(tag_file.read_text())
+            record = json.loads(tag_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             skipped += 1
             continue

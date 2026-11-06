@@ -75,7 +75,7 @@ def transcribe(mov: pathlib.Path, work: pathlib.Path, model: pathlib.Path) -> st
     if result.returncode != 0:
         return None
     transcript = base.with_suffix(".txt")
-    return transcript.read_text(errors="replace") if transcript.exists() else ""
+    return transcript.read_text(encoding="utf-8", errors="replace") if transcript.exists() else ""
 
 
 def analyse(text: str) -> dict:
