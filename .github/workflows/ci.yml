@@ -165,6 +165,7 @@ jobs:
       - name: Verify Layouts
         run: |
           python3 -m tools.verification.verify_layouts --examples
+          python3 -m tools.verification.verify_layouts --presets examples/layout-presets/strips.json
 
       - name: Report Edition Status
         run: |
