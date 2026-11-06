@@ -21,6 +21,8 @@ SCRIPT_DIR = REPO_ROOT
 DEFAULT_PROJECT = EXAMPLES_DIR / "project.example.json"
 DEFAULT_LOCAL_PROJECT = WORK_DIR / "project.folder-local.json"
 DEFAULT_OUTPUT_DIR = SAMPLES_DIR / "folder-import"
+# Windows refuses os.symlink without administrator rights or Developer Mode, so it copies by default.
+DEFAULT_MODE = "copy" if os.name == "nt" else "symlink"
 VIDEO_EXTENSIONS = {".3gp", ".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"}
 
 
@@ -50,8 +52,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         choices=("copy", "symlink"),
-        default="symlink",
-        help="Stage media by copying files or by creating symlinks. Defaults to symlink.",
+        default=DEFAULT_MODE,
+        help="Stage media by copying files or by creating symlinks. "
+        "Defaults to symlink (copy on Windows).",
     )
     parser.add_argument(
         "--order",
@@ -129,7 +132,8 @@ def prepare_output_dir(output_dir: Path, keep_existing: bool, dry_run: bool) -> 
 
 
 def relative_to_base(path: Path, base: Path) -> str:
-    return os.path.relpath(path.absolute(), base.absolute())
+    # Forward slashes keep project JSON portable; on POSIX os.sep is already "/".
+    return os.path.relpath(path.absolute(), base.absolute()).replace(os.sep, "/")
 
 
 def normalize_export_paths(project: dict[str, Any], local_base: Path) -> None:

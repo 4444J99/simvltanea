@@ -134,7 +134,7 @@ def stage_shared_engine(output: Path) -> dict | None:
                    entrypoint=engine.pin['entrypoint'])
     receipt['release'] = engine.pin['release']['commit']
     (output / 'shared-engine.js').write_text(
-        (output / 'shared-engine.js').read_text()
+        (output / 'shared-engine.js').read_text(encoding="utf-8")
         + 'globalThis.__sharedEngineReceipt = '
         + json.dumps(receipt).replace('<', '\\u003c') + ';\n', encoding='utf-8')
     return receipt
@@ -293,7 +293,7 @@ def _build_preview_generation(state_path: Path, output: Path) -> dict:
         portable['audio']['source'] = plan['audio']['source']
     plan['origin_state_sha256'] = plan['state_sha256']
     plan['state_sha256'] = hashlib.sha256(c.canonical_json(portable).encode()).hexdigest()
-    (output / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
+    (output / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n', encoding="utf-8", newline="\n")
     c.save_state(portable, output / 'state.json')
     shutil.copyfile(HERE / 'browser.runtime.js', output / 'runtime.js')
     shared = stage_shared_engine(output)
@@ -309,8 +309,8 @@ def _build_preview_generation(state_path: Path, output: Path) -> dict:
         if shared else (
             '<script src="runtime.js" defer></script>\n'
             '<script>window.__sharedEngineUnavailable = '
-            + json.dumps((output / 'shared-engine-unavailable.txt').read_text()).replace('<', '\\u003c')
-            + ';</script>\n')))
+            + json.dumps((output / 'shared-engine-unavailable.txt').read_text(encoding="utf-8")).replace('<', '\\u003c')
+            + ';</script>\n')), encoding="utf-8", newline="\n")
     return plan
 
 
@@ -328,17 +328,20 @@ def _rename_preview(staging: Path, output: Path, *, exchange: bool) -> None:
         # Windows rename refuses an existing destination atomically.
         os.rename(staging, output)
         return
-    libc = ctypes.CDLL(None, use_errno=True)
     if sys.platform.startswith('linux'):
+        libc = ctypes.CDLL(None, use_errno=True)
         rename = libc.renameat2
         rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
                              ctypes.c_char_p, ctypes.c_uint]
         result = rename(-100, os.fsencode(staging), -100, os.fsencode(output), 2 if exchange else 1)
     elif sys.platform == 'darwin':
+        libc = ctypes.CDLL(None, use_errno=True)
         rename = libc.renamex_np
         rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
         result = rename(os.fsencode(staging), os.fsencode(output), 2 if exchange else 4)
     else:
+        # Includes Windows, which has no atomic directory exchange (and CDLL(None) would raise
+        # TypeError there): replacing an existing preview fails clearly; a new --out still works.
         raise OSError(errno.ENOTSUP, 'atomic preview directory exchange unavailable')
     if result != 0:
         code = ctypes.get_errno()
@@ -386,11 +389,11 @@ def _legacy_preview(output: Path) -> bool:
         return False
     try:
         state = c.load_state(output / 'state.json')
-        plan = json.loads((output / 'plan.json').read_text())
+        plan = json.loads((output / 'plan.json').read_text(encoding="utf-8"))
         if not isinstance(plan, dict) or plan.get('state_sha256') != hashlib.sha256(
                 c.canonical_json(state).encode()).hexdigest():
             return False
-        if f'<title>{PREVIEW_TITLE}</title>' not in (output / 'index.html').read_text():
+        if f'<title>{PREVIEW_TITLE}</title>' not in (output / 'index.html').read_text(encoding="utf-8"):
             return False
         assets = set(c.media_paths(state, output).values())
         soundtrack = c.soundtrack_path(state, output)
@@ -407,7 +410,7 @@ def _legacy_preview(output: Path) -> bool:
             if not re.fullmatch(r'[0-9a-f]{64}', str(plan.get('origin_state_sha256', ''))):
                 return False
             expected_plan['origin_state_sha256'] = plan['origin_state_sha256']
-            (reference / 'plan.json').write_text(json.dumps(expected_plan, indent=2) + '\n')
+            (reference / 'plan.json').write_text(json.dumps(expected_plan, indent=2) + '\n', encoding="utf-8", newline="\n")
             inventory = lambda root: {p.relative_to(root): p.is_dir() for p in root.rglob('*')}
             expected_inventory = inventory(reference)
             if inventory(output) != expected_inventory:
@@ -457,7 +460,7 @@ def _validate_preview_destination(state_path: Path, output: Path, *, tracked_out
         c.require(not any(path.is_symlink() for path in output.rglob('*')),
                   'preview destination must not be a symlink')
         marker = output / PREVIEW_MARKER
-        owned = marker.is_file() and marker.read_text() == 'simvltanea-preview-v1\n'
+        owned = marker.is_file() and marker.read_text(encoding="utf-8") == 'simvltanea-preview-v1\n'
         c.require(not any(output.iterdir()) or owned or _legacy_preview(output),
                   'existing preview destination lacks a generation ownership marker')
     return _directory_identity(output)
@@ -495,7 +498,7 @@ def build_preview(state_path: Path, output: Path) -> dict:
     publication_attempted = False
     try:
         plan = _build_preview_generation(state_path, staging)
-        (staging / PREVIEW_MARKER).write_text('simvltanea-preview-v1\n')
+        (staging / PREVIEW_MARKER).write_text('simvltanea-preview-v1\n', encoding="utf-8", newline="\n")
         if _validate_preview_destination(state_path, output) != expected_identity:
             raise OSError(errno.ESTALE, 'preview destination changed during staging', str(output))
         if expected_identity is not None:

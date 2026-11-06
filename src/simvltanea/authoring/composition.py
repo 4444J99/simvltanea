@@ -349,7 +349,7 @@ def media_paths(state: dict, root: Path, verify: bool = True) -> dict[str, Path]
             require(sha256_file(path) == src["sha256"], f"media hash mismatch: {src['id']}")
             probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                                     "-show_entries", "stream=width,height,codec_name,pix_fmt,duration", "-of", "json", str(path)],
-                                   check=True, capture_output=True, text=True)
+                                   check=True, capture_output=True, text=True, encoding="utf-8")
             streams = json.loads(probe.stdout).get("streams", [])
             require(bool(streams) and streams[0].get("width", 0) > 0, f"no video/image stream: {src['id']}")
             if src["kind"] == "still":
@@ -383,7 +383,7 @@ def soundtrack_path(state: dict, root: Path, verify: bool = True) -> Path | None
         require(sha256_file(path) == config["sha256"], "soundtrack media hash mismatch")
         result = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
                                  "-show_entries", "stream=duration,sample_rate,channels:format=duration",
-                                 "-of", "json", str(path)], check=True, capture_output=True, text=True)
+                                 "-of", "json", str(path)], check=True, capture_output=True, text=True, encoding="utf-8")
         metadata = json.loads(result.stdout)
         streams = metadata.get("streams", [])
         require(bool(streams) and int(streams[0].get("channels", 0)) > 0,

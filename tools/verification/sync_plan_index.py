@@ -16,7 +16,7 @@ def render(plans: Path, generated_roles: dict[str, str]) -> str:
         if not match or path.is_symlink():
             raise ValueError("dated plan has an unsafe or unsupported filename")
         date.fromisoformat(match[1])
-        heading = next((line[2:].strip() for line in path.read_text().splitlines() if line.startswith("# ")), None)
+        heading = next((line[2:].strip() for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("# ")), None)
         if not heading:
             raise ValueError("dated plan is missing its title")
         title = heading.replace("|", "\\|")
@@ -50,10 +50,10 @@ def main() -> int:
     if args.write:
         if target.is_symlink():
             raise ValueError("index cannot be a symlink")
-        if not target.exists() or target.read_text() != text:
-            target.write_text(text)
+        if not target.exists() or target.read_text(encoding="utf-8") != text:
+            target.write_text(text, encoding="utf-8", newline="\n")
         return 0
-    if not target.is_file() or target.is_symlink() or target.read_text() != text:
+    if not target.is_file() or target.is_symlink() or target.read_text(encoding="utf-8") != text:
         print("Plan index differs from dated sources; regenerate the current index only.")
         return 1
     print("Plan index matches dated sources and current layout roles.")

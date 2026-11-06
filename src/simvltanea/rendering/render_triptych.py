@@ -698,7 +698,7 @@ class FFmpegError(subprocess.CalledProcessError):
 
 
 def run(command: list[str]) -> None:
-    completed = subprocess.run(command, stderr=subprocess.PIPE, text=True, errors="replace")
+    completed = subprocess.run(command, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
     if completed.returncode:
         raise FFmpegError(completed.returncode, command, stderr=completed.stderr)
     if completed.stderr:
@@ -721,7 +721,7 @@ def probe_duration(path: Path) -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(path),
     ]
-    completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    completed = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8")
     try:
         duration = float(completed.stdout.strip())
     except ValueError as error:
@@ -745,7 +745,7 @@ def probe_has_audio(path: Path) -> bool:
         "csv=p=0",
         str(path),
     ]
-    completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    completed = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8")
     return bool(completed.stdout.strip())
 
 
@@ -755,7 +755,7 @@ def probe_audio_channels(path: Path) -> int:
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
          "stream=channels", "-of", "json", str(path)],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, encoding="utf-8",
     )
     streams = json.loads(result.stdout).get("streams", [])
     return int(streams[0].get("channels", 0)) if streams else 0

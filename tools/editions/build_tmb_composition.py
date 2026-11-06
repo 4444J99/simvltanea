@@ -254,7 +254,7 @@ def verify_staged_engine(preview: Path, engine) -> None:
     loader = preview / 'shared-engine.js'
     c.require(loader.is_file() and (preview / 'shared-engine-adapter.js').is_file(),
               'preview is missing the shared-engine binding')
-    match = re.search(r'globalThis\.__sharedEngineReceipt = (\{[^\n]+\});', loader.read_text())
+    match = re.search(r'globalThis\.__sharedEngineReceipt = (\{[^\n]+\});', loader.read_text(encoding="utf-8"))
     c.require(match is not None, 'preview has no staged engine receipt')
     staged = json.loads(match.group(1))
     c.require(staged.get('release') == engine.pin['release']['commit'] and

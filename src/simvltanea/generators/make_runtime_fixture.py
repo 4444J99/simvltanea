@@ -196,7 +196,7 @@ def prepare(root: Path = ROOT, slice_width: float = 0.5, slice_height: float = 0
     wrap=copy.deepcopy(c.load_state(root / 'state-3.json'));wrap['loops'][0]['trim']=['1','2']
     c.save_state(wrap,root/'state-trim.json');build_preview(root/'state-trim.json',root/'preview-trim')
     states += prepare_strips(root, sources, commands)
-    (root/'sources.json').write_text(json.dumps(dict(kind='original-synthetic',sources=sources,commands=commands),indent=2)+'\n')
+    (root/'sources.json').write_text(json.dumps(dict(kind='original-synthetic',sources=sources,commands=commands),indent=2)+'\n', encoding="utf-8", newline="\n")
     return states
 
 

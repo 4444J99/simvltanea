@@ -23,7 +23,7 @@ def discover_root() -> Path:
         for candidate in (start, *start.parents):
             project = candidate / "pyproject.toml"
             if project.is_file():
-                data = tomllib.loads(project.read_text())
+                data = tomllib.loads(project.read_text(encoding="utf-8"))
                 if data.get("project", {}).get("name") == "simvltanea":
                     return candidate
     # Installed packages use the caller's workspace, never site-packages, for output.
@@ -78,12 +78,12 @@ def load_layout(root: Path, manifest: Path | None = None) -> Layout:
         manifest = Path(explicit).expanduser()
     if manifest is None:
         project = root / "pyproject.toml"
-        data = tomllib.loads(project.read_text()) if project.is_file() else {}
+        data = tomllib.loads(project.read_text(encoding="utf-8")) if project.is_file() else {}
         configured = data.get("tool", {}).get("simvltanea", {}).get("layout")
         manifest = root / configured if configured else PACKAGE_DIR / "layout.toml"
     if not manifest.is_absolute():
         manifest = root / manifest
-    data = tomllib.loads(manifest.read_text())
+    data = tomllib.loads(manifest.read_text(encoding="utf-8"))
     roles = data.get("paths", {})
     required = _GENERATED_ROLES | {"generated", "examples", "fixtures", "artifact_fixture", "registry", "source", "package", "tools", "tests", "docs", "archive", "evidence", "config", "github", "editions"}
     if set(roles) != required:

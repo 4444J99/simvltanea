@@ -658,8 +658,9 @@ def relative_media(path: Path, site_dir: Path) -> str | None:
     if not path_inside(path, SCRIPT_DIR):
         if not (path.is_symlink() and lexical_path_inside(path, SCRIPT_DIR)):
             return None
-        return os.path.relpath(path.absolute(), site_dir.absolute())
-    return os.path.relpath(path.resolve(), site_dir.resolve())
+        return os.path.relpath(path.absolute(), site_dir.absolute()).replace(os.sep, "/")
+    # A site URL: forward slashes on every platform (on POSIX os.sep is already "/").
+    return os.path.relpath(path.resolve(), site_dir.resolve()).replace(os.sep, "/")
 
 
 def site_export_artifact_path(output_file: Path, site_dir: Path) -> Path | None:

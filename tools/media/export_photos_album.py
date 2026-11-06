@@ -32,7 +32,6 @@ Run:  python3 -m tools.media.export_photos_album --root /path/to/live-photos
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -51,11 +50,20 @@ from typing import Callable
 from tools.media.private_root import resolve_private_root
 from tools.media.video_geometry import display_size, first_stream, run_ffprobe, stream_rotation
 
+try:  # POSIX only. Elsewhere preflight() and acquire_lock() exit with NEEDS_MACOS_MESSAGE instead.
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+
 VIDEO_EXT = {".mov", ".mp4", ".m4v"}
 IMAGE_EXT = {".heic", ".jpg", ".jpeg", ".png"}  # candidates for the primary still; sidecars (.aae) are not
 ID_RE = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/L0/\d+")  # use fullmatch
 APPLESCRIPT_ERROR_RE = re.compile(r"\((-\d+)\)")
 RECEIPT_SCHEMA = "live-photo-export/v1"
+NEEDS_MACOS_MESSAGE = ("Photos export needs macOS (it drives Photos.app through osascript); on Windows, copy the "
+                       "clips from your phone or from an iCloud Photos web download into a folder and point the "
+                       "proxy, import_folder and render tools at that folder instead "
+                       "(see docs/authoring/WINDOWS_AND_MAC.md).")
 EXIT_FAILURES, EXIT_STOPPED, EXIT_METERED, EXIT_LOCKED, EXIT_IO_ERROR, EXIT_INTERRUPTED = 1, 2, 3, 4, 5, 130
 
 # AppleScript lives in Python strings (tools/ may only hold .py and .md) and is passed to
@@ -289,13 +297,13 @@ def rename_exported(folder: pathlib.Path, uuid: str,
         is_primary = path == videos[0] or path == primary_still
         stem = uuid if is_primary else f"{uuid}.extra{index}"
         temporary = folder / f".rename-{index}"
-        path.rename(temporary)
+        path.replace(temporary)  # os.replace: same as rename on POSIX, also overwrites on Windows
         staged.append((temporary, f"{stem}{path.suffix.lower()}", path == videos[0]))
     renamed = []
     primary_video = None
     for temporary, final_name, is_primary_video in staged:
         target = folder / final_name
-        temporary.rename(target)
+        temporary.replace(target)
         renamed.append(target)
         if is_primary_video:
             primary_video = target
@@ -456,7 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def preflight(launcher: tuple[str, ...]) -> None:
     if not launcher and sys.platform != "darwin":
-        raise SystemExit("export_photos_album needs macOS (osascript and Photos.app).")
+        raise SystemExit(NEEDS_MACOS_MESSAGE)
     if shutil.which("ffprobe") is None:
         raise SystemExit("ffprobe is required to verify exported clips; install FFmpeg first.")
 
@@ -466,8 +474,10 @@ def acquire_lock(root: pathlib.Path):
 
     The returned handle must stay open for the whole run: closing it (or exiting) releases the lock.
     """
+    if fcntl is None:
+        raise SystemExit(NEEDS_MACOS_MESSAGE)
     root.mkdir(parents=True, exist_ok=True)
-    handle = (root / ".export.lock").open("a+")
+    handle = (root / ".export.lock").open("a+", encoding="utf-8")
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:

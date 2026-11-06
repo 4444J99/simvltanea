@@ -24,6 +24,8 @@ python -m independent_loop_compositor render --help
 # After installation, the equivalent command is independent-loop-compositor.
 ```
 
+On Windows or macOS, see [Windows and macOS](docs/authoring/WINDOWS_AND_MAC.md) for FFmpeg setup, PowerShell commands and what is macOS-only.
+
 ## Processing responsibility
 
 N independently authored video-loop instances occupy one authored spatial

@@ -75,7 +75,7 @@ def check_motion(before: Image.Image, after: Image.Image) -> dict:
 
 
 def verify_family() -> dict:
-    records = json.loads((ROOT / 'evidence/render-family.json').read_text())
+    records = json.loads((ROOT / 'evidence/render-family.json').read_text(encoding="utf-8"))
     palette = {f'source-{i}': background(ROOT / f'media/source-{i}.mp4') for i in range(1, 8)}
     results = []
     negative_checks = 0
@@ -138,7 +138,7 @@ def verify_family() -> dict:
                   visible_loop_observations=observations, rejected_negative_controls=negative_checks,
                   boundary='Fixture-specific visible color identity and motion; not OCR or frame-exact timing.',
                   exports_checked=results)
-    (ROOT / 'evidence/decoded-pixel-checks.json').write_text(json.dumps(report, indent=2) + '\n')
+    (ROOT / 'evidence/decoded-pixel-checks.json').write_text(json.dumps(report, indent=2) + '\n', encoding="utf-8", newline="\n")
     return report
 
 
