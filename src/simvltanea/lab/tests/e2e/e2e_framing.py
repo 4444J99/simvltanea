@@ -254,12 +254,17 @@ def test_a_window_depends_on_the_neighbour(make_lab):
     out = lab.js("""(async () => {
       const f = await import('./framing.js'); const P = __lab.player;
       const p = P.panels[2], s = p.slots[p.active], r = p.rect;
+      // Hermetic grids: the decoded fixture frames differ between FFmpeg builds, the claim under test does not.
+      const hex = (n) => n.toString(16).padStart(2, '0');
+      const gradient = Array.from({length: 64}, (_, i) => hex((i % 8) * 32) + hex(Math.floor(i / 8) * 32) + hex(128)).join('');
+      const flat = (k) => Array.from({length: 64}, () => hex((k * 53) % 256) + hex((k * 97) % 256) + hex((k * 29) % 256)).join('');
+      const own = {...s.rec, features: {...s.rec.features, grid8: gradient}};
       const ctx = {srcAspect: s.vw / s.vh, cellAspect: r.w / r.h};
       const params = f.framingParams({...__lab.effective(), 'framing.mode': 'blend', 'framing.temperature': 0, 'framing.neighbour_influence': 1, 'framing.zoom_jitter': 0});
       const wins = [];
       for (const other of [3, 4, 5, 6, 7, 8]) {
-        const nb = {dir: -1, win: {cx: 0.5, cy: 0.5, zoom: 4}, clip: P.records[other], srcAspect: 0.75, cellAspect: r.w / r.h};
-        wins.push(f.deriveWindow({clip: s.rec, ...ctx, baseZoom: 4, seed: 1, neighbours: [nb], params}));
+        const nb = {dir: -1, win: {cx: 0.5, cy: 0.5, zoom: 4}, clip: {...P.records[other], features: {...P.records[other].features, grid8: flat(other)}}, srcAspect: 0.75, cellAspect: r.w / r.h};
+        wins.push(f.deriveWindow({clip: own, ...ctx, baseZoom: 4, seed: 1, neighbours: [nb], params}));
       }
       return wins.map((w) => [w.cx.toFixed(3), w.cy.toFixed(3)].join(','));
     })()""")
