@@ -56,6 +56,7 @@ STYLES = {'flat': ('0', '0'), 'max': ('1/20', '1/20')}  # (corner_radius, latera
 FULL_COUNTS = (1, 5, 8, 12)
 DEFAULT_COUNTS = (5, 12)
 PLAN_FRAMES = 480  # 20 s at 24 fps: playback outlasts the measurement
+PROGRESS_WAIT_MS = 1500  # how long a playing loop may take to present its next frame before it counts as stalled
 CHROME_APP = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 
 
@@ -272,6 +273,7 @@ class RasterProbe:
         })""")
 
     def measure(self, plan: dict, ratio: int, sizes, label: str = '') -> list[dict]:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout  # lazy: the module loads without Playwright
         rows = []
         first = sizes[0]
         context, page, errors = self.open(plan, first[0], first[1], ratio)
@@ -285,6 +287,15 @@ class RasterProbe:
                 if result['size'] != expected:
                     raise RuntimeError(f'screenshot is {result["size"]}, expected {expected} device pixels')
                 snapshot = page.evaluate('compositionRuntime.snapshot()')
+                # The measurement can land between two video frames (41.7 ms apart at 24 fps), so an
+                # unchanged frame count alone proves nothing: give every playing video a bounded
+                # interval to present a frame before judging. A frozen one still times out and counts.
+                try:
+                    page.wait_for_function('''previous => [...compositionRuntime.nodes.values()].every((n, i) =>
+                      n.busy || n.media.ended || n.media.paused || n.kind !== 'video' || n.span.held ||
+                      n.callbacks !== previous[i])''', arg=previous, timeout=PROGRESS_WAIT_MS)
+                except PlaywrightTimeout:
+                    pass  # the loop below counts the loops that did not progress
                 # A loop at native EOF waits on its last frame for the next frame-addressed
                 # boundary, and a boundary seek pauses briefly; neither is a stall. An unpaused
                 # video that presented no frame since the previous measurement is one.

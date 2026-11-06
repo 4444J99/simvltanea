@@ -575,6 +575,25 @@ class RasterBrowserTests(unittest.TestCase):
         self.assertEqual([row['stalled'] for row in rows], [1, 1])
         self.assertEqual(len(hairlines.failures(rows)), 2)
 
+    def test_a_loop_that_presents_a_frame_within_the_wait_is_not_stalled(self):
+        """Measuring between two video frames must not read as a stall: a frame that arrives a little later counts."""
+        load = self.probe.open
+
+        def late_frames(*args, **kwargs):
+            context, page, errors = load(*args, **kwargs)
+            # Loop 3 stops presenting on its own, then a frame is "presented" every 700 ms, later than a
+            # measurement that does not wait would look, and well inside the wait window.
+            page.evaluate("""() => { const n = [...compositionRuntime.nodes.values()][2];
+              n.media.playbackRate = 0; setInterval(() => { n.callbacks += 1; }, 700); }""")
+            page.wait_for_timeout(200)
+            return context, page, errors
+
+        with mock.patch.object(self.probe, 'open', late_frames):
+            rows = self.probe.measure(hairlines.strips_plan(5, self.sources), 1, ((375, 812), (1280, 720)),
+                                      label='strips N=5 late frames loop-3')
+        self.assertEqual([row['stalled'] for row in rows], [0, 0])
+        self.assertEqual(hairlines.failures(rows), [])
+
     def test_slice_is_crop_then_cover_without_stretch(self):
         count = 5
         state_slice = Fraction(build_strips(count, sources=self.sources[:count])['slice']['width'])
