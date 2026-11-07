@@ -931,8 +931,37 @@
     return C.layoutEntry(layout.bundle, sel.family, count);
   }
 
+  let pendingCompilation = null;
+  function compileInput(input) {
+    // Keep controls and the currently playing field responsive while resolving the full timeline.
+    if (typeof root.Worker !== 'function') return Promise.resolve(compiler().compile(input));
+    let worker;
+    try { worker = new Worker('compiler.js'); }
+    catch (_) { return Promise.resolve(compiler().compile(input)); }
+    return new Promise((resolve, reject) => {
+      const job = {cancel: () => {
+        finish(); reject(new DOMException('Compilation superseded', 'AbortError'));
+      }};
+      const finish = () => {
+        worker.terminate();
+        if (pendingCompilation === job) pendingCompilation = null;
+      };
+      pendingCompilation = job;
+      worker.onmessage = ({data}) => {
+        finish();
+        if (data.error) reject(new Error(data.error)); else resolve(data.plan);
+      };
+      worker.onerror = event => {
+        event.preventDefault(); finish();
+        // A browser or host may forbid workers; retain the existing local compiler in that case.
+        try { resolve(compiler().compile(input)); } catch (error) { reject(error); }
+      };
+      worker.postMessage(input);
+    });
+  }
+
   // Loop k (k-th panel) plays in cell loop-k; with sound, the plan carries the spatial mix.
-  function compile(sel, items, withSound) {
+  async function compile(sel, items, withSound) {
     const C = compiler();
     const ids = items.map((_, index) => `loop-${index + 1}`);
     const sources = items.map((item, index) => ({id: `source-${index + 1}`,
@@ -945,7 +974,7 @@
     const input = {sources, frames, fps: FPS, layouts,
       loops: sources.map((source, index) => ({id: ids[index], source: source.id}))};
     if (entry.slice) input.slice = entry.slice;
-    const plan = C.compilePlan(C.buildState(input));
+    const plan = await compileInput(input);
     for (const [index, source] of plan.sources.entries()) {
       source.bytes = items[index].size;
       if (withSound) source.audio_stream = items[index].audioStream || null;
@@ -987,6 +1016,7 @@
    * for reduced motion). A newer launch supersedes an older one at every await. */
   async function launch({fade = true} = {}) {
     const token = ++launches, r = runtime(), items = selectedItems();
+    if (pendingCompilation) pendingCompilation.cancel();
     renderPreview();
     if (!r) { until(runtime).then(() => { if (token === launches) launch({fade}); }).catch(() => {}); return; }
     if (!layout.bundle && !layout.own || !selection) return;
@@ -1000,9 +1030,11 @@
     const withSound = wantSound();
     let plan;
     try {
-      plan = compile(selection, items, withSound);
+      plan = await compile(selection, items, withSound);
+      if (token !== launches) return;
+      if (withSound !== wantSound()) { launch({fade}); return; }
     } catch (error) {
-      toast(oneLine(error.message || error));
+      if (token === launches && error.name !== 'AbortError') toast(oneLine(error.message || error));
       return;
     }
     const visible = studio.dataset.phase === 'playing';
@@ -1280,6 +1312,7 @@
       const finish = result => {
         clearTimeout(timer);
         video.onloadeddata = video.onerror = null;
+        video.pause();
         video.removeAttribute('src');
         video.load();
         URL.revokeObjectURL(url);
@@ -1292,6 +1325,8 @@
       video.onerror = () => finish(null);
       timer = setTimeout(() => finish(null), METADATA_TIMEOUT_MS);
       video.src = url;
+      // Some mobile preload policies defer loadeddata until a muted play request.
+      video.play().catch(() => {});
     });
   }
 

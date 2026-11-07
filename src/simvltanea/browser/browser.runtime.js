@@ -727,7 +727,13 @@ async function activate(node, span, frame, initial = false) {
   node.span = span; node.source = span.source; node.slice_rect = span.slice_rect;
   if (sourceChanged) {
     record('source', node.id, {source: span.source});
-    if (span.kind === 'video') await waitFor(node.media, 'loadeddata', () => { node.media.src = source.url; });
+    if (span.kind === 'video') await waitFor(node.media, 'loadeddata', () => {
+      node.media.src = source.url;
+      // Decode silently before waiting: mobile browsers may defer loadeddata until play().
+      // activate() pauses and aligns this element to its authored clock below.
+      node.media.muted = true;
+      node.media.play().catch(() => {});
+    });
     else await waitFor(node.media, 'load', () => { node.media.src = source.url; });
   }
   assertActive(epoch);

@@ -1401,5 +1401,12 @@
     PRESET_FORMAT, PAIR_FORMAT, BUNDLE_FORMAT,
   });
   root.SimvltaneaCompiler = api;
+  // The same staged compiler can run as a classic same-origin worker. No media bytes leave the page.
+  if (typeof document === 'undefined' && typeof root.importScripts === 'function') {
+    root.onmessage = event => {
+      try { root.postMessage({plan: api.compile(event.data)}); }
+      catch (error) { root.postMessage({error: String(error.message || error)}); }
+    };
+  }
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis === 'object' ? globalThis : this);

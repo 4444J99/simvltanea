@@ -1048,14 +1048,17 @@ class StudioLibraryTests(unittest.TestCase):
     unlock = StudioBrowserTests.unlock
     tap = StudioBrowserTests.tap
 
-    def open(self, site='good', query='', width=1280, height=720):
+    def open(self, site='good', query='', width=1280, height=720, init_script=None):
         context = self.browser.new_context(viewport={'width': width, 'height': height})
         self.addCleanup(context.close)
         page = context.new_page()
-        page.requests, page.errors, page.logs = [], [], []
+        page.requests, page.errors, page.logs, page.compiler_workers = [], [], [], []
+        page.on('worker', lambda worker: page.compiler_workers.append(worker))
         page.on('request', lambda request: page.requests.append(request.url))
         page.on('pageerror', lambda error: page.errors.append(str(error)))
         page.on('console', lambda message: page.logs.append(message.text))
+        if init_script is not None:
+            page.add_init_script(init_script)
         page.goto(f'{self.origin}/{site}/{query}')
         page.wait_for_function('() => window.SimvltaneaStudio && window.SimvltaneaStudio.snapshot && '
                                'window.compositionRuntime && SimvltaneaStudio.snapshot().seed !== null')
@@ -1088,6 +1091,76 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertNotIn(TAG_SENTINEL, exposed)
         for word in ('palette', 'keywords', 'mood'):
             self.assertNotIn(word, json.dumps(self.snapshot(page)))
+
+    def test_library_compiles_away_from_the_ui_thread(self):
+        """A twelve-panel selection runs the real compiler in a same-origin worker."""
+        page = self.open(query='?seed=99&mix=s0.1.2.3.4.5.6.7.8.9.10.11')
+        self.showing(page, self.ids[:12])
+        self.assertTrue(page.compiler_workers, 'compilation still blocks the UI thread')
+        self.assertTrue(all(worker.url == f'{self.origin}/good/compiler.js' for worker in page.compiler_workers))
+
+    def test_library_plays_without_worker_support(self):
+        page = self.open(query='?seed=7', init_script='window.Worker = undefined;')
+        self.showing(page, self.roll(7)['ids'])
+        self.assertEqual(page.compiler_workers, [])
+
+    def test_new_selection_supersedes_an_inflight_compilation(self):
+        page = self.open(query='?seed=99&mix=s0.1', init_script=r'''(() => {
+          const NativeWorker = Worker;
+          window.Worker = class extends NativeWorker {
+            postMessage(input) { setTimeout(() => super.postMessage(input), 200); }
+          };
+        })();''')
+        page.keyboard.press('ArrowUp')
+        page.keyboard.press('ArrowUp')
+        self.assertEqual(self.snapshot(page)['panels'], 4)
+        expected = self.snapshot(page)['selection']
+        self.showing(page, expected)
+        self.assertEqual(len(page.query_selector_all('#stage video')), 4)
+        self.assertFalse(self.snapshot(page)['toastShown'])
+
+    def test_first_sound_gesture_during_initial_compilation_is_applied(self):
+        page = self.open(query='?seed=7', init_script=r'''(() => {
+          const NativeWorker = Worker, queue = [];
+          let gated = true;
+          window.releaseCompilation = () => { gated = false; queue.splice(0).forEach(send => send()); };
+          window.Worker = class extends NativeWorker {
+            postMessage(input) {
+              if (gated) { queue.push(() => super.postMessage(input)); window.compilationWaiting = true; }
+              else super.postMessage(input);
+            }
+          };
+        })();''')
+        page.wait_for_function('() => window.compilationWaiting')
+        self.assertFalse(page.evaluate('compositionRuntime.ready'))
+        page.click('#speaker')
+        page.evaluate('window.releaseCompilation()')
+        self.showing(page, self.roll(7)['ids'])
+        page.wait_for_function("() => compositionRuntime.audio.mode === 'spatial_loops'", timeout=4000)
+        self.assertTrue(page.evaluate('compositionRuntime.audio.enabled'))
+        self.assertEqual(page.get_attribute('#speaker', 'aria-label'), 'Mute')
+
+    def test_library_starts_when_media_preload_is_deferred(self):
+        """A browser that waits for play() must not leave admission or runtime loading forever."""
+        page = self.open(query='?seed=7', init_script=r'''(() => {
+          // Defer the real decoded-frame event until a muted play request, as on low-data media paths.
+          const primed = new WeakSet(), create = Document.prototype.createElement;
+          const play = HTMLMediaElement.prototype.play;
+          Document.prototype.createElement = function(...args) {
+            const node = create.apply(this, args);
+            if (node instanceof HTMLVideoElement) node.addEventListener('loadeddata', event => {
+              if (!primed.has(node)) event.stopImmediatePropagation();
+            }, true);
+            return node;
+          };
+          HTMLMediaElement.prototype.play = function(...args) {
+            primed.add(this); return play.apply(this, args);
+          };
+        })();''')
+        state = self.showing(page, self.roll(7)['ids'], timeout=4000)
+        self.assertTrue(state['running'])
+        self.assertTrue(all(value for value in state['muted']))
+        self.assertEqual(self.snapshot(page)['library']['broken'], 0)
 
     def test_library_mode_fetches_only_the_rolls_clips(self):
         page = self.open(query='?seed=424242')
