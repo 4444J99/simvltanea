@@ -1341,18 +1341,33 @@ class StudioLibraryTests(unittest.TestCase):
         page = self.open(query='?seed=99&mix=s0.1.2.3')
         self.showing(page, self.snapshot(page)['selection'])
         before = self.snapshot(page)['selection']
-        page.wait_for_function('b => SimvltaneaStudio.snapshot().selection.join() !== b.join()',
-                               arg=before, timeout=40000)
-        self.showing(page, self.snapshot(page)['selection'])
+        # The requested plan can change while its incoming resident still waits
+        # for a preparation permit. Prove an actual committed replacement.
+        page.wait_for_function('''before => {
+          const r=compositionRuntime, selection=SimvltaneaStudio.snapshot().selection;
+          const actual=[...r.nodes.values()].map(node=>node.item?.name);
+          return !r.draining && actual.join()===selection.join() && actual.join()!==before.join();
+        }''', arg=before, timeout=40000)
         self.assertEqual(self.snapshot(page)['panels'], 4)
         state = page.evaluate('compositionRuntime.snapshot()')
         self.assertEqual(state['maxConcurrentStandbys'], 1)
-        self.assertTrue(all(loop['readyState'] >= 2 for loop in state['loops']))
         self.tap(page, '#activity')
+        # Hold allows a handoff already in flight to finish. Capture its settled
+        # residents before checking that no further automatic changes begin.
+        page.wait_for_function('''() => {
+          const r=compositionRuntime, selection=SimvltaneaStudio.snapshot().selection;
+          return !r.draining && [...r.nodes.values()].map(node=>node.item?.name).join()===selection.join();
+        }''', timeout=10000)
         held = self.snapshot(page)['selection']
+        frames = page.evaluate('[...compositionRuntime.nodes.values()].map(node=>node.callbacks)')
         self.assertFalse(self.snapshot(page)['evolving'])
         page.wait_for_timeout(3000)
         self.assertEqual(self.snapshot(page)['selection'], held)
+        actual = page.evaluate('[...compositionRuntime.nodes.values()].map(node=>({name:node.item.name,frames:node.callbacks}))')
+        self.assertEqual([node['name'] for node in actual], held)
+        # Native loop wraps briefly return HAVE_METADATA (readyState=1). Real
+        # decoded-frame progress verifies continuity without racing that dip.
+        self.assertTrue(all(node['frames'] > earlier for node, earlier in zip(actual, frames)), actual)
 
     def test_four_panel_ecology_changes_actual_territory(self):
         page = self.open(query='?seed=99&mix=s0.1.2.3')

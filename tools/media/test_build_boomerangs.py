@@ -26,7 +26,10 @@ def source_clip(path, *, audio=True, short_audio=False, vfr=False):
         args += ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=' +
                  ('0.3' if short_audio else '1.0')]
     if vfr:
-        args += ['-vf', r'settb=1/1000,setpts=N*33.333+mod(N\,3)*2', '-fps_mode', 'vfr']
+        # FFmpeg 6 defaults the encoder to 1/30 and erases the 2ms jitter.
+        # Preserve millisecond PTS through both encoding and MP4 muxing.
+        args += ['-vf', r'settb=1/1000,setpts=N*33.333+mod(N\,3)*2', '-fps_mode', 'vfr',
+                 '-enc_time_base:v', '1/1000', '-video_track_timescale', '1000']
     args += ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p']
     if audio:
         args += ['-c:a', 'aac']
