@@ -31,6 +31,7 @@ where = ["src"]
 simvltanea = ["py.typed", "layout.toml"]
 independent_loop_compositor = ["py.typed"]
 "simvltanea.browser" = ["*.js", "shared_engine_pin.json"]
+"simvltanea.lab" = ["app/*.css", "app/*.html", "app/*.js"]
 
 [tool.simvltanea]
 layout = "src/simvltanea/layout.toml"
