@@ -55,6 +55,70 @@ function sample() {
         {code: node.media.error.code, message: node.media.error.message} : null}))};
 }
 
+function classifyResourceErrors(result) {
+  const classified = {expectedRetirements: [], expectedAborts: [], recoveredReads: [], unexpected: []};
+  const nativeBlobError = /^The operation couldn[’']t be completed\. \(WebKitBlobResource error 1\.\)$/;
+  for (const kind of ['consoleErrors', 'requestFailures']) {
+    for (const [index, error] of (result[kind] || []).entries()) {
+      const reference = {kind, index, url: error?.url, wall: error?.wall};
+      const url = error?.url, wall = error?.wall;
+      const blob = typeof url === 'string' && url.startsWith('blob:') && Number.isFinite(wall);
+      const cancelled = kind === 'requestFailures' && error.failure?.errorText === 'cancelled';
+      const aborted = cancelled && error.resourceType === 'fetch' && typeof url === 'string' && /^https?:\/\//.test(url) &&
+        Number.isFinite(wall) && (result.events || []).find(event => event.type === 'asset-request-aborted' &&
+          event.url === url && Number.isFinite(event.wall) && wall >= event.wall && wall - event.wall <= 1000);
+      if (aborted) {
+        classified.expectedAborts.push({...reference, abortedAt: aborted.wall, lagMs: wall - aborted.wall});
+        continue;
+      }
+      const expectedType = kind === 'consoleErrors'
+        ? typeof error.message === 'string' && error.message.startsWith('Failed to load resource: ') &&
+          nativeBlobError.test(error.message.slice('Failed to load resource: '.length))
+        : cancelled || nativeBlobError.test(error.failure?.errorText || '');
+      const retired = blob && expectedType && (result.events || []).find(event => {
+        const lag = wall - event.wall;
+        if (event.type !== 'resource-retired' || !['deck', 'metadata'].includes(event.role) || event.url !== url ||
+            event.readyState !== 0 || event.paused !== true || !Number.isFinite(event.wall) || lag < 0 || lag > 1000) return false;
+        // A sampled active source after the retirement contradicts disposal.
+        return !(result.samples || []).some(row => row.wall >= event.wall && row.wall <= wall &&
+          (row.decks || []).some(deck => deck.active && deck.populated && (deck.src === url || deck.currentSrc === url)));
+      });
+      if (retired) {
+        classified.expectedRetirements.push({...reference, role: retired.role, id: retired.id,
+          retiredAt: retired.wall, lagMs: wall - retired.wall});
+        continue;
+      }
+      // A cancelled internal read can coexist with successful decoding. Require
+      // positive same-deck, same-native-source evidence; callback counts alone
+      // or a future retirement are insufficient. Console failures never qualify.
+      if (blob && cancelled) {
+        const frames = [], previous = new Map();
+        for (const row of result.samples || []) if (row.wall >= wall && row.wall <= wall + 1000) {
+          for (const deck of row.decks || []) if (deck.src === url && deck.currentSrc === url) {
+            frames.push({wall: row.wall, id: deck.id, deck: deck.deck,
+              decoded: deck.decoded, callbacks: deck.callbacks, nativeError: deck.nativeError});
+          }
+        }
+        if (frames.length && frames.every(frame => !frame.nativeError)) {
+          let proof;
+          for (const frame of frames) {
+            if (typeof frame.id !== 'string' || !Number.isFinite(frame.deck) ||
+                !Number.isFinite(frame.decoded) || !Number.isFinite(frame.callbacks)) continue;
+            const identity = JSON.stringify([frame.id, frame.deck]), old = previous.get(identity);
+            if (old && frame.wall > old.wall && frame.decoded !== old.decoded && frame.callbacks > old.callbacks) {
+              proof = [old, frame]; break;
+            }
+            previous.set(identity, frame);
+          }
+          if (proof) { classified.recoveredReads.push({...reference, frames: proof}); continue; }
+        }
+      }
+      classified.unexpected.push(reference);
+    }
+  }
+  return classified;
+}
+
 function analyse(result) {
   const trackers = new Map(), restTrackers = new Map(), births = new Set(), changedSlots = new Set(), holds = [];
   const expectedSlots = (result.samples[0]?.nodes || []).map(node => node.id).sort().join(',');
@@ -117,6 +181,7 @@ function analyse(result) {
   }
   const regimes = [...new Set(result.coarse.map(row => row.studio.ecosystem.regime))];
   const initialCount = result.samples[0]?.nodes.length || 0;
+  const resourceErrors = classifyResourceErrors(result);
   const checks = {
     completed: result.completed === true,
     noFailure: !result.failure,
@@ -130,8 +195,7 @@ function analyse(result) {
     noUnexpectedPause: unexpectedPaused === 0 && globalSuspensions === 0,
     succession: initialCount === 4 && births.size >= initialCount * 2 && changedSlots.size === initialCount,
     nativeWraps: wraps > 0,
-    noErrors: result.errors.length === 0 && result.consoleErrors.length === 0 && result.httpErrors.length === 0 &&
-      !(result.requestFailures || []).length &&
+    noErrors: result.errors.length === 0 && result.httpErrors.length === 0 && resourceErrors.unexpected.length === 0 &&
       runtimeFailures.size === 0 && !(result.events || []).some(event => ['media-failure', 'observer-failure'].includes(event.type)),
   };
   return {pass: Object.values(checks).every(Boolean), checks, samples: result.samples.length,
@@ -140,7 +204,7 @@ function analyse(result) {
     maxPopulatedDecks: populated, maxPlayingDecks: playing, maxPreparationLeases: standbys,
     restingSamples, maxResting, restingPaused, longestRestingJointHoldMs: restingJointMs,
     longestRestingDecodedHoldMs: restingDecodedMs, runtimeFailures: [...runtimeFailures],
-    unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors};
+    unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors, resourceErrors};
 }
 
 function staticServer(site) {
@@ -206,6 +270,18 @@ async function documentClock(page, result) {
   }
 }
 
+function sampleControls(page, result) {
+  let running = true;
+  const task = (async () => {
+    while (running) {
+      try { result.samples.push(await page.evaluate(sample)); }
+      catch (error) { result.errors.push('Control metadata sampling failed: ' + error); break; }
+      await pause(SAMPLE_MS);
+    }
+  })();
+  return async () => { running = false; await task; };
+}
+
 async function sustained(webkit, device, base, out, name, query) {
   const result = {name, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
   let browser;
@@ -240,8 +316,6 @@ async function sustained(webkit, device, base, out, name, query) {
     result.samples.push(await page.evaluate(sample));
     result.events = await page.evaluate(() => compositionRuntime.events);
     result.completed = true;
-    result.phase = 'screenshot';
-    await page.screenshot({path: path.join(out, name + '-final.png'), caret: 'initial', animations: 'allow'});
   } catch (error) { result.failure = String(error.stack || error); }
   finally { result.phase = 'closing'; if (browser) await browser.close(); }
   result.summary = analyse(result); save(out, name + '.json', result);
@@ -277,15 +351,16 @@ async function audioProof(webkit, out) {
 
 // Intentional interactions and the post-master meter are isolated from both baselines.
 async function controls(webkit, device, base, out) {
-  const result = {errors: [], consoleErrors: [], httpErrors: [], requestFailures: [], checks: {}};
-  let browser;
+  const result = {errors: [], consoleErrors: [], httpErrors: [], requestFailures: [], samples: [], checks: {}};
+  let browser, page, stopSampling = async () => {};
   try {
     browser = await webkit.launch({headless: true});
-    const context = await browser.newContext(device), page = await context.newPage();
+    const context = await browser.newContext(device); page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
     result.phase = 'navigation';
     await page.goto(base + '?seed=528316659&mix=s0.1.2.3&evolve=0&proof=1');
     await documentClock(page, result); await ready(page); result.phase = 'controls';
+    stopSampling = sampleControls(page, result);
     await click(page, '#speaker');
     await page.waitForFunction(() => SimvltaneaStudio.snapshot().sound === 'on');
     await page.evaluate(() => { globalThis.smokeMedia = [...compositionRuntime.nodes.values()].map(node => node.media); });
@@ -311,6 +386,14 @@ async function controls(webkit, device, base, out) {
       await page.setViewportSize({width, height});
       await page.waitForFunction(expected => compositionRuntime.orientation === expected, orientation);
       result.checks[orientation] = await page.evaluate(() => [...compositionRuntime.nodes.values()].every((node, i) => node.media === smokeMedia[i]));
+    }
+    for (const enabled of [false, true]) {
+      if (await page.evaluate(() => SimvltaneaStudio.snapshot().filters) !== enabled) await click(page, '#effects');
+      await page.waitForFunction(value => SimvltaneaStudio.snapshot().filters === value &&
+        new URL(location.href).searchParams.get('fx') === (value ? '1' : '0') &&
+        [...compositionRuntime.nodes.values()].every((node, i) => node.media === smokeMedia[i] &&
+          (value ? node.media.style.filter !== '' : node.media.style.filter === '')), enabled);
+      result.checks[enabled ? 'filtersOn' : 'filtersOff'] = true;
     }
     await click(page, '#play');
     await page.waitForFunction(() => !compositionRuntime.running);
@@ -341,11 +424,20 @@ async function controls(webkit, device, base, out) {
     await page.waitForFunction(() => SimvltaneaStudio.snapshot().sound === 'on' && smokeLevel() > .00001);
     result.unmutedPeak = await page.evaluate(() => smokeLevel()); result.checks.sound = true;
     result.final = await page.evaluate(sample);
-    result.events = await page.evaluate(() => compositionRuntime.events);
   } catch (error) { result.pass = false; result.failure = String(error.stack || error); }
-  finally { result.phase = 'closing'; if (browser) await browser.close(); }
-  result.checks.noErrors = !result.errors.length && !result.consoleErrors.length && !result.httpErrors.length &&
-    !result.requestFailures.length && !result.final?.lastFailure && result.final?.nodes.every(node => !node.nativeError);
+  finally {
+    await stopSampling();
+    if (page && !page.isClosed()) {
+      try { result.events = await page.evaluate(() => compositionRuntime.events); }
+      catch (error) { result.errors.push('Control event collection failed: ' + error); }
+    }
+    result.phase = 'closing'; if (browser) await browser.close();
+  }
+  result.resourceErrors = classifyResourceErrors(result);
+  result.checks.noErrors = !result.errors.length && !result.httpErrors.length && !result.resourceErrors.unexpected.length &&
+    !result.final?.lastFailure && result.final?.nodes.every(node => !node.nativeError) &&
+    result.samples.every(row => !row.lastFailure && row.decks.every(deck => !deck.nativeError)) &&
+    !(result.events || []).some(event => ['media-failure', 'observer-failure'].includes(event.type));
   result.pass = !result.failure && Object.values(result.checks).every(Boolean);
   save(out, 'controls.json', result); return result;
 }

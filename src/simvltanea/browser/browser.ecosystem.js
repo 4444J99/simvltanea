@@ -4,6 +4,8 @@
  */
 (function (root) {
   'use strict';
+  const presence = root.SimvltaneaPresence ||
+    (typeof module === 'object' && module.exports ? require('./browser.presence.js') : null);
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallback;
   const REGIMES = Object.freeze({
@@ -46,7 +48,7 @@
         regime: this.regime, desiredActive: 0, count: 0, requests: [],
         weights: new Float64Array(maxSlots), gains: new Float64Array(maxSlots),
         prominence: new Float64Array(maxSlots), space: new Float64Array(maxSlots),
-        fatigue: new Float64Array(maxSlots),
+        fatigue: new Float64Array(maxSlots), presence: new Float64Array(maxSlots),
       };
       this.output.space.fill(1);
     }
@@ -66,8 +68,9 @@
       if (!state || state.clipKey !== clipKey) {
         const duration = Math.max(1 / 30, finite(input.duration, 1));
         const age = Math.max(0, finite(input.age));
+        const deadlineAge = Math.ceil(this._range(10, 24) / duration) * duration;
         state = {id, clipKey, index, duration, born: now - age, age,
-          deadlineAge: Math.ceil(this._range(10, 24) / duration) * duration,
+          deadlineAge, presenceDeadlineAge: deadlineAge, presence: 0,
           lastTransition: now, awaiting: null, resting: Boolean(input.resting),
           restUntil: input.resting ? now + this._range(4, 7) : 0,
           fatigue: 0, prominence: 1 / Math.max(1, count), space: 1, velocity: 0};
@@ -247,7 +250,7 @@
       const scale = sum > 0 && square > 0 ? Math.min(.85 / sum, .85 / Math.sqrt(square)) : 0;
       for (let i = 0; i < count; i++) out.gains[i] = out.weights[i] * scale;
       for (let i = count; i < this.maxSlots; i++) {
-        out.gains[i] = out.weights[i] = out.prominence[i] = out.fatigue[i] = 0;
+        out.gains[i] = out.weights[i] = out.prominence[i] = out.fatigue[i] = out.presence[i] = 0;
         out.space[i] = 1;
       }
     }
@@ -273,6 +276,15 @@
       this.output.desiredActive = !options.manualCount && this.regime === 'SPARSE_BREATH' ? this._density : count;
       if (options.enabled !== false) this._requests(simTime, residents, options);
       this._ecology(residents, Math.min(.1, dt), options.enabled !== false);
+      for (let i = 0; i < count; i++) {
+        const state = this._ordered[i];
+        // Scheduling retries must not restart the envelope's fall. Keep its
+        // initial lifetime separate from the movable retirement deadline.
+        state.presence = options.effects === false ? 1 : state.resting ? 0 : options.enabled === false
+          ? clamp(state.age / presence.ATTACK_SECONDS, 0, 1)
+          : presence.presenceEnvelope(state.age, state.presenceDeadlineAge);
+        this.output.presence[i] = state.presence;
+      }
       return this.output;
     }
 
@@ -282,7 +294,8 @@
         residents: [...this._states.values()].map(state => ({id: state.id, clipKey: state.clipKey,
           duration: state.duration, born: state.born, age: state.age, deadlineAge: state.deadlineAge,
           resting: state.resting, restUntil: state.restUntil, pending: state.awaiting !== null,
-          fatigue: state.fatigue, prominence: state.prominence, space: state.space}))};
+          fatigue: state.fatigue, prominence: state.prominence, space: state.space,
+          presence: state.presence, presenceDeadlineAge: state.presenceDeadlineAge}))};
     }
   }
 

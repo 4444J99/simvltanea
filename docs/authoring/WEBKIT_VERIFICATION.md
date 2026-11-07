@@ -20,8 +20,9 @@ clicking the speaker. They read native current time and decoded media time every
 clock, gain values and targets, each existing deck's source URL and native
 duration, and explicit numeric playback-quality counters. No init script, prototype
 patch, analyser, canvas read, or retained-video registry is installed during
-these baselines. A screenshot is captured only after each baseline ends, without
-injecting a caret-hiding style or disabling animations.
+these baselines. Screenshots are omitted: Playwright's WebKit screenshot helper
+injects a stylesheet even with caret hiding and animation changes disabled,
+which produces an unrelated CSP error under the application's strict policy.
 
 The gate checks joint clock/frame holds and decoded-frame holds independently;
 either reaching two seconds fails. Increasing callback counts alone do not
@@ -32,15 +33,33 @@ suspension fail separately. Outgoing residents remain measured during
 transitions rather than hiding holds behind the pending state.
 
 Receipts also require four persistent foreground slots, native wraps, a successor
-in every initial slot, and no native media, runtime, page, console, HTTP, or
-failed-request errors. Console errors retain their message and source location;
+in every initial slot, and no native media, runtime, page, HTTP, or unexplained
+resource errors. Console errors retain their message and source location;
 failed requests retain the URL and native failure details. Error timestamps
 record when the runner received the event, with both epoch and monotonic clocks.
 The document's `performance.timeOrigin` aligns those receipt times with media
 samples and the application's proof-only resource-retirement events. They are
-not exact browser emission timestamps. Navigation, sustained playback,
-screenshot and browser-closing phases remain distinguishable; no error category
-is filtered from the gate.
+not exact browser emission timestamps. Navigation, sustained playback, controls
+and browser-closing phases remain distinguishable. Every raw error is retained.
+
+Three narrowly evidenced resource outcomes are reported separately:
+
+- A Blob error-1 message or cancelled Blob request follows retirement of that
+  exact URL by at most 1,000 ms. The retirement must record a paused element at
+  readyState 0, and subsequent samples must not contradict the disposal by
+  showing it active before the error.
+- A plain cancelled Blob request is followed within 1,000 ms by two distinct
+  decoded times and increasing callbacks on the same deck and native source
+  URL, with no native media error. This proves that the cancelled read did not
+  terminate that source; callback counts alone are insufficient.
+- A plain cancelled HTTP fetch follows an explicit application abort of that
+  exact outstanding asset request by at most 1,000 ms.
+
+Each classification retains its raw-record reference and timing or frame
+evidence. Unknown URLs, future retirements/aborts, other error types, and
+unproven recovery fail. Independent two-second playback gates still reject
+freezes, even when a resource cancellation has been explained.
+
 All three pacing regimes must appear across the two runs combined; each run
 reports its own coverage. A missing regime is a coverage failure, not proof of
 a playback defect. They enforce at
@@ -51,10 +70,12 @@ every moment between samples.
 ## Separate interaction and audio checks
 
 After both baselines, a new browser checks isolated tapping, shuffle,
-forward/boomerang selection, portrait/landscape layout, global pause/resume,
+forward/boomerang selection, portrait/landscape layout, Filters bypass/restoration
+with its URL state and persistent media identities, global pause/resume,
 the mobile population limit, and sound mute/unmute. All three sessions retain
-the proof-only resource-retirement log. Only this interaction session attaches
-a post-master meter, requiring nonzero digital output and
+the proof-only resource-retirement log. The interaction session reads existing
+decks at the same 137 ms cadence and attaches a post-master meter, requiring
+nonzero digital output and
 silence when muted. These intentional actions never enter the continuity
 measurements.
 

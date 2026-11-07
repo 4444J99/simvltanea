@@ -684,7 +684,7 @@
   const studio = $('#studio'), stage = $('#stage');
   const ui = {
     frame: $('#frame'), preview: $('#preview'), ghost: $('#ghost'), bar: $('#bar'), play: $('#play'), start: $('#start'),
-    corner: $('#corner'), activity: $('#activity'), loopMode: $('#loop-mode'),
+    corner: $('#corner'), activity: $('#activity'), effects: $('#effects'), loopMode: $('#loop-mode'),
     shuffle: $('#shuffle'), fewer: $('#fewer'), more: $('#more'), panels: $('#panel-count'),
     families: $('#families'), speaker: $('#speaker'), volume: $('#volume'), add: $('#add'), files: $('#files'),
     fullscreen: $('#fullscreen'), help: $('#help'), about: $('#about'), toast: $('#toast'),
@@ -695,6 +695,7 @@
   let evolving = new URLSearchParams(search).get('evolve') !== '0';
   let manualPopulation = new URLSearchParams(search).has('mix');
   const reduced = Boolean(root.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  let filtersEnabled = !reduced && new URLSearchParams(search).get('fx') !== '0';
   const FADE_MS = reduced ? 0 : 220, IDLE_MS = 3000, TOAST_MS = 4200;
   const compiler = () => root.SimvltaneaCompiler;
   const runtime = () => root.compositionRuntime;
@@ -729,6 +730,7 @@
   let previousLogicalIds = new Set(), currentLogicalIds = new Set();
   const live = root.compositionRuntime = new root.SimvltaneaLive.Session(stage, {
     crossfadeSec: reduced ? 0 : 1.2,
+    effects: filtersEnabled, reducedMotion: reduced,
     onAudioNode: attachLiveVoice,
     onError: () => toast('That loop could not start. The current picture keeps playing.'),
   });
@@ -736,6 +738,7 @@
   live.clock.subscribe(ecologyTick);
 
   const usingLibrary = () => library.active && !own.length;
+  const filtersAvailable = () => !reduced && (recordMode !== 'canvas' || own.length > 0 || library.active);
   const pool = () => (own.length ? own : library.active ? library.items : builtins);
   // How many loops a roll may use: the library's clips minus any that failed to load.
   const available = () => (usingLibrary() ? library.items.length - library.broken.size : pool().length);
@@ -1355,14 +1358,16 @@
 
   async function recordBuiltins() {
     const type = recordable() && recorderType();
-    if (!type) { recordMode = 'canvas'; renderPreview(); return; }
+    if (!type) { recordMode = 'canvas'; renderActivity(); renderPreview(); return; }
     recordMode = 'recording';
     let todo = builtins.slice();
     while (todo.length) {
       if (document.hidden) await new Promise(resolve => document.addEventListener('visibilitychange', resolve, {once: true}));
       const results = await Promise.all(todo.map(item => recordOne(item, type).catch(() => false)));
       todo = todo.filter((_, index) => !results[index]);
-      if (todo.length && results.every(ok => !ok) && !document.hidden) { recordMode = 'canvas'; renderPreview(); return; }
+      if (todo.length && results.every(ok => !ok) && !document.hidden) {
+        recordMode = 'canvas'; renderActivity(); renderPreview(); return;
+      }
     }
     recordMode = 'recorded';
     if (!own.length) launch();
@@ -1584,9 +1589,17 @@
   async function fetchAsset(item, asset, controller) {
     if (controller.signal.aborted) return false;
     library.requested += 1;
-    const response = await fetch(`library/${asset.file}`, {signal: controller.signal, redirect: 'error'});
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const buffer = await response.arrayBuffer();
+    const requestUrl = new URL(`library/${asset.file}`, document.baseURI).href;
+    const recordAbort = () => live.record('asset-request-aborted', null, {url: requestUrl});
+    if (live.proof) controller.signal.addEventListener('abort', recordAbort, {once: true});
+    let buffer;
+    try {
+      const response = await fetch(requestUrl, {signal: controller.signal, redirect: 'error'});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      buffer = await response.arrayBuffer();
+    } finally {
+      if (live.proof) controller.signal.removeEventListener('abort', recordAbort);
+    }
     if (buffer.byteLength !== asset.bytes) throw new Error('size differs from the manifest');
     const sha256 = hex(await crypto.subtle.digest('SHA-256', buffer));
     if (!sha256.startsWith(asset.id)) throw new Error('digest differs from the manifest');
@@ -1727,16 +1740,14 @@
       !library.broken.has(item.index) && succession.eligible(item.clip.id, time));
     const out = ecosystem.step(time, dt, residents, {
       enabled: evolving && !hold && !reduced && usingLibrary(), manualCount: manualPopulation,
+      effects: filtersEnabled,
       canReplace: eligible && !ecologicalRequest && !pendingSelection,
       canRest: !ecologicalRequest,
     });
     for (let i = 0; i < residents.length; i++) {
       const node = live.nodes.get(residents[i].id);
       live.setTargetGain(node.id, out.gains[i]);
-      if (node.audio?.filter && live.audio.context?.state === 'running') {
-        const cutoff = 900 + 15100 * Math.min(1, out.prominence[i] * residents.length);
-        node.audio.filter.frequency.setTargetAtTime(cutoff, live.audio.context.currentTime, .15);
-      }
+      live.setPresence(node.id, out.presence[i]);
     }
     if (selection.family === 'strips' && !reduced && time - lastSpaceTime >= .05 &&
         residents.length === selection.loops.length && !live.draining) {
@@ -1768,6 +1779,10 @@
   }
 
   function renderActivity() {
+    ui.effects.setAttribute('aria-pressed', String(filtersEnabled && filtersAvailable()));
+    ui.effects.disabled = !filtersAvailable();
+    ui.effects.title = reduced ? 'Filters paused for reduced motion' : !filtersAvailable() ?
+      'Filters unavailable for this preview' : filtersEnabled ? 'Filters on' : 'Filters off';
     ui.activity.setAttribute('aria-label', evolving ? 'Hold changes' : 'Let it evolve');
     ui.activity.setAttribute('aria-pressed', String(!evolving));
     ui.activity.title = evolving ? 'Hold changes' : 'Let it evolve';
@@ -1778,6 +1793,14 @@
     ui.loopMode.textContent = loopMode === 'boomerang' ? '↔' : '→';
   }
   ui.activity.addEventListener('click', () => { evolving = !evolving; renderActivity(); });
+  ui.effects.addEventListener('click', () => {
+    if (!filtersAvailable()) return;
+    filtersEnabled = !filtersEnabled;
+    live.setEffects(filtersEnabled);
+    const params = new URLSearchParams(root.location.search); params.set('fx', filtersEnabled ? '1' : '0');
+    history.replaceState(null, '', `${root.location.pathname}?${params}`);
+    renderActivity();
+  });
   ui.loopMode.addEventListener('click', () => {
     loopMode = loopMode === 'boomerang' ? 'forward' : 'boomerang';
     for (const job of library.inflight.values()) job.controller.abort();
@@ -2002,7 +2025,8 @@
         next: library.next, requested: library.requested} : null,
       builtinsReady: builtins.filter(item => item.sha256).length,
       selection: selectedItems().map(item => item.name), style: selection ? selection.style : null,
-      sound: soundState(), volume: sound.volume, evolving, loopMode, ecosystem: ecosystem.snapshot(), refusals: lastRefusals.slice(), toast: ui.toast.textContent,
+      sound: soundState(), volume: sound.volume, evolving, filters: filtersEnabled && filtersAvailable(), loopMode,
+      ecosystem: ecosystem.snapshot(), refusals: lastRefusals.slice(), toast: ui.toast.textContent,
       toastShown: ui.toast.classList.contains('on'), phase: studio.dataset.phase || 'preview',
       layoutFile: layout.own ? {name: layout.own.name, kind: layout.own.info.kind, layout: layout.own.info.name} : null,
       loops: own.map(loop => ({name: loop.name, type: loop.type, suffix: loop.suffix, size: loop.size,
