@@ -101,7 +101,7 @@ export class Player {
     const root = el('div', 'panel', { 'data-panel': String(k), role: 'button', tabindex: '0', 'aria-label': `Panel ${k + 1}: show the original` });
     const slots = [0, 1].map(() => {
       const v = el('video', 'clip');
-      v.muted = !this.audio.started; v.loop = true; v.playsInline = true; v.preload = 'auto'; v.disablePictureInPicture = true;
+      v.muted = !this.audio.started; v.loop = true; v.playsInline = true; v.preload = 'metadata'; v.disablePictureInPicture = true;
       v.setAttribute('muted', ''); v.setAttribute('playsinline', '');
       root.append(v);
       return { video: v, src: null, gain: null, rec: null, vw: 0, vh: 0, token: 0, norm: 0, key: '', win: null, appearance: undefined, path: null, t0: 0, holdN: -1, cur: null };
@@ -150,6 +150,7 @@ export class Player {
     v.poster = rec.still ? this.url(rec.still) : '';
     v.muted = !this.audio.started || this.speechMuted(rec);
     v.playbackRate = this.eff['timing.speed'];
+    v.preload = 'auto';
     v.src = this.url(rec.video);
     const first = panel.active === -1;
     if (first) this._activate(panel, idx, true);

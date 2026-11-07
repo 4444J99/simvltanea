@@ -983,8 +983,9 @@
     setTimeout(() => { if (!ui.ghost.classList.contains('on')) ui.ghost.replaceChildren(); }, FADE_MS + 60);
   }
 
-  /* Hand the selection to the runtime: compile, initialize, route audio, start (unless held
-   * for reduced motion). A newer launch supersedes an older one at every await. */
+  /* LEGACY authoring/preview path: full-plan relaunch. Public playback now uses the Lab player
+   * (see tools/publishing/stage_library_site.py --playback lab). A newer launch supersedes an older
+   * one at every await. */
   async function launch({fade = true} = {}) {
     const token = ++launches, r = runtime(), items = selectedItems();
     renderPreview();

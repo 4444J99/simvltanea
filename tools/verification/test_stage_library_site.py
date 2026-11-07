@@ -150,3 +150,43 @@ class StageLibrarySiteTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class StageLabSiteTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = Path(tempfile.mkdtemp(prefix='lab-site-'))
+        self.addCleanup(shutil.rmtree, self.temp, True)
+        self.lab = self.temp / 'lab'
+        self.lab.mkdir()
+        (self.lab / 'index.html').write_text('<!doctype html>', encoding='utf-8')
+        (self.lab / 'player.js').write_text('export {}', encoding='utf-8')
+        self.library = self.temp / 'library'
+        (self.library / 'clips').mkdir(parents=True)
+        clips = []
+        for number in range(1, 3):
+            data = clip_bytes(number)
+            clip_id = hashlib.sha256(data).hexdigest()[:12]
+            (self.library / 'clips' / f'{clip_id}.mp4').write_bytes(data)
+            portrait = number % 2 == 1
+            clips.append({'id': clip_id, 'file': f'clips/{clip_id}.mp4', 'width': 270 if portrait else 480,
+                          'height': 480 if portrait else 270, 'orientation': 'portrait' if portrait else 'landscape',
+                          'duration_seconds': 2.5, 'bytes': len(data),
+                          'tags': {'keywords': ['sea'], 'mood': ['calm'], 'shot': 'wide', 'palette': ['blue']}})
+        self.manifest = {'schema': 'simvltanea.public-demo/1', 'clips': clips}
+        (self.library / 'manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
+        self.site = self.temp / 'site'
+
+    def test_assembles_lab_and_lab_compatible_clips(self):
+        from tools.publishing.stage_library_site import stage_lab_site
+        count = stage_lab_site(self.lab, self.library, self.site)
+        self.assertEqual(count, 2)
+        clips = json.loads((self.site / 'data' / 'clips.json').read_text(encoding='utf-8'))['clips']
+        self.assertEqual(len(clips), 2)
+        for clip in clips:
+            self.assertEqual(clip['video'], f"media/{clip['id']}.mp4")
+            self.assertTrue((self.site / clip['video']).is_file())
+            self.assertIn('duration', clip)
+            self.assertIn('width', clip)
+            self.assertIn('height', clip)
+            self.assertIn('orientation', clip)
+            self.assertIn('audio', clip)
