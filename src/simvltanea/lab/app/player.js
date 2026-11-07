@@ -414,9 +414,13 @@ export class Player {
     const now = a.ctx.currentTime;
     const trim = e['audio.auto_trim'] ? 1 / Math.sqrt(Math.max(1, this.panels.length)) : 1;
     const mg = e['audio.master'] * trim;
-    if (a.lastMaster === undefined) a.master.gain.value = mg;
-    else if (Math.abs(a.lastMaster - mg) > 1e-4) a.master.gain.setTargetAtTime(mg, now, 0.02);
-    a.lastMaster = mg;
+    if (a.lastMaster === undefined) {
+      a.master.gain.value = mg;
+      a.lastMaster = mg;
+    } else if (Math.abs(a.lastMaster - mg) > 1e-4) {
+      a.master.gain.setTargetAtTime(mg, now, 0.02);
+      a.lastMaster = mg;
+    }
     const lim = e['audio.limiter'] ? `${e['audio.limiter_ceiling']}` : 'off';
     if (lim !== a.lastLimiter) {
       a.lastLimiter = lim;
