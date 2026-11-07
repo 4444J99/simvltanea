@@ -33,7 +33,9 @@ def make_ramp(path: Path) -> None:
 def decode_source_frames(ramp: Path, video_filter: str) -> list[int]:
     raw = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", str(ramp), "-filter_complex", video_filter, "-map", "[v]",
-         "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"],
+         # Inspect every filter output frame. FFmpeg 7 otherwise chooses a
+         # 25-fps rawvideo output and drops frames from this 30-fps fixture.
+         "-fps_mode", "passthrough", "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"],
         capture_output=True, check=True).stdout
     size = 64 * 64
     frame_bytes = size * 3 // 2
