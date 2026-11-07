@@ -16,6 +16,9 @@ Tapping a panel replaces its clip. Untouched residents keep their elements,
 playback positions and audio bindings. Shuffle queues replacements and compresses
 queued crossfades to 0.2 seconds. The old clip keeps looping if its successor fails.
 Failed boomerang derivatives fall back to their admitted forward source.
+Promotion requires fulfilled playback and two distinct decoded media times before
+retiring the old deck. A visible successor that cannot demonstrate progress within
+two seconds rolls back to the retained outgoing clip.
 
 ## Rhythm and controls
 
@@ -23,13 +26,20 @@ Automatic residents draw a 10–24 second target lifetime and round up to a whol
 number of native loops. A long clip can therefore exceed 24 seconds. Readiness,
 cooldowns and the single preparation permit take priority over the rhythm. An
 automatic handoff waits for an outgoing native loop boundary; manual taps do not.
+If decoded media time stops advancing for two simulation seconds, or the expected
+remaining loop plus that allowance elapses without a boundary, the waiting handoff
+continues with its prepared successor. This releases the shared preparation permit
+instead of letting one frozen native loop block the whole stage. A `seam-fallback`
+event records the reason. Normal advancing loops retain boundary alignment.
 Departed logical clips have a ten-second return cooldown, shared by both variants.
 
 Steady, sparse and burst regimes vary arrival spacing. Sparse periods target a
 time-averaged population near 65 percent for four panels, with at least two active
 residents. Readiness and lifetime guards can change the achieved average. Resting
-residents retain a dimmed still frame and contribute no sound. A manual panel
-count disables automatic resting and survives shuffle; finite replacements continue.
+residents keep their native loops moving, dimmed and silent, avoiding an extra
+pause/resume transition when they wake. Explicit pause still stops every resident,
+including resting ones. A manual panel count disables automatic resting and
+survives shuffle; finite replacements continue.
 
 The infinity button holds automatic changes after any current handoff completes.
 The direction button switches published forward and boomerang playback. Local

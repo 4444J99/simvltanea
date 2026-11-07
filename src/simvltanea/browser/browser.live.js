@@ -386,13 +386,15 @@ function applySlice(node) {
       Object.defineProperty(this, 'maxForeground', {value: foregroundLimit(root), enumerable: true});
       this.crossfadeSec = options.crossfadeSec ?? 1.2;
       this.primeTimeoutMs = options.primeTimeoutMs ?? 10000;
+      this.progressTimeoutMs = options.progressTimeoutMs ?? 2000;
       this.nodes = new Map(); this.slots = new Map(); this.sources = new Map();
       this.plan = null; this.ready = false; this.running = false; this.finished = false;
       this.error = null; this.lastFailure = null; this.disposed = false;
       this.frame = 0; this.generation = 0; this.orientation = null; this.orientationOverride = null;
       this.starting = false; this.initializing = false; this.restarting = false;
       this.playingIntent = false; this.revision = 0; this.pending = null; this.draining = false;
-      this.controller = null; this.fade = null; this.seam = null; this.territory = null; this.bindings = new WeakMap();
+      this.controller = null; this.fade = null; this.seam = null; this.promotion = null;
+      this.territory = null; this.bindings = new WeakMap();
       this.audio = {context: null, mode: 'none', enabled: false, blocked: null, input: null};
       this.sound = {enabled: false, volume: .7}; this.master = null;
       this.events = []; this.activeStandbys = 0; this.maxConcurrentStandbys = 0;
@@ -577,17 +579,31 @@ function applySlice(node) {
     waitForSeam(node, signal) {
       if (!this.running || node.resting || !node.media || node.media.currentTime < .04) return Promise.resolve();
       return new Promise((resolve, reject) => {
-        let previous = node.media.currentTime;
+        const began = this.clock.simTime, allowance = this.progressTimeoutMs / 1000;
+        const media = node.media, duration = media.duration;
+        const deadline = began + allowance + (Number.isFinite(duration) && duration > 0 ? Math.max(0, duration - media.currentTime) : 0);
+        let previous = media.currentTime, decodedTime = node.decoded?.mediaTime, progressAt = began, done = false;
         const finish = error => {
+          if (done) return; done = true;
           unsubscribe(); signal.removeEventListener('abort', abort);
           if (this.seam?.node === node) this.seam = null;
           error ? reject(error) : resolve();
         };
         const abort = () => finish(cancelled());
-        const unsubscribe = this.clock.subscribe(() => {
-          const current = node.media.currentTime;
-          if (current + .05 < previous) finish();
+        const unsubscribe = this.clock.subscribe(time => {
+          const current = media.currentTime;
+          if (current + .05 < previous) { finish(); return; }
+          if (media.requestVideoFrameCallback ? node.decoded?.mediaTime !== decodedTime : current !== previous) progressAt = time;
+          decodedTime = node.decoded?.mediaTime;
           previous = current;
+          // WebKit can remain ready/playing while native looping stops presenting
+          // frames. Such a source cannot produce the seam this permit waits for.
+          if (time - progressAt >= allowance || time >= deadline) {
+            node.stallCount++;
+            this.record('seam-fallback', node.id, {reason: time - progressAt >= allowance ? 'no-frames' : 'no-wrap',
+              waitedSec: time - began, currentTime: current, decodedTime});
+            finish();
+          }
         });
         this.seam = {node, finish};
         signal.addEventListener('abort', abort, {once: true});
@@ -599,17 +615,34 @@ function applySlice(node) {
       // advance after becoming visible until play() is requested again. Keep
       // this request on the promotion stack, with no intervening RAF.
       return new Promise((resolve, reject) => {
-        let done = false;
+        const media = deck.media;
+        let done = false, fulfilled = false, frames = 0, frame = null, previous = deck.decoded?.mediaTime;
         const finish = error => {
           if (done) return; done = true; clearTimeout(timer);
           signal.removeEventListener('abort', abort);
+          media.removeEventListener('timeupdate', fallback);
+          if (frame !== null) media.cancelVideoFrameCallback?.(frame);
+          if (this.promotion?.deck === deck) this.promotion = null;
           error ? reject(error) : resolve();
         };
         const abort = () => finish(cancelled());
-        const timer = setTimeout(() => finish(new Error('Promoted clip did not resume playback in time')), this.primeTimeoutMs);
+        const progress = current => {
+          if (current !== previous) { frames++; previous = current; }
+          if (fulfilled && frames >= 2) finish();
+        };
+        const decoded = (_, metadata) => {
+          frame = null; progress(metadata.mediaTime);
+          if (!done) frame = media.requestVideoFrameCallback(decoded);
+        };
+        const fallback = () => { if (media.readyState >= 2) progress(media.currentTime); };
+        const timer = setTimeout(() => finish(new Error('Promoted clip did not present new frames in time')),
+          Math.min(this.primeTimeoutMs, this.progressTimeoutMs));
+        this.promotion = {deck, finish};
         signal.addEventListener('abort', abort, {once: true});
         if (signal.aborted) { abort(); return; }
-        try { deck.media.play().then(() => finish(), finish); }
+        if (media.requestVideoFrameCallback) frame = media.requestVideoFrameCallback(decoded);
+        else { previous = media.currentTime; media.addEventListener('timeupdate', fallback); }
+        try { media.play().then(() => { fulfilled = true; if (frames >= 2) finish(); }, finish); }
         catch (error) { finish(error); }
       });
     }
@@ -655,12 +688,12 @@ function applySlice(node) {
           node.birthTime = this.clock.simTime - incoming.media.currentTime;
           node.audio = incoming.binding; node.callbacks = incoming.callbacks; node.decoded = incoming.decoded;
           node.phase = node.resting ? 'RESTING' : 'ACTIVE';
-          if (!this.running || node.resting) incoming.media.pause();
+          if (!this.running) incoming.media.pause();
           incoming.media.muted = !incoming.binding || !this.sound.enabled || !this.audio.enabled;
           this.applyLayout(); this.updateAudio();
-          if (this.running && !node.resting) await this.playPromoted(incoming, signal);
+          if (this.running) await this.playPromoted(incoming, signal);
           if (signal.aborted) throw cancelled();
-          if (!this.running || node.resting) incoming.media.pause();
+          if (!this.running) incoming.media.pause();
           // Promotion is now committed. Until this point the outgoing decoder,
           // Blob URL and resident state remain available for a fail-open rollback.
           if (outgoing) this.unload(outgoing);
@@ -757,10 +790,8 @@ function applySlice(node) {
       if (!node || node.resting === Boolean(resting)) return;
       node.resting = Boolean(resting); node.phase = node.resting ? 'RESTING' : 'ACTIVE';
       node.box.style.transition = 'opacity 400ms linear'; node.box.style.opacity = node.resting ? '.35' : '1';
-      if (node.media) {
-        if (node.resting) node.media.pause();
-        else if (this.running) node.media.play().catch(error => this.report(error, node));
-      }
+      // Ecological rest changes prominence, not the native playback lifecycle.
+      // Keeping this foreground loop running avoids a WebKit pause/wake edge.
       this.updateNodeAudio(node);
     }
     updateNodeAudio(node) {
@@ -807,6 +838,7 @@ function applySlice(node) {
       // settles the handoff; it must not strand a semaphore until another click.
       if (this.fade) { const fade = this.fade; this.fade = null; fade.finish(); }
       if (this.seam) this.seam.finish();
+      if (this.promotion) this.promotion.finish();
       this.updateAudio(); this.status();
     }
     pause() { this.playingIntent = false; if (this.pending) this.pending.playing = false; this.suspend(); }
@@ -816,7 +848,7 @@ function applySlice(node) {
       if (this.running || document.hidden) return;
       this.running = true; this.generation++; this.clock.start();
       const jobs = [];
-      for (const node of this.nodes.values()) if (node.media && !node.resting && node.media.paused) {
+      for (const node of this.nodes.values()) if (node.media && node.media.paused) {
         jobs.push(node.media.play().catch(error => this.report(error, node)));
       }
       this.updateAudio(); this.status(); await Promise.all(jobs);
