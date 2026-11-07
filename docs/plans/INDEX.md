@@ -25,6 +25,7 @@ evidence; branch, PR and workflow state belong in the current status projection.
 | 2026-10-02 | [python-imports-and-verification](2026-10-02-python-imports-and-verification.md) | Python imports and full verification |
 | 2026-11-05 | [full-bleed-layout-presets](2026-11-05-full-bleed-layout-presets.md) | Plan — Full-Bleed Layout Presets (2026-11-05) |
 | 2026-11-05 | [gravity-selection](2026-11-05-gravity-selection.md) | Plan — Gravity selection for the generative composer (2026-11-05) |
+| 2026-11-07 | [clip-presence-filters](2026-11-07-clip-presence-filters.md) | Clip presence filters implementation plan |
 | 2026-11-07 | [studio-ecosystem-design](2026-11-07-studio-ecosystem-design.md) | Studio as an evolving audiovisual ecosystem |
 | 2026-11-07 | [studio-ecosystem-implementation](2026-11-07-studio-ecosystem-implementation.md) | Studio ecosystem implementation plan |
 

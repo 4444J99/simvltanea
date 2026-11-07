@@ -80,6 +80,7 @@ button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.6
 #families{display:flex}
 #families button[aria-checked=true]{background:rgba(255,255,255,.17);color:#fff}
 #families button[aria-checked=false]{color:var(--dim)}
+#effects[aria-pressed=true]{background:rgba(255,255,255,.17);color:#fff}
 #sound{display:flex;align-items:center}
 #volume{width:0;opacity:0;margin:0;height:44px;accent-color:#fff;cursor:pointer;
 transition:width 200ms var(--ease),opacity 200ms var(--ease),margin 200ms var(--ease)}
@@ -188,12 +189,13 @@ accept="video/*,.mov,.mp4,.m4v,.webm,.json,application/json">
 </div>
 <div id="corner" role="toolbar" aria-label="Page">
 <button id="activity" type="button" aria-label="Hold changes" aria-pressed="false" title="Hold changes">∞</button>
+<button id="effects" type="button" aria-label="Filters" aria-pressed="true" title="Filters on">ƒx</button>
 <button id="loop-mode" type="button" aria-label="Play forward loops" title="Boomerang loops" hidden>↔</button>
 <button id="fullscreen" type="button" aria-label="Full screen" aria-keyshortcuts="F">''' + ICONS['fullscreen'] + '''</button>
 <button id="help" type="button" aria-label="About this page" aria-expanded="false" aria-controls="about">?</button>
 </div>
 <div id="about" role="dialog" aria-label="About" tabindex="-1" hidden>
-<p>Loops on their own clocks, trading sound and space. ∞ holds changes; ↔ switches loop direction.</p>
+<p>Loops on their own clocks, rising and receding in sound and image. ƒx toggles filters; ∞ holds changes; ↔ switches loop direction.</p>
 <p>Your videos never leave this device. Nothing is uploaded.</p>
 <p>Space play · R shuffle · M sound · F full screen · ← → panels</p>
 </div>
@@ -219,7 +221,7 @@ def studio_files() -> dict[str, bytes]:
     return {
         'index.html': INDEX_HTML.encode(),
         'runtime.js': b'\n'.join((HERE / name).read_bytes() for name in
-                                ('browser.audio.js', 'browser.ecosystem.js', 'browser.live.js')),
+                                ('browser.audio.js', 'browser.presence.js', 'browser.ecosystem.js', 'browser.live.js')),
         'compiler.js': (HERE / 'browser.compiler.js').read_bytes(),
         'studio.js': (HERE / 'browser.studio.js').read_bytes(),
         'layouts.json': layouts.encode(),
