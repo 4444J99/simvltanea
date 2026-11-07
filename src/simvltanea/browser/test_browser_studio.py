@@ -521,13 +521,15 @@ class StudioBrowserTests(unittest.TestCase):
 
     # ---- helpers -----------------------------------------------------------
 
-    def open(self, query='', width=1280, height=720, reduced_motion='no-preference'):
+    def open(self, query='', width=1280, height=720, reduced_motion='no-preference', init_script=None):
         context = self.browser.new_context(viewport={'width': width, 'height': height}, reduced_motion=reduced_motion)
         self.addCleanup(context.close)
         page = context.new_page()
         page.requests, page.errors = [], []
         page.on('request', lambda request: page.requests.append(request.url))
         page.on('pageerror', lambda error: page.errors.append(str(error)))
+        if init_script is not None:
+            page.add_init_script(init_script)
         page.goto(self.url + query)
         page.wait_for_function('() => window.SimvltaneaStudio && window.SimvltaneaStudio.snapshot && '
                                'window.compositionRuntime && SimvltaneaStudio.snapshot().seed !== null')
@@ -649,6 +651,36 @@ class StudioBrowserTests(unittest.TestCase):
         again = self.open(f'?seed={last["seed"]}')
         self.assertEqual(self.snapshot(again)['selection'], last['selection'])
         self.assertEqual(self.allowed(first), [])
+
+    def test_unlock_during_recording_produces_audio_after_transition(self):
+        page = self.open('?gen=1&seed=314159', init_script="""(() => {
+          const connect = AudioNode.prototype.connect;
+          window.studioOutputMeters = new Map();
+          AudioNode.prototype.connect = function (target, ...ports) {
+            const result = connect.call(this, target, ...ports);
+            // The compressor is the last node in the studio's output path.
+            if (this instanceof DynamicsCompressorNode && target === this.context.destination) {
+              const meter = this.context.createAnalyser();
+              connect.call(this, meter);
+              studioOutputMeters.set(this.context, meter);
+            }
+            return result;
+          };
+        })();""")
+        self.assertEqual(self.snapshot(page)['record'], 'recording')
+        self.tap(page, '#speaker')
+        self.assertEqual(self.snapshot(page)['sound'], 'on')
+        self.playing(page)
+        snapshot = self.snapshot(page)
+        self.assertEqual((snapshot['source'], snapshot['record'], snapshot['builtinsReady'], snapshot['phase']),
+                         ('builtin', 'recorded', 12, 'playing'))
+        self.assertTrue(page.evaluate('studioOutputMeters.has(compositionRuntime.audio.context)'))
+        page.wait_for_function("""() => {
+          const meter = studioOutputMeters.get(compositionRuntime.audio.context);
+          const samples = new Float32Array(meter.fftSize);
+          meter.getFloatTimeDomainData(samples);
+          return samples.some(sample => Math.abs(sample) > 0.001);
+        }""", timeout=10000)
 
     def test_first_gesture_turns_sound_on_and_m_mutes(self):
         page = self.open('?seed=7')
