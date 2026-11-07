@@ -1381,6 +1381,8 @@
         video.pause();
         video.removeAttribute('src');
         video.load();
+        if (live.proof) live.record('resource-retired', null, {role: 'metadata', url,
+          currentSrc: video.currentSrc, readyState: video.readyState, paused: video.paused});
         URL.revokeObjectURL(url);
         resolve(result);
       };

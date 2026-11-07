@@ -117,6 +117,20 @@ result.samples.slice(800, 900).forEach(row => {
             with self.subTest(mutation=mutation):
                 self.assert_refused(mutation, 'noErrors')
 
+    def test_structured_console_error_cannot_pass(self):
+        self.assert_refused('''
+result.consoleErrors.push({message: 'Native media error', phase: 'sustained',
+  epochMs: 1794096000000, wall: 120000, location: {url: 'blob:failed-source', lineNumber: 0}});
+''', 'noErrors')
+
+    def test_failed_requests_cannot_pass_including_cleanup(self):
+        for phase in ('navigation', 'sustained', 'closing'):
+            with self.subTest(phase=phase):
+                self.assert_refused('''
+result.requestFailures = [{url: 'blob:failed-source', method: 'GET', resourceType: 'media',
+  failure: {errorText: 'Native resource load failed'}, phase: ''' + json.dumps(phase) + '''}];
+''', 'noErrors')
+
 
 if __name__ == '__main__':
     unittest.main()

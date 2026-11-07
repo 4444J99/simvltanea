@@ -20,16 +20,35 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 // media references or prototype patches are installed in the sustained runs.
 function sample() {
   const runtime = globalThis.compositionRuntime;
-  return {wall: performance.now(), simTime: runtime.clock.simTime,
+  const decks = [...runtime.slots.values()].flatMap(node => node.decks.map((deck, index) => {
+    const media = deck.media, quality = media.getVideoPlaybackQuality?.();
+    return {id: node.id, deck: index, active: node.active === deck,
+      populated: media.hasAttribute('src'), src: media.src, currentSrc: media.currentSrc,
+      duration: media.duration, current: media.currentTime, decoded: deck.decoded?.mediaTime,
+      callbacks: deck.callbacks, paused: media.paused, seeking: media.seeking, ready: media.readyState,
+      muted: media.muted, weight: deck.weight, audio: deck.binding ? {
+        target: deck.binding.target, gain: deck.binding.gain.gain.value,
+        filterHz: deck.binding.filter.frequency.value, pan: deck.binding.pan.pan.value} : null,
+      width: media.videoWidth, height: media.videoHeight,
+      quality: quality ? {creationTime: Number(quality.creationTime),
+        totalVideoFrames: Number(quality.totalVideoFrames), droppedVideoFrames: Number(quality.droppedVideoFrames),
+        corruptedVideoFrames: Number(quality.corruptedVideoFrames)} : null,
+      nativeError: media.error ? {code: media.error.code, message: media.error.message} : null};
+  }));
+  return {wall: performance.now(), epochMs: Date.now(), timeOrigin: performance.timeOrigin, simTime: runtime.clock.simTime,
     running: runtime.running, hidden: document.hidden, draining: runtime.draining,
     lastFailure: runtime.lastFailure,
     foregroundLimit: runtime.maxForeground, standbys: runtime.activeStandbys,
     maxStandbys: runtime.maxConcurrentStandbys, audioState: runtime.audio.context?.state,
-    populated: [...runtime.slots.values()].reduce((sum, node) => sum + node.decks.filter(deck => deck.media.hasAttribute('src')).length, 0),
-    playing: [...runtime.slots.values()].reduce((sum, node) => sum + node.decks.filter(deck => deck.media.hasAttribute('src') && !deck.media.paused).length, 0),
+    audioCurrentTime: runtime.audio.context?.currentTime,
+    audioSampleRate: runtime.audio.context?.sampleRate, masterGain: runtime.master?.volume?.gain.value,
+    sound: {...runtime.sound}, audioEnabled: runtime.audio.enabled,
+    populated: decks.filter(deck => deck.populated).length,
+    playing: decks.filter(deck => deck.populated && !deck.paused).length, decks,
     nodes: [...runtime.nodes.values()].map(node => ({id: node.id, item: node.item?.name,
       sha: node.item?.sha256, birth: node.birthTime, deck: node.decks.indexOf(node.active),
-      phase: node.phase, busy: node.busy, resting: node.resting,
+      phase: node.phase, busy: node.busy, resting: node.resting, targetGain: node.targetGain,
+      geometry: node.geometry, rect: node.cell?.rect,
       current: node.media?.currentTime, decoded: node.decoded?.mediaTime,
       callbacks: node.callbacks, paused: node.media?.paused, seeking: node.media?.seeking,
       ready: node.media?.readyState, nativeError: node.media?.error ?
@@ -112,6 +131,7 @@ function analyse(result) {
     succession: initialCount === 4 && births.size >= initialCount * 2 && changedSlots.size === initialCount,
     nativeWraps: wraps > 0,
     noErrors: result.errors.length === 0 && result.consoleErrors.length === 0 && result.httpErrors.length === 0 &&
+      !(result.requestFailures || []).length &&
       runtimeFailures.size === 0 && !(result.events || []).some(event => ['media-failure', 'observer-failure'].includes(event.type)),
   };
   return {pass: Object.values(checks).every(Boolean), checks, samples: result.samples.length,
@@ -157,24 +177,50 @@ async function click(page, selector) {
 }
 
 function observeErrors(page, result) {
+  // These are runner receipt times, not precise browser emission times. Keep
+  // both clocks so they can be aligned without evaluating the page per error.
+  const stamp = () => {
+    const epochMs = Date.now();
+    return {epochMs, runnerTimeMs: performance.now(), phase: result.phase,
+      wall: result.documentTimeOrigin == null ? null : epochMs - result.documentTimeOrigin};
+  };
   page.on('pageerror', error => result.errors.push(String(error)));
-  page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
-  page.on('response', response => { if (response.status() >= 400) result.httpErrors.push({url: response.url(), status: response.status()}); });
+  page.on('console', message => {
+    if (message.type() === 'error') {
+      const location = message.location();
+      result.consoleErrors.push({...stamp(), message: message.text(), location, url: location.url});
+    }
+  });
+  page.on('response', response => {
+    if (response.status() >= 400) result.httpErrors.push({...stamp(), url: response.url(), status: response.status()});
+  });
+  page.on('requestfailed', request => result.requestFailures.push({...stamp(), url: request.url(),
+    method: request.method(), resourceType: request.resourceType(), failure: request.failure()}));
+}
+
+async function documentClock(page, result) {
+  result.documentTimeOrigin = await page.evaluate(() => performance.timeOrigin);
+  result.errorTiming = 'Runner receipt time; wall = epochMs - documentTimeOrigin, not exact browser emission time';
+  for (const error of [...result.consoleErrors, ...result.httpErrors, ...result.requestFailures]) {
+    if (error.wall === null) error.wall = error.epochMs - result.documentTimeOrigin;
+  }
 }
 
 async function sustained(webkit, device, base, out, name, query) {
-  const result = {name, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: []};
+  const result = {name, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
   let browser;
   try {
     browser = await webkit.launch({headless: true}); result.browserVersion = browser.version();
     const context = await browser.newContext(device), page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
     const initialAt = performance.now();
-    await page.goto(result.requestedUrl, {waitUntil: 'domcontentloaded'}); await ready(page);
+    result.phase = 'navigation';
+    await page.goto(result.requestedUrl, {waitUntil: 'domcontentloaded'}); await documentClock(page, result); await ready(page);
     result.initialSeconds = (performance.now() - initialAt) / 1000;
-    await click(page, '#speaker');
+    result.phase = 'sound-unlock'; await click(page, '#speaker');
     await page.waitForFunction(() => compositionRuntime.audio.context?.state === 'running' && SimvltaneaStudio.snapshot().sound === 'on');
     result.actualUrl = page.url(); result.initialStudio = await page.evaluate(() => SimvltaneaStudio.snapshot());
+    result.phase = 'sustained';
     const began = performance.now(); let nextCoarse = 0, nextSave = 20000;
     while (performance.now() - began < DURATION_MS) {
       const row = await page.evaluate(sample); result.samples.push(row);
@@ -194,9 +240,10 @@ async function sustained(webkit, device, base, out, name, query) {
     result.samples.push(await page.evaluate(sample));
     result.events = await page.evaluate(() => compositionRuntime.events);
     result.completed = true;
-    await page.screenshot({path: path.join(out, name + '-final.png')});
+    result.phase = 'screenshot';
+    await page.screenshot({path: path.join(out, name + '-final.png'), caret: 'initial', animations: 'allow'});
   } catch (error) { result.failure = String(error.stack || error); }
-  finally { if (browser) await browser.close(); }
+  finally { result.phase = 'closing'; if (browser) await browser.close(); }
   result.summary = analyse(result); save(out, name + '.json', result);
   console.log(JSON.stringify({name, ...result.summary})); return result.summary;
 }
@@ -230,13 +277,15 @@ async function audioProof(webkit, out) {
 
 // Intentional interactions and the post-master meter are isolated from both baselines.
 async function controls(webkit, device, base, out) {
-  const result = {errors: [], consoleErrors: [], httpErrors: [], checks: {}};
+  const result = {errors: [], consoleErrors: [], httpErrors: [], requestFailures: [], checks: {}};
   let browser;
   try {
     browser = await webkit.launch({headless: true});
     const context = await browser.newContext(device), page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
-    await page.goto(base + '?seed=528316659&mix=s0.1.2.3&evolve=0'); await ready(page);
+    result.phase = 'navigation';
+    await page.goto(base + '?seed=528316659&mix=s0.1.2.3&evolve=0&proof=1');
+    await documentClock(page, result); await ready(page); result.phase = 'controls';
     await click(page, '#speaker');
     await page.waitForFunction(() => SimvltaneaStudio.snapshot().sound === 'on');
     await page.evaluate(() => { globalThis.smokeMedia = [...compositionRuntime.nodes.values()].map(node => node.media); });
@@ -292,11 +341,12 @@ async function controls(webkit, device, base, out) {
     await page.waitForFunction(() => SimvltaneaStudio.snapshot().sound === 'on' && smokeLevel() > .00001);
     result.unmutedPeak = await page.evaluate(() => smokeLevel()); result.checks.sound = true;
     result.final = await page.evaluate(sample);
-    result.checks.noErrors = !result.errors.length && !result.consoleErrors.length && !result.httpErrors.length &&
-      !result.final.lastFailure && result.final.nodes.every(node => !node.nativeError);
-    result.pass = Object.values(result.checks).every(Boolean);
+    result.events = await page.evaluate(() => compositionRuntime.events);
   } catch (error) { result.pass = false; result.failure = String(error.stack || error); }
-  finally { if (browser) await browser.close(); }
+  finally { result.phase = 'closing'; if (browser) await browser.close(); }
+  result.checks.noErrors = !result.errors.length && !result.consoleErrors.length && !result.httpErrors.length &&
+    !result.requestFailures.length && !result.final?.lastFailure && result.final?.nodes.every(node => !node.nativeError);
+  result.pass = !result.failure && Object.values(result.checks).every(Boolean);
   save(out, 'controls.json', result); return result;
 }
 

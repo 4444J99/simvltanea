@@ -16,9 +16,12 @@ the staged files. Generated media and receipts remain below `var/`.
 Two separate browser sessions run for 180 seconds each: seed `528316659` and a
 fresh composition whose resulting seed/URL is retained. Both enable sound by
 clicking the speaker. They read native current time and decoded media time every
-137 ms, with application snapshots each second. No init script, prototype
+137 ms, with application snapshots each second. Samples also retain the audio
+clock, gain values and targets, each existing deck's source URL and native
+duration, and explicit numeric playback-quality counters. No init script, prototype
 patch, analyser, canvas read, or retained-video registry is installed during
-these baselines. A screenshot is captured only after each baseline ends.
+these baselines. A screenshot is captured only after each baseline ends, without
+injecting a caret-hiding style or disabling animations.
 
 The gate checks joint clock/frame holds and decoded-frame holds independently;
 either reaching two seconds fails. Increasing callback counts alone do not
@@ -29,7 +32,15 @@ suspension fail separately. Outgoing residents remain measured during
 transitions rather than hiding holds behind the pending state.
 
 Receipts also require four persistent foreground slots, native wraps, a successor
-in every initial slot, and no native media, runtime, page, console, or HTTP errors.
+in every initial slot, and no native media, runtime, page, console, HTTP, or
+failed-request errors. Console errors retain their message and source location;
+failed requests retain the URL and native failure details. Error timestamps
+record when the runner received the event, with both epoch and monotonic clocks.
+The document's `performance.timeOrigin` aligns those receipt times with media
+samples and the application's proof-only resource-retirement events. They are
+not exact browser emission timestamps. Navigation, sustained playback,
+screenshot and browser-closing phases remain distinguishable; no error category
+is filtered from the gate.
 All three pacing regimes must appear across the two runs combined; each run
 reports its own coverage. A missing regime is a coverage failure, not proof of
 a playback defect. They enforce at
@@ -41,8 +52,9 @@ every moment between samples.
 
 After both baselines, a new browser checks isolated tapping, shuffle,
 forward/boomerang selection, portrait/landscape layout, global pause/resume,
-the mobile population limit, and sound mute/unmute. Only this interaction
-session attaches a post-master meter, requiring nonzero digital output and
+the mobile population limit, and sound mute/unmute. All three sessions retain
+the proof-only resource-retirement log. Only this interaction session attaches
+a post-master meter, requiring nonzero digital output and
 silence when muted. These intentional actions never enter the continuity
 measurements.
 
