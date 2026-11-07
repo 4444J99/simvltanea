@@ -17,11 +17,13 @@ the existing public library's manifest and listed clips. It never publishes the
 repository root, archives, source material, tests, or build scratch files.
 
 The library is pinned to the immutable deployment
-`https://7fec0066.loop-compositor-studio.pages.dev/library/` and manifest SHA-256
-`8d9d65a9f77dc3362e4cfc3e3fd84fa5ff5fabf227299e446df92ab03359a5c8`:
-580 clips totaling 70,480,365 bytes. Keep that deployment available because builds
-retrieve its public assets. The build verifies the manifest digest, schema,
-clip sizes and content hashes, and the Pages 25 MiB per-file limit before
+`https://75cafe28.loop-compositor-studio.pages.dev/library/` and manifest SHA-256
+`030d6446b3a57ea003ec056fdb7ed3e553c10f184b477346822eec5b4f9ca401`:
+580 logical clips with their original forward files and 580 prepared boomerang
+variants, totaling 1,160 media files and 396,651,492 bytes. The original forward
+files remain byte-for-byte intact at 70,480,365 bytes. Keep that deployment
+available because builds retrieve its public assets. The build verifies the
+manifest digest, schema, clip sizes and content hashes, and the Pages 25 MiB per-file limit before
 assembling the output. Missing or changed media fails the build.
 
 For a local build, run the same command from the repository root. The output

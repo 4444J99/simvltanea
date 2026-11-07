@@ -25,8 +25,8 @@ from tools.publishing.stage_library_site import (LibrarySiteError, check_library
                                                  stage_library_site, validate_manifest)
 
 
-LIBRARY_URL = 'https://7fec0066.loop-compositor-studio.pages.dev/library/'
-MANIFEST_SHA256 = '8d9d65a9f77dc3362e4cfc3e3fd84fa5ff5fabf227299e446df92ab03359a5c8'
+LIBRARY_URL = 'https://75cafe28.loop-compositor-studio.pages.dev/library/'
+MANIFEST_SHA256 = '030d6446b3a57ea003ec056fdb7ed3e553c10f184b477346822eec5b4f9ca401'
 PAGES_MAX_BYTES = 25 * 1024 * 1024
 
 
