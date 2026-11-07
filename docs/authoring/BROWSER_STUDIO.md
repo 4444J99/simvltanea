@@ -142,6 +142,10 @@ deploy time:
 PYTHONPATH=src python3 -m simvltanea.browser.browser_studio --output var/site/studio
 python3 -m tools.publishing.stage_library_site --studio-out var/site/studio \
     --library /path/to/public-demo --site var/site/deploy
+
+# Public playback can also be staged on the Lab player (continuous A/B slots):
+python3 -m tools.publishing.stage_library_site --playback lab \
+    --lab-out src/simvltanea/lab/app --library /path/to/public-demo --site var/site/deploy
 ```
 
 `stage_library_site` copies both into an absent or empty `--site`. It checks
