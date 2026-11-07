@@ -187,11 +187,13 @@ INDEX_HTML = '''<!doctype html>
 accept="video/*,.mov,.mp4,.m4v,.webm,.json,application/json">
 </div>
 <div id="corner" role="toolbar" aria-label="Page">
+<button id="activity" type="button" aria-label="Hold changes" aria-pressed="false" title="Hold changes">∞</button>
+<button id="loop-mode" type="button" aria-label="Play forward loops" title="Boomerang loops" hidden>↔</button>
 <button id="fullscreen" type="button" aria-label="Full screen" aria-keyshortcuts="F">''' + ICONS['fullscreen'] + '''</button>
 <button id="help" type="button" aria-label="About this page" aria-expanded="false" aria-controls="about">?</button>
 </div>
 <div id="about" role="dialog" aria-label="About" tabindex="-1" hidden>
-<p>Loops on their own clocks, colliding by accident.</p>
+<p>Loops on their own clocks, trading sound and space. ∞ holds changes; ↔ switches loop direction.</p>
 <p>Your videos never leave this device. Nothing is uploaded.</p>
 <p>Space play · R shuffle · M sound · F full screen · ← → panels</p>
 </div>
@@ -200,8 +202,8 @@ accept="video/*,.mov,.mp4,.m4v,.webm,.json,application/json">
 <div id="drop" aria-hidden="true">''' + ICONS['drop'] + '''</div>
 </main>
 <script src="compiler.js" defer></script>
-<script src="studio.js" defer></script>
 <script src="runtime.js" defer></script>
+<script src="studio.js" defer></script>
 </body>
 </html>
 '''
@@ -216,7 +218,8 @@ def studio_files() -> dict[str, bytes]:
     layouts = json.dumps(layout_bundle_v2(), indent=2, ensure_ascii=False) + '\n'
     return {
         'index.html': INDEX_HTML.encode(),
-        'runtime.js': (HERE / 'browser.runtime.js').read_bytes(),
+        'runtime.js': b'\n'.join((HERE / name).read_bytes() for name in
+                                ('browser.audio.js', 'browser.ecosystem.js', 'browser.live.js')),
         'compiler.js': (HERE / 'browser.compiler.js').read_bytes(),
         'studio.js': (HERE / 'browser.studio.js').read_bytes(),
         'layouts.json': layouts.encode(),

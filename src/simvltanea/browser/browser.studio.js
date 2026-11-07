@@ -1,9 +1,9 @@
 /* SIMVLTANEA studio: loops on their own clocks, colliding by accident.
  *
  * A classic script without dependencies, staged as studio.js beside compiler.js,
- * runtime.js and layouts.json by browser_studio.stage_studio. It must load after
- * compiler.js and before runtime.js: it installs window.compositionIO, through
- * which the unmodified runtime receives the compiled plan and the media bytes.
+ * runtime.js and layouts.json by browser_studio.stage_studio. It loads after
+ * compiler.js and the persistent Studio runtime modules. Compiled plans retain
+ * layout/export metadata; native-loop residents own continuous playback.
  *
  * The page plays at once. Twelve generative pictures (canvas drawings with
  * integer-cycle motion, so the last frame meets the first) are drawn live while
@@ -17,8 +17,8 @@
  * ranges. ?seed=<uint32> reproduces a roll; ?mix= records hand edits on top of it.
  *
  * Sound is gated by the browser until the first gesture. Before it the plan is the
- * silent v1 field (muted video autoplays); after it the same selection is
- * relaunched as plan v2 spatial_loops: each loop's own audio, panned by panel.
+ * silent v1 field (muted video autoplays); after it persistent audio bindings
+ * provide each loop's own sound without recreating or restarting the videos.
  *
  * Library mode: when library/manifest.json (simvltanea.public-demo/1) sits beside the page and
  * validates, its clips replace the generated loops (?gen=1 forces the generated ones). A roll
@@ -372,24 +372,61 @@
   /* The clips of a simvltanea.public-demo/1 manifest, sorted by id, or null when anything is off:
    * a wrong schema, no clips, a file outside clips/<id>.mp4, a duplicate id, or a size, orientation
    * or duration out of bounds. A null manifest means the generated loops play instead. */
+  function libraryAsset(clip, variant = false) {
+    if (!clip || typeof clip !== 'object' || Array.isArray(clip)) return null;
+    const size = (value, max) => Number.isSafeInteger(value) && value >= 1 && value <= max;
+    const {id, file, width, height, orientation, bytes} = clip, seconds = clip.duration_seconds;
+    if (typeof id !== 'string' || !/^[0-9a-f]{12}$/.test(id)) return null;
+    if (typeof file !== 'string' || !LIBRARY_FILE.test(file) || file !== `clips/${id}.mp4`) return null;
+    if (!size(width, LIBRARY_MAX_SIDE) || !size(height, LIBRARY_MAX_SIDE) || !size(bytes, LIBRARY_MAX_BYTES)) return null;
+    if (orientation !== (height > width ? 'portrait' : 'landscape')) return null;
+    if (!Number.isFinite(seconds) || seconds < MIN_FRAMES / FPS || seconds > LIBRARY_MAX_SECONDS) return null;
+    const asset = {id, file, bytes, orientation, width, height, duration_seconds: seconds};
+    if (variant) {
+      if (clip.fps !== 30 || !size(clip.frame_count, 18000) ||
+          Math.abs(clip.frame_count / 30 - seconds) >= 0.001 ||
+          !Number.isFinite(clip.seam_offset_seconds) || clip.seam_offset_seconds < 0 ||
+          clip.seam_offset_seconds > seconds) return null;
+      for (const key of ['fps', 'frame_count', 'seam_offset_seconds']) asset[key] = clip[key];
+    }
+    const audioFields = ['has_audio', 'envelope_hz', 'rms_envelope', 'lufs_integrated', 'peak_dbfs'];
+    if (variant || audioFields.some(key => clip[key] !== undefined)) {
+      if (typeof clip.has_audio !== 'boolean' || clip.envelope_hz !== 10 ||
+          !Array.isArray(clip.rms_envelope) || clip.rms_envelope.length !== Math.ceil(seconds * 10) ||
+          clip.rms_envelope.some(value => !Number.isFinite(value) || value < 0 || value > 1)) return null;
+      if (clip.lufs_integrated !== null && (!Number.isFinite(clip.lufs_integrated) ||
+          clip.lufs_integrated < -160 || clip.lufs_integrated > 12)) return null;
+      if (clip.has_audio ? (!Number.isFinite(clip.peak_dbfs) || clip.peak_dbfs < -160 || clip.peak_dbfs > 24) :
+          (clip.peak_dbfs !== null || clip.lufs_integrated !== null)) return null;
+      for (const key of audioFields) asset[key] = clip[key];
+    }
+    return asset;
+  }
   function libraryClips(data) {
     if (!data || typeof data !== 'object' || Array.isArray(data) || data.schema !== LIBRARY_SCHEMA) return null;
     if (!Array.isArray(data.clips) || !data.clips.length || data.clips.length > LIBRARY_MAX_CLIPS) return null;
-    const size = (value, max) => Number.isSafeInteger(value) && value >= 1 && value <= max;
-    const seen = new Set(), clips = [];
+    const seen = new Set(), assets = new Map(), clips = [];
+    const rememberAsset = asset => {
+      const facts = JSON.stringify(asset), previous = assets.get(asset.id);
+      if (previous !== undefined && previous !== facts) return false;
+      assets.set(asset.id, facts); return true;
+    };
     for (const clip of data.clips) {
-      if (!clip || typeof clip !== 'object' || Array.isArray(clip)) return null;
-      const {id, file, width, height, orientation, bytes} = clip, seconds = clip.duration_seconds;
-      if (typeof id !== 'string' || !/^[0-9a-f]{12}$/.test(id) || seen.has(id)) return null;
-      if (typeof file !== 'string' || !LIBRARY_FILE.test(file) || file !== `clips/${id}.mp4`) return null;
-      if (!size(width, LIBRARY_MAX_SIDE) || !size(height, LIBRARY_MAX_SIDE) || !size(bytes, LIBRARY_MAX_BYTES)) return null;
-      if (orientation !== (height > width ? 'portrait' : 'landscape')) return null;
-      if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < MIN_FRAMES / FPS ||
-        seconds > LIBRARY_MAX_SECONDS) return null;
+      const asset = libraryAsset(clip);
+      if (!asset || seen.has(asset.id) || !rememberAsset(asset)) return null;
       const tags = clip.tags === undefined ? {} : clip.tags;
       if (!tags || typeof tags !== 'object' || Array.isArray(tags)) return null;
-      seen.add(id);
-      clips.push({id, file, bytes, orientation, look: lookKey(tags), mood: words(tags.mood)});
+      seen.add(asset.id);
+      if (clip.variants !== undefined) {
+        if (!clip.variants || typeof clip.variants !== 'object' || Array.isArray(clip.variants) ||
+            Object.keys(clip.variants).some(mode => mode !== 'boomerang')) return null;
+        if (clip.variants.boomerang !== undefined) {
+          const boomerang = libraryAsset(clip.variants.boomerang, true);
+          if (!boomerang || boomerang.id === asset.id || !rememberAsset(boomerang)) return null;
+          asset.variants = {boomerang};
+        }
+      }
+      clips.push({...asset, look: lookKey(tags), mood: words(tags.mood)});
     }
     return clips.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
@@ -614,10 +651,18 @@
   const BUILTINS = ['drift', 'bands', 'sweep', 'grain', 'tide', 'lattice', 'orbit', 'bloom', 'moire', 'aurora', 'weave', 'pulse']
     .map((name, index) => ({name, frames: [96, 66, 108, 60, 126, 72, 114, 84, 120, 102, 78, 90][index]}));
 
+  // Separate seeded successor selection from pacing, with logical-clip cooldown.
+  function createSuccession(seed) {
+    const departed = new Map();
+    return {random: seededRandom(seed),
+      depart: (id, time) => departed.set(id, time),
+      eligible: (id, time) => !departed.has(id) || time - departed.get(id) >= 10};
+  }
+
   const api = {
     FPS, DEFAULT_SECONDS, DEFAULT_PANELS, MAX_TOTAL_BYTES, MIN_FRAMES, MAX_SPANS_PER_TRACK, OWN_FAMILY,
     quantizeDuration, admitSize, countVerdict, spanVerdict, nearestCount, familyLabel, oneLine, sniffContainer,
-    playbackQueries, blobType, mediaSuffix, compositionFrames, formatMiB, seededRandom, parseSeed,
+    playbackQueries, blobType, mediaSuffix, compositionFrames, formatMiB, seededRandom, parseSeed, createSuccession,
     rollComposition, formatMix, parseMix, stripsPreset, loopGain, audioStream,
     libraryClips, chooseClips, rollLibrary, LIBRARY_CACHE,
     BUILTINS: BUILTINS.map(item => ({name: item.name, frames: item.frames})),
@@ -639,13 +684,16 @@
   const studio = $('#studio'), stage = $('#stage');
   const ui = {
     frame: $('#frame'), preview: $('#preview'), ghost: $('#ghost'), bar: $('#bar'), play: $('#play'), start: $('#start'),
-    corner: $('#corner'),
+    corner: $('#corner'), activity: $('#activity'), loopMode: $('#loop-mode'),
     shuffle: $('#shuffle'), fewer: $('#fewer'), more: $('#more'), panels: $('#panel-count'),
     families: $('#families'), speaker: $('#speaker'), volume: $('#volume'), add: $('#add'), files: $('#files'),
     fullscreen: $('#fullscreen'), help: $('#help'), about: $('#about'), toast: $('#toast'),
   };
   const search = root.location ? root.location.search : '';
   const frames = compositionFrames(search);
+  let loopMode = new URLSearchParams(search).get('loop') === 'forward' ? 'forward' : 'boomerang';
+  let evolving = new URLSearchParams(search).get('evolve') !== '0';
+  let manualPopulation = new URLSearchParams(search).has('mix');
   const reduced = Boolean(root.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   const FADE_MS = reduced ? 0 : 220, IDLE_MS = 3000, TOAST_MS = 4200;
   const compiler = () => root.SimvltaneaCompiler;
@@ -667,18 +715,42 @@
   const own = [];
   /* Library mode: library/manifest.json beside the page lists published clips, which replace the
    * built-ins. Only the clips a roll uses are fetched; a small LRU keeps recent ones for rerolls. */
-  const library = {active: false, clips: [], items: [], broken: new Set(), cache: new Map(), inflight: new Map(),
+  const library = {active: false, clips: [], items: [], broken: new Set(), failedAssets: new Set(), cache: new Map(), inflight: new Map(),
     requested: 0, next: null, prefetch: [], probe: null};
   const digests = new WeakMap();
   const sound = {unlocked: false, muted: false, volume: 0.7, mixer: null};
   let selection = null, session = null, waiting = [], launches = 0, hold = reduced, paused = false;
   let lastRefusals = [], busy = 0, recordMode = 'pending', previewClock = null;
+  const liveVoices = new Map();
+  let ecosystem = new root.SimvltaneaEcosystem.Engine({seed: parseSeed(search) ?? 1});
+  let succession = createSuccession(parseSeed(search) ?? 1), pendingSelection = false;
+  const residentModels = new WeakMap(), residents = [];
+  let ecologicalRequest = null, lastSpaceTime = -1;
+  let previousLogicalIds = new Set(), currentLogicalIds = new Set();
+  const live = root.compositionRuntime = new root.SimvltaneaLive.Session(stage, {
+    crossfadeSec: reduced ? 0 : 1.2,
+    onAudioNode: attachLiveVoice,
+    onError: () => toast('That loop could not start. The current picture keeps playing.'),
+  });
+
+  live.clock.subscribe(ecologyTick);
 
   const usingLibrary = () => library.active && !own.length;
   const pool = () => (own.length ? own : library.active ? library.items : builtins);
   // How many loops a roll may use: the library's clips minus any that failed to load.
   const available = () => (usingLibrary() ? library.items.length - library.broken.size : pool().length);
   const familyCounts = () => Object.fromEntries(Object.entries(layout.families).map(([name, family]) => [name, family.counts]));
+  const allowedCounts = counts => counts.filter(count => count <= live.maxForeground);
+  function boundedSelection(value) {
+    if (!value) return value;
+    const fits = family => (layout.families[family]?.counts || []).filter(count =>
+      count <= value.loops.length && count <= available());
+    const family = fits(value.family).length ? value.family : 'strips';
+    const count = nearestCount(fits(family), Math.min(value.loops.length, live.maxForeground));
+    if (count === null) return null;
+    return family === value.family && count === value.loops.length ? value :
+      {...value, family, panels: count, loops: value.loops.slice(0, count)};
+  }
 
   // ---- Toast, idle chrome, about ------------------------------------------------
 
@@ -724,26 +796,22 @@
     ui.volume.value = String(Math.round(sound.volume * 100));
   }
 
-  // One master bus per audio context: volume and mute, then a gentle limiter.
+  // The canvas fallback shares the same persistent, protected master bus.
   function mixer(context) {
     if (sound.mixer && sound.mixer.context === context) return sound.mixer;
-    const input = context.createGain(), limiter = context.createDynamicsCompressor();
-    limiter.threshold.value = -12; limiter.knee.value = 10; limiter.ratio.value = 6;
-    limiter.attack.value = 0.01; limiter.release.value = 0.25;
-    input.gain.value = wantSound() ? sound.volume : 0;
-    input.connect(limiter); limiter.connect(context.destination);
-    sound.mixer = {context, input, noise: null};
+    const bus = root.SimvltaneaLiveAudio.createMasterBus(context, {enabled: wantSound(), volume: sound.volume});
+    sound.mixer = {context, input: bus.input, volume: bus.volume};
     return sound.mixer;
   }
   function applyVolume() {
     const mix = sound.mixer;
     if (mix && mix.context.state !== 'closed') {
-      const now = mix.context.currentTime, param = mix.input.gain;
+      const now = mix.context.currentTime, param = mix.volume.gain;
       param.cancelScheduledValues(now); param.setValueAtTime(param.value, now);
       param.linearRampToValueAtTime(wantSound() ? sound.volume : 0, now + 0.18);
     }
     const r = runtime();
-    if (r) for (const node of r.nodes.values()) guardMute(node.media);
+    if (r) r.setSound({enabled: wantSound(), volume: sound.volume});
   }
   // A video element is unmuted only after the gesture and only while the speaker is on.
   function guardMute(media) {
@@ -755,11 +823,35 @@
     if (!wantSound()) media.muted = true;
   }
 
+  function promoteAudioPlan() {
+    const r = runtime();
+    if (!r || !r.plan || !sound.unlocked) return;
+    Object.assign(r.plan, {plan_version: 2, engine_version: '1.1.0', audio: {
+      mode: 'spatial_loops', master_volume: '1', spatial_panning: true,
+      per_loop: Object.fromEntries(r.plan.tracks.map(track => [track.id,
+        {gain: loopGain(r.nodes.size || 1), mute_on_hold: true}]))}});
+    r.plan.sources.forEach(source => {
+      source.audio_stream = session?.bySha.get(source.sha256)?.audioStream || null;
+    });
+    if (session) session.sound = true;
+  }
   function unlock() {
-    if (sound.unlocked) return false;
+    if (sound.unlocked) {
+      const r = runtime();
+      if (r.audio.context && r.audio.context.state !== 'running') {
+        r.unlock().then(applyVolume).catch(() => toast('Tap the speaker to resume sound.'));
+        return true;
+      }
+      return false;
+    }
     sound.unlocked = true;
     renderSound();
-    if (wantSound() && session && !session.sound) launch();
+    applyVolume();
+    // Create/resume on the gesture stack; media nodes and simulation keep running.
+    runtime().unlock().then(() => { promoteAudioPlan(); applyVolume(); }).catch(() => {
+      sound.unlocked = false; renderSound(); applyVolume();
+      toast('Tap the speaker to enable sound.');
+    });
     if (recordMode === 'canvas') fallbackAudio();
     return true;
   }
@@ -768,7 +860,6 @@
     sound.muted = !sound.muted;
     renderSound();
     applyVolume();
-    if (wantSound() && session && !session.sound) launch({fade: false});
     if (recordMode === 'canvas') fallbackAudio();
   }
   ui.speaker.addEventListener('click', toggleSound);
@@ -778,15 +869,15 @@
     applyVolume();
   });
 
+  const voiceNoise = new WeakMap();
   function noiseBuffer(context) {
-    const mix = mixer(context);
-    if (!mix.noise) {
+    if (!voiceNoise.has(context)) {
       const buffer = context.createBuffer(1, context.sampleRate * 2, context.sampleRate), data = buffer.getChannelData(0);
       const random = seededRandom(11);
       for (let index = 0; index < data.length; index++) data[index] = random() * 2 - 1;
-      mix.noise = buffer;
+      voiceNoise.set(context, buffer);
     }
-    return mix.noise;
+    return voiceNoise.get(context);
   }
   const hz = note => 440 * 2 ** ((note - 69) / 12);
 
@@ -848,13 +939,14 @@
    * sits at (composition time mod period), so events repeat with the picture. */
   function pumpVoices(clock) {
     if (!clock || !clock.running() || !wantSound()) return;
-    const context = clock.context, now = context.currentTime, horizon = now + 0.45, origin = clock.origin();
+    const context = clock.context, now = context.currentTime, horizon = now + 0.45;
+    const clockOrigin = clock.origin();
     if (clock.generation !== clock.epoch()) {
       clock.generation = clock.epoch();
       for (const voice of clock.voices) voice.until = now - 0.15;
     }
     for (const voice of clock.voices) {
-      const period = voice.period;
+      const period = voice.period, origin = clockOrigin + (voice.offset || 0);
       for (let cycle = Math.floor((voice.until - origin) / period); origin + cycle * period < horizon; cycle++) {
         for (const event of voice.events) {
           const when = origin + (cycle + event.at) * period;
@@ -871,25 +963,30 @@
     } catch (_) { /* a closed context; the next launch rebuilds the voices */ }
   }, 120);
 
-  // After each initialization: loop gains feed the master bus; built-ins get their voices.
-  function routeAudio(r) {
-    if (!r.audio.context || r.audio.mode !== 'spatial_loops') { for (const node of r.nodes.values()) guardMute(node.media); return null; }
-    const mix = mixer(r.audio.context);
-    mix.input.gain.value = wantSound() ? sound.volume : 0;
-    const voices = [];
-    for (const node of r.nodes.values()) {
-      guardMute(node.media);
-      if (!node.audio) continue;
-      try { node.audio.gain.disconnect(); } catch (_) { /* not yet connected */ }
-      node.audio.gain.connect(mix.input);
-      const item = session.byTrack.get(node.id);
-      if (builtins.includes(item)) {
-        const bus = r.audio.context.createGain(); bus.connect(node.audio.pan);
-        voices.push({period: item.quantized.seconds, events: VOICES[item.name], input: bus, until: 0});
-      }
+  // Generated voices follow their resident deck; unrelated voices keep their buses.
+  function attachLiveVoice(node, context) {
+    const old = liveVoices.get(node.id);
+    if (old) { old.input.disconnect(); liveVoices.delete(node.id); }
+    if (!node.audio.analyser) {
+      node.audio.analyser = context.createAnalyser(); node.audio.analyser.fftSize = 256;
+      node.audio.samples = new Float32Array(256);
+      node.audio.source.connect(node.audio.analyser);
     }
-    return voices.length ? {context: r.audio.context, voices, generation: -1, running: () => r.running,
-      origin: () => r.origin, epoch: () => r.generation} : null;
+    const item = node.item;
+    if (builtins.includes(item)) {
+      const input = context.createGain(); input.connect(node.audio.filter || node.audio.pan);
+      liveVoices.set(node.id, {period: item.quantized.seconds, events: VOICES[item.name], input,
+        until: context.currentTime, offset: live.clock.simTime - node.media.currentTime});
+    }
+    refreshVoiceClock();
+  }
+  function refreshVoiceClock() {
+    if (!session || !live.audio.context) return;
+    for (const [id, voice] of liveVoices) if (!live.nodes.has(id)) {
+      voice.input.disconnect(); liveVoices.delete(id);
+    }
+    session.clock = {context: live.audio.context, voices: [...liveVoices.values()], generation: -1,
+      running: () => live.running, origin: () => live.origin, epoch: () => live.generation};
   }
 
   // ---- The runtime hook ------------------------------------------------------
@@ -990,81 +1087,45 @@
   const selectedItems = () => (selection ? selection.loops.map(index => pool()[index]).filter(Boolean) : []);
   const itemsReady = items => items.length > 0 && items.every(item => item.sha256);
 
-  // Snapshot the playing frames into the ghost layer so a relaunch crossfades instead of blinking.
-  function freeze() {
-    ui.ghost.replaceChildren(...Array.from(stage.querySelectorAll('.loop'), box => {
-      const copy = document.createElement('div');
-      copy.className = 'loop'; copy.style.cssText = box.style.cssText;
-      const media = box.querySelector('video');
-      if (media && media.videoWidth) {
-        const canvas = document.createElement('canvas');
-        canvas.width = media.videoWidth; canvas.height = media.videoHeight;
-        try { canvas.getContext('2d').drawImage(media, 0, 0); } catch (_) { /* not yet decodable */ }
-        canvas.style.cssText = media.style.cssText;
-        copy.append(canvas);
-      }
-      return copy;
-    }));
-    ui.ghost.classList.add('on');
-  }
-  function thaw() {
-    ui.ghost.classList.remove('on');
-    setTimeout(() => { if (!ui.ghost.classList.contains('on')) ui.ghost.replaceChildren(); }, FADE_MS + 60);
-  }
-
-  /* Hand the selection to the runtime: compile, initialize, route audio, start (unless held
-   * for reduced motion). A newer launch supersedes an older one at every await. */
-  async function launch({fade = true} = {}) {
+  /* Compile layout/export metadata, then reconcile residents in place. The live
+   * session owns native loops; editing metadata never restarts its global clock. */
+  async function launch({atLoopBoundary = false} = {}) {
+    const bounded = boundedSelection(selection);
+    if (bounded !== selection) { selection = bounded; renderControls(); }
     const token = ++launches, r = runtime(), items = selectedItems();
+    pendingSelection = true;
     if (pendingCompilation) pendingCompilation.cancel();
     renderPreview();
-    if (!r) { until(runtime).then(() => { if (token === launches) launch({fade}); }).catch(() => {}); return; }
-    if (!layout.bundle && !layout.own || !selection) return;
+    if ((!layout.bundle && !layout.own) || !selection) { pendingSelection = false; return false; }
     if (!itemsReady(items)) {
-      // Library clips arrive on demand; the current composition keeps playing until they are checked.
       if (usingLibrary() && items.length) {
-        loadClips(items).then(ok => { if (token === launches) { if (ok) launch({fade}); else repairSelection(); } });
+        const ok = await loadClips(items);
+        if (token !== launches) return false;
+        if (ok) return launch({atLoopBoundary});
+        repairSelection();
       }
-      return;
+      if (token === launches) pendingSelection = false;
+      return false;
     }
-    const withSound = wantSound();
-    let plan;
     try {
-      plan = await compile(selection, items, withSound);
-      if (token !== launches) return;
-      if (withSound !== wantSound()) { launch({fade}); return; }
+      const plan = await compile(selection, items, sound.unlocked);
+      if (token !== launches) return false;
+      session = {plan, sound: sound.unlocked, token, clock: null,
+        bySha: new Map(items.map(item => [item.sha256, item])),
+        byTrack: new Map(plan.tracks.map((track, index) => [track.id, items[index]]))};
+      waiting.splice(0).forEach(resolve => resolve(plan));
+      r.setSound({enabled: wantSound(), volume: sound.volume});
+      const completed = await r.reconcile({plan, items, playing: !hold && !paused, atLoopBoundary});
+      if (token !== launches) return false;
+      promoteAudioPlan(); refreshVoiceClock();
+      if (r.ready) studio.dataset.phase = 'playing';
+      if (usingLibrary()) prefetchNext();
+      return completed;
     } catch (error) {
       if (token === launches && error.name !== 'AbortError') toast(oneLine(error.message || error));
-      return;
-    }
-    const visible = studio.dataset.phase === 'playing';
-    if (visible && fade) freeze();
-    session = {plan, sound: withSound, token, clock: null,
-      bySha: new Map(items.map(item => [item.sha256, item])),
-      byTrack: new Map(plan.tracks.map((track, index) => [track.id, items[index]]))};
-    const pending = waiting; waiting = [];
-    try {
-      const initialized = r.initialize();
-      pending.forEach(resolve => resolve(plan));
-      await initialized;
-      if (token !== launches) return;
-      session.clock = routeAudio(r);
-      studio.dataset.phase = 'playing';
-      if (!hold && !paused) await r.start();
-      if (token !== launches) return;
-      guardAll();
-      if (usingLibrary()) prefetchNext();
-    } catch (error) {
-      if (token !== launches) return;
-      if (r.audio && r.audio.blocked) {
-        // The browser wants a fresh gesture for sound: keep the pictures moving, silently.
-        sound.unlocked = false; renderSound();
-        launch({fade: false});
-        return;
-      }
-      if (!r.error || !/AbortError|cancelled/.test(String(error))) toast('Playback stopped. Shuffle to try again.');
+      return false;
     } finally {
-      if (token === launches) { thaw(); renderPreview(); sync(); }
+      if (token === launches) { pendingSelection = false; renderPreview(); sync(); }
     }
   }
   function guardAll() { const r = runtime(); if (r) for (const node of r.nodes.values()) guardMute(node.media); }
@@ -1095,8 +1156,7 @@
   }
 
   // `count` loops not in `loops`: chosen by their tags from the library, else at random.
-  function moreLoops(loops, count, family, exclude = []) {
-    const random = seededRandom(freshSeed());
+  function moreLoops(loops, count, family, exclude = [], random = seededRandom(freshSeed())) {
     if (usingLibrary()) {
       return chooseClips(library.clips, count, family, random, loops, [...library.broken, ...exclude]);
     }
@@ -1105,10 +1165,15 @@
   }
 
   function roll(seed = nextSeed()) {
-    const rolled = rollFor(seed);
+    let rolled = rollFor(seed);
     if (!rolled) { toast('Add one more video to play.'); return; }
+    if (manualPopulation && selection) {
+      const count = selection.loops.length;
+      const family = layout.families[rolled.family].counts.includes(count) ? rolled.family : selection.family;
+      rolled = {...rolled, family, loops: moreLoops([], count, family)};
+    }
     selection = rolled;
-    writeUrl(null);
+    writeUrl(manualPopulation ? formatMix(selection.family, selection.loops) : null);
     renderControls();
     launch();
   }
@@ -1120,12 +1185,15 @@
 
   function setCount(target) {
     if (!selection) return;
+    manualPopulation = true;
+    for (const node of live.nodes.values()) live.setResting(node.id, false);
     const counts = layout.families[selection.family].counts;
     const offered = counts.filter(count => count <= available());
     if (!offered.length) return;
     const wanted = Math.max(offered[0], Math.min(offered[offered.length - 1], target));
     if (wanted !== target) {
-      if (target > available() && counts.includes(target)) toast(own.length ? 'Add more videos for more panels.' : 'That is every loop.');
+      if (target > live.maxForeground && live.maxForeground === 4) toast('Up to four panels on this device.');
+      else if (target > available() && counts.includes(target)) toast(own.length ? 'Add more videos for more panels.' : 'That is every loop.');
       else toast(`${familyLabel(selection.family, layout.own && layout.own.name)}: ${offered[0]} to ${offered[offered.length - 1]} panels.`);
       return;
     }
@@ -1140,7 +1208,7 @@
   }
 
   function setFamily(family) {
-    if (!selection || family === selection.family || !layout.families[family]) return;
+    if (!selection || !layout.families[family]) return;
     const counts = layout.families[family].counts.filter(count => count <= available());
     if (!counts.length) { toast(`${familyLabel(family)} needs ${layout.families[family].counts[0]} loops.`); return; }
     const count = nearestCount(counts, selection.loops.length);
@@ -1150,18 +1218,14 @@
     edited();
   }
 
-  // Tapping a panel swaps its loop for one not on screen (or trades places when all are shown).
+  // Tapping replaces only this resident when a spare logical clip is available.
   function rerollPanel(index) {
     if (!selection || index < 0 || index >= selection.loops.length) return;
-    const random = seededRandom(freshSeed());
     const others = selection.loops.filter((_, at) => at !== index);
     const [fresh] = moreLoops(others, 1, selection.family, [selection.loops[index]]);
     const loops = selection.loops.slice();
     if (fresh !== undefined) loops[index] = fresh;
-    else if (loops.length > 1) {
-      const other = pick(loops.map((_, item) => item).filter(item => item !== index), random);
-      [loops[index], loops[other]] = [loops[other], loops[index]];
-    } else return;
+    else { toast('Every available clip is already on screen.'); return; }
     selection = {...selection, loops};
     edited();
   }
@@ -1209,8 +1273,10 @@
   // Without MediaRecorder the preview is the composition; its voices play through a studio context.
   function fallbackAudio() {
     if (recordMode !== 'canvas' || !previewClock || !wantSound() || !root.AudioContext) return;
-    if (!previewClock.context) previewClock.context = new AudioContext();
+    if (!previewClock.context) previewClock.context = live.audio.context;
     const context = previewClock.context;
+    if (!context) return;
+    if (!hold && !paused && !live.running) live.start().catch(() => {});
     context.resume().catch(() => {});
     const mix = mixer(context), origin = context.currentTime - (performance.now() - previewClock.start) / 1000;
     if (previewClock.audio) previewClock.audio.voices.forEach(voice => voice.input.disconnect());
@@ -1305,7 +1371,7 @@
   // ---- The visitor's own files ----------------------------------------------------
 
   function metadata(file, type) {
-    return new Promise(resolve => {
+    return live.withPreparation(() => new Promise(resolve => {
       const video = document.createElement('video');
       const url = URL.createObjectURL(file.slice(0, file.size, type));
       let timer = null;
@@ -1327,7 +1393,7 @@
       video.src = url;
       // Some mobile preload policies defer loadeddata until a muted play request.
       video.play().catch(() => {});
-    });
+    }));
   }
 
   /* The playability and duration checks every loop passes, the visitor's files and library clips
@@ -1384,8 +1450,10 @@
     try {
       const C = compiler(), data = C.loadLayoutBytes(await file.arrayBuffer(), name);
       const info = C.describeLayoutFile(data, name);
+      const counts = allowedCounts(info.counts);
+      if (!counts.length) throw new Error(`This layout needs more than ${live.maxForeground} panels. Choose a smaller layout on this device.`);
       layout.own = {name, data, info};
-      layout.families[OWN_FAMILY] = {counts: info.counts, label: familyLabel(OWN_FAMILY, name)};
+      layout.families[OWN_FAMILY] = {counts, sourceCounts: info.counts, label: familyLabel(OWN_FAMILY, name)};
       renderControls();
       setFamily(OWN_FAMILY);
       toast(`Layout ${name} in use.`);
@@ -1420,9 +1488,9 @@
       if (refusals.length) toast(refusals[0] + (refusals.length > 1 ? ` (+${refusals.length - 1} more not added)` : ''));
       else if (added) toast(`${plural(added, 'loop')} added. Nothing was uploaded.`);
       if (added) {
-        // The visitor's loops replace the built-ins: all of them on screen, up to twelve.
+        // Retain the entire local pool; the live device limit bounds its residents.
         const family = selection && layout.families[selection.family] &&
-          layout.families[selection.family].counts.includes(Math.min(own.length, 12)) ? selection.family : 'strips';
+          layout.families[selection.family].counts.includes(Math.min(own.length, live.maxForeground)) ? selection.family : 'strips';
         const count = nearestCount(layout.families[family].counts.filter(value => value <= own.length), own.length);
         if (count !== null) {
           selection = {seed: freshSeed(), family, loops: own.map((_, index) => index).slice(-count),
@@ -1455,6 +1523,9 @@
 
   // ---- Library clips: fetched per roll, checked like the visitor's files, kept in a small LRU ----
 
+  const assetFor = item => loopMode === 'boomerang' && item.clip.variants &&
+    !library.failedAssets.has(item.clip.variants.boomerang.id) ? item.clip.variants.boomerang : item.clip;
+
   function useLibrary(clips) {
     library.active = true;
     library.clips = clips;
@@ -1467,6 +1538,7 @@
     const ids = new Set(library.prefetch);
     if (selection && usingLibrary()) for (const item of selectedItems()) ids.add(item.name);
     if (session) for (const item of session.bySha.values()) ids.add(item.name);
+    for (const node of live.nodes.values()) for (const deck of node.decks) if (deck.item) ids.add(deck.item.name);
     return ids;
   }
 
@@ -1491,30 +1563,56 @@
   /* Fetch one clip, then check it exactly as a chosen file: its size and SHA-256 must match the
    * manifest (the id is the digest's first 12 hex digits), then the codec, a decoded frame and a
    * duration of whole frames. Resolves true when the clip is ready, false when it is not. */
+  let activeFetches = 0;
+  const fetchQueue = [];
+  function boundedFetch(task) {
+    return new Promise((resolve, reject) => {
+      fetchQueue.push({task, resolve, reject});
+      pumpFetches();
+    });
+  }
+  function pumpFetches() {
+    while (activeFetches < 2 && fetchQueue.length) {
+      const job = fetchQueue.shift(); activeFetches++;
+      Promise.resolve().then(job.task).then(job.resolve, job.reject).finally(() => {
+        activeFetches--; pumpFetches();
+      });
+    }
+  }
+  async function fetchAsset(item, asset, controller) {
+    if (controller.signal.aborted) return false;
+    library.requested += 1;
+    const response = await fetch(`library/${asset.file}`, {signal: controller.signal, redirect: 'error'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength !== asset.bytes) throw new Error('size differs from the manifest');
+    const sha256 = hex(await crypto.subtle.digest('SHA-256', buffer));
+    if (!sha256.startsWith(asset.id)) throw new Error('digest differs from the manifest');
+    const file = new Blob([buffer], {type: 'video/mp4'});
+    if (!library.probe) library.probe = document.createElement('video');
+    const checked = await inspect(file, buffer, `${item.name}.mp4`, 'video/mp4', library.probe);
+    if (checked.refusal) throw new Error('not playable');
+    if (controller.signal.aborted) return false;
+    Object.assign(item, {file, type: checked.type, suffix: 'mp4', size: buffer.byteLength, sha256,
+      audioStream: audioStream(buffer), asset, ...checked.facts, quantized: checked.quantized});
+    remember(item);
+    return true;
+  }
   function loadClip(item) {
     if (item.sha256) { remember(item); return Promise.resolve(true); }
     const running = library.inflight.get(item.name);
     if (running) return running.promise;
-    const controller = new AbortController();
+    const controller = new AbortController(), asset = assetFor(item);
     const job = {controller, promise: null};
-    job.promise = (async () => {
-      library.requested += 1;
-      const response = await fetch(`library/${item.clip.file}`, {signal: controller.signal, redirect: 'error'});
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const buffer = await response.arrayBuffer();
-      if (buffer.byteLength !== item.clip.bytes) throw new Error('size differs from the manifest');
-      const sha256 = hex(await crypto.subtle.digest('SHA-256', buffer));
-      if (!sha256.startsWith(item.name)) throw new Error('digest differs from the manifest');
-      const file = new Blob([buffer], {type: 'video/mp4'});
-      if (!library.probe) library.probe = document.createElement('video');
-      const checked = await inspect(file, buffer, `${item.name}.mp4`, 'video/mp4', library.probe);
-      if (checked.refusal) throw new Error('not playable');
-      if (controller.signal.aborted) return false;
-      Object.assign(item, {file, type: checked.type, suffix: 'mp4', size: buffer.byteLength, sha256,
-        audioStream: audioStream(buffer), ...checked.facts, quantized: checked.quantized});
-      remember(item);
-      return true;
-    })().catch(() => {
+    job.promise = boundedFetch(async () => {
+      try { return await fetchAsset(item, asset, controller); }
+      catch (error) {
+        if (controller.signal.aborted || asset === item.clip) throw error;
+        // A failed derivative does not exclude its admitted forward source.
+        library.failedAssets.add(asset.id);
+        return fetchAsset(item, item.clip, controller);
+      }
+    }).catch(() => {
       if (!controller.signal.aborted) library.broken.add(item.index);
       return false;
     }).finally(() => { if (library.inflight.get(item.name) === job) library.inflight.delete(item.name); });
@@ -1575,9 +1673,123 @@
     });
   }
 
+  // ---- Finite lives and ecological competition ------------------------------------
+
+  function sourceEnergy(node) {
+    const asset = node.item.asset;
+    if (asset && Array.isArray(asset.rms_envelope) && asset.rms_envelope.length) {
+      if (node.energyAsset !== asset) {
+        node.energyAsset = asset;
+        node.energyMaximum = Math.max(0.00001, ...asset.rms_envelope);
+      }
+      const index = Math.min(asset.rms_envelope.length - 1,
+        Math.floor(node.media.currentTime * asset.envelope_hz));
+      return asset.rms_envelope[Math.max(0, index)] / node.energyMaximum;
+    }
+    const audio = node.audio;
+    if (audio && audio.analyser && sound.unlocked) {
+      audio.analyser.getFloatTimeDomainData(audio.samples);
+      let power = 0;
+      for (const value of audio.samples) power += value * value;
+      const rms = Math.sqrt(power / audio.samples.length);
+      node.energyMaximum = Math.max(0.01, rms, (node.energyMaximum || .1) * .995);
+      return rms / node.energyMaximum;
+    }
+    return .4;
+  }
+
+  function ecologyTick(time, dt) {
+    if (!live.ready || !selection) return;
+    residents.length = 0; currentLogicalIds.clear();
+    for (const node of live.nodes.values()) {
+      if (!node.item || !node.media) continue;
+      let model = residentModels.get(node);
+      if (!model) { model = {}; residentModels.set(node, model); }
+      const logicalId = node.item.clip?.id || node.item.sha256;
+      currentLogicalIds.add(logicalId); model.logicalId = logicalId;
+      model.id = node.id; model.index = node.ordinal - 1; model.clipKey = node.item.sha256;
+      model.duration = node.media.duration || node.item.duration || node.item.quantized.seconds;
+      model.age = node.birthTime === undefined ? node.media.currentTime : time - node.birthTime;
+      model.energy = sourceEnergy(node);
+      model.hasAudio = builtins.includes(node.item) || (node.item.asset?.has_audio ?? Boolean(node.item.audioStream));
+      model.resting = node.resting; model.pending = node.busy || live.draining || pendingSelection;
+      if (node.cell) {
+        const rect = node.cell.rect.map(fraction);
+        model.x = rect[0] + rect[2] / 2; model.y = rect[1] + rect[3] / 2;
+      }
+      residents.push(model);
+    }
+    for (const id of previousLogicalIds) if (!currentLogicalIds.has(id)) succession.depart(id, time);
+    const spareIds = previousLogicalIds; previousLogicalIds = currentLogicalIds; currentLogicalIds = spareIds;
+    const eligible = usingLibrary() && library.items.some(item => !selection.loops.includes(item.index) &&
+      !library.broken.has(item.index) && succession.eligible(item.clip.id, time));
+    const out = ecosystem.step(time, dt, residents, {
+      enabled: evolving && !hold && !reduced && usingLibrary(), manualCount: manualPopulation,
+      canReplace: eligible && !ecologicalRequest && !pendingSelection,
+      canRest: !ecologicalRequest,
+    });
+    for (let i = 0; i < residents.length; i++) {
+      const node = live.nodes.get(residents[i].id);
+      live.setTargetGain(node.id, out.gains[i]);
+      if (node.audio?.filter && live.audio.context?.state === 'running') {
+        const cutoff = 900 + 15100 * Math.min(1, out.prominence[i] * residents.length);
+        node.audio.filter.frequency.setTargetAtTime(cutoff, live.audio.context.currentTime, .15);
+      }
+    }
+    if (selection.family === 'strips' && !reduced && time - lastSpaceTime >= .05 &&
+        residents.length === selection.loops.length && !live.draining) {
+      live.applyTerritory?.(out.space.subarray(0, residents.length));
+      lastSpaceTime = time;
+    }
+    if (out.requests.length && !ecologicalRequest) {
+      const request = out.requests[0];
+      ecologicalRequest = request;
+      if (request.type === 'replace') {
+        const index = request.index, previous = selection;
+        const others = previous.loops.filter((_, at) => at !== index);
+        const cooling = library.items.filter(item => !succession.eligible(item.clip.id, time)).map(item => item.index);
+        const [fresh] = moreLoops(others, 1, previous.family, [previous.loops[index], ...cooling], succession.random);
+        if (fresh === undefined) {
+          ecosystem.settle(request, false, time); ecologicalRequest = null; return;
+        }
+        const next = {...previous, loops: previous.loops.map((value, at) => at === index ? fresh : value)};
+        selection = next; renderControls();
+        launch({atLoopBoundary: true}).then(ok => {
+          ecosystem.settle(request, ok, live.clock.simTime);
+          if (!ok && selection === next) { selection = previous; renderControls(); }
+        }).finally(() => { if (ecologicalRequest === request) ecologicalRequest = null; });
+      } else {
+        live.setResting(request.id, request.type === 'rest');
+        ecosystem.settle(request, true, time); ecologicalRequest = null;
+      }
+    }
+  }
+
+  function renderActivity() {
+    ui.activity.setAttribute('aria-label', evolving ? 'Hold changes' : 'Let it evolve');
+    ui.activity.setAttribute('aria-pressed', String(!evolving));
+    ui.activity.title = evolving ? 'Hold changes' : 'Let it evolve';
+    ui.activity.textContent = evolving ? '∞' : 'Ⅱ';
+    ui.loopMode.hidden = !usingLibrary() || !library.clips.some(clip => clip.variants);
+    ui.loopMode.setAttribute('aria-label', loopMode === 'boomerang' ? 'Play forward loops' : 'Play boomerang loops');
+    ui.loopMode.title = loopMode === 'boomerang' ? 'Boomerang loops' : 'Forward loops';
+    ui.loopMode.textContent = loopMode === 'boomerang' ? '↔' : '→';
+  }
+  ui.activity.addEventListener('click', () => { evolving = !evolving; renderActivity(); });
+  ui.loopMode.addEventListener('click', () => {
+    loopMode = loopMode === 'boomerang' ? 'forward' : 'boomerang';
+    for (const job of library.inflight.values()) job.controller.abort();
+    library.inflight.clear(); library.cache.clear(); library.broken.clear(); library.prefetch = []; library.next = null;
+    library.items = library.clips.map((clip, index) => ({name: clip.id, index, clip, file: null, sha256: null}));
+    const params = new URLSearchParams(root.location.search); params.set('loop', loopMode);
+    history.replaceState(null, '', `${root.location.pathname}?${params}`);
+    renderActivity(); launch();
+  });
+
   // ---- Controls -------------------------------------------------------------------
 
   function renderControls() {
+    renderActivity();
     const families = Object.keys(layout.families);
     const current = Array.from(ui.families.children, button => button.dataset.family).join(' ');
     if (current !== families.join(' ')) {
@@ -1598,7 +1810,8 @@
     ui.panels.textContent = String(count || '');
     ui.panels.setAttribute('aria-label', `${plural(count, 'panel')}`);
     ui.fewer.disabled = !counts.some(value => value < count);
-    ui.more.disabled = !counts.some(value => value > count) && !(own.length && count < 12);
+    ui.more.disabled = !counts.some(value => value > count) && !(own.length && selection &&
+      layout.families[selection.family].counts.some(value => value > count));
     studio.dataset.family = selection ? selection.family : '';
     studio.dataset.panels = String(count);
     studio.dataset.busy = busy > 0 ? 'true' : 'false';
@@ -1635,7 +1848,11 @@
   function togglePlay() {
     const r = runtime();
     if (hold) { hold = false; paused = false; studio.classList.remove('held'); unlock(); launch({fade: false}); sync(); return; }
-    if (!r || !r.ready) { paused = !paused; sync(); return; }
+    if (!r || !r.ready) {
+      paused = !paused;
+      if (r) { if (paused) r.pause(); else r.play().catch(() => {}); }
+      sync(); return;
+    }
     if (r.running) { paused = true; r.pause(); }
     else { paused = false; r.play().catch(() => {}); }
     sync();
@@ -1645,7 +1862,8 @@
 
   // Every first gesture turns the sound on; the page itself never needs one to play.
   const firstGesture = event => {
-    if (sound.unlocked || event.target.closest && event.target.closest('#speaker, #about, #help')) return;
+    if (sound.unlocked && (!live.audio.context || live.audio.context.state === 'running')) return;
+    if (event.target.closest && event.target.closest('#speaker, #about, #help')) return;
     if (event.type === 'keydown' && (event.ctrlKey || event.metaKey || event.altKey || event.key === 'Tab' ||
       event.key === 'Shift' || event.key === 'Escape')) return;
     if (event.type === 'keydown' && (event.key === 'm' || event.key === 'M')) return;  // M itself turns sound on
@@ -1710,7 +1928,7 @@
         .then(() => { const x = runtime(); if (x.finished && !paused) return x.play(); }).catch(() => {});
     }
     if (status === 'audio-blocked' && session && session.sound) {
-      sound.unlocked = false; renderSound(); launch({fade: false});
+      sound.unlocked = false; renderSound(); applyVolume();
     }
     if (status === 'playing') guardAll();
   }
@@ -1726,7 +1944,8 @@
     const described = compiler().layoutFamilies(bundle);
     layout.bundle = bundle;
     for (const [name, family] of Object.entries(described.families)) {
-      layout.families[name] = {counts: family.counts, label: familyLabel(name)};
+      const counts = allowedCounts(family.counts);
+      if (counts.length) layout.families[name] = {counts, sourceCounts: family.counts, label: familyLabel(name)};
     }
   }).catch(error => {
     toast(oneLine(`The layouts could not be loaded (${error.message || error}).`));
@@ -1742,10 +1961,21 @@
     layout.loading = false;
     if (!Object.keys(layout.families).length) return;
     if (clips && Object.values(familyCounts()).some(counts => counts.some(count => count <= clips.length))) useLibrary(clips);
-    const seed = parseSeed(search) ?? freshSeed();
+    let seed = parseSeed(search) ?? freshSeed();
     selection = rollFor(seed);
-    const mix = parseMix(new URLSearchParams(search).get('mix'), familyCounts(), pool().length);
-    if (selection && mix) selection = {...selection, ...mix};
+    // Find a reproducible modest initial roll within this device's live limit.
+    if (usingLibrary() && parseSeed(search) === null && !new URLSearchParams(search).has('mix')) {
+      const wanted = Math.min(4, available());
+      for (let attempt = 0; attempt < 256 && selection &&
+          (selection.loops.length !== wanted || selection.family !== 'strips'); attempt++) {
+        seed = (seed + 1) >>> 0; selection = rollFor(seed);
+      }
+    }
+    ecosystem = new root.SimvltaneaEcosystem.Engine({seed});
+    succession = createSuccession(seed);
+    const sourceCounts = Object.fromEntries(Object.entries(layout.families).map(([name, family]) => [name, family.sourceCounts]));
+    const mix = parseMix(new URLSearchParams(search).get('mix'), sourceCounts, pool().length);
+    if (selection && mix) selection = boundedSelection({...selection, ...mix});
     writeUrl(mix ? formatMix(selection.family, selection.loops) : null);
     renderControls();
     renderPreview();
@@ -1770,7 +2000,7 @@
         next: library.next, requested: library.requested} : null,
       builtinsReady: builtins.filter(item => item.sha256).length,
       selection: selectedItems().map(item => item.name), style: selection ? selection.style : null,
-      sound: soundState(), volume: sound.volume, refusals: lastRefusals.slice(), toast: ui.toast.textContent,
+      sound: soundState(), volume: sound.volume, evolving, loopMode, ecosystem: ecosystem.snapshot(), refusals: lastRefusals.slice(), toast: ui.toast.textContent,
       toastShown: ui.toast.classList.contains('on'), phase: studio.dataset.phase || 'preview',
       layoutFile: layout.own ? {name: layout.own.name, kind: layout.own.info.kind, layout: layout.own.info.name} : null,
       loops: own.map(loop => ({name: loop.name, type: loop.type, suffix: loop.suffix, size: loop.size,

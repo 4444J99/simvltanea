@@ -16,8 +16,8 @@ Everything is checked before a byte is written, and a refusal writes nothing:
 the studio output must hold exactly the five studio files; the library must hold
 only ``manifest.json`` and ``clips/*.mp4``, with a valid
 ``simvltanea.public-demo/1`` manifest; every clip must be listed, every listed
-clip present, and each file's size and SHA-256 prefix must match its entry. No
-symlinks or hidden files are accepted. ``--site`` must be absent or empty.
+forward/variant clip present, and each file's size and SHA-256 prefix must match
+its entry. No symlinks or hidden files are accepted. ``--site`` must be absent or empty.
 Output is counts only. Standard library only.
 """
 from __future__ import annotations
@@ -54,41 +54,114 @@ def _size(value, maximum: int) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= maximum
 
 
+def _number(value, minimum: float, maximum: float) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and minimum <= value <= maximum)
+
+
+AUDIO_FIELDS = ('has_audio', 'lufs_integrated', 'peak_dbfs', 'envelope_hz', 'rms_envelope')
+ASSET_FIELDS = ('id', 'file', 'width', 'height', 'orientation', 'bytes', 'duration_seconds')
+VARIANT_FIELDS = ('fps', 'frame_count', 'seam_offset_seconds')
+
+
+def _validate_audio(asset: dict, where: str, required: bool = False) -> None:
+    if not required and not any(field in asset for field in AUDIO_FIELDS):
+        return
+    if any(field not in asset for field in AUDIO_FIELDS):
+        raise LibrarySiteError(f'{where}: audio metadata must include all audio fields')
+    audible = asset['has_audio']
+    if not isinstance(audible, bool):
+        raise LibrarySiteError(f'{where}: has_audio must be a boolean')
+    loudness, peak = asset['lufs_integrated'], asset['peak_dbfs']
+    # Very short clips may not yield a gated integrated loudness measurement.
+    if loudness is not None and not _number(loudness, -160, 12):
+        raise LibrarySiteError(f'{where}: lufs_integrated must be finite or null')
+    if (audible and not _number(peak, -160, 24)) or (not audible and peak is not None):
+        raise LibrarySiteError(f'{where}: peak_dbfs must be finite for sound and null for silence')
+    if not audible and loudness is not None:
+        raise LibrarySiteError(f'{where}: silent integrated loudness must be null')
+    envelope = asset['rms_envelope']
+    if (asset['envelope_hz'] != 10 or isinstance(asset['envelope_hz'], bool)
+            or not isinstance(envelope, list)
+            or len(envelope) != math.ceil(asset['duration_seconds'] * 10)
+            or any(not _number(sample, 0, 1) for sample in envelope)):
+        raise LibrarySiteError(f'{where}: rms_envelope must contain bounded 10 Hz samples for the duration')
+
+
+def _validate_asset(asset, where: str, variant: bool = False) -> None:
+    if not isinstance(asset, dict):
+        raise LibrarySiteError(f'{where} is not an object')
+    clip_id, file = asset.get('id'), asset.get('file')
+    if not isinstance(clip_id, str) or not CLIP_ID.fullmatch(clip_id):
+        raise LibrarySiteError(f'{where}: id must be 12 lowercase hex digits')
+    if not isinstance(file, str) or not CLIP_FILE.fullmatch(file) or file != f'{CLIPS}/{clip_id}.mp4':
+        raise LibrarySiteError(f'{where}: file must be clips/<id>.mp4')
+    width, height = asset.get('width'), asset.get('height')
+    if not _size(width, MAX_SIDE) or not _size(height, MAX_SIDE):
+        raise LibrarySiteError(f'{where}: width and height must be whole pixels up to {MAX_SIDE}')
+    if not _size(asset.get('bytes'), MAX_CLIP_BYTES):
+        raise LibrarySiteError(f'{where}: bytes must be a size up to {MAX_CLIP_BYTES}')
+    expected = 'portrait' if height > width else 'landscape'
+    if asset.get('orientation') not in ORIENTATIONS or asset.get('orientation') != expected:
+        raise LibrarySiteError(f'{where}: orientation must be {expected}')
+    seconds = asset.get('duration_seconds')
+    if not _number(seconds, MIN_SECONDS, MAX_SECONDS):
+        raise LibrarySiteError(f'{where}: duration_seconds must lie in {MIN_SECONDS}..{MAX_SECONDS}')
+    _validate_audio(asset, where, required=variant)
+    if variant:
+        if (not _size(asset.get('fps'), 30) or asset['fps'] != 30
+                or not _size(asset.get('frame_count'), int(MAX_SECONDS * 30))
+                or abs(asset['frame_count'] / 30 - seconds) >= 0.001):
+            raise LibrarySiteError(f'{where}: frame_count and duration must describe CFR 30 fps')
+        if not _number(asset.get('seam_offset_seconds'), 0, seconds):
+            raise LibrarySiteError(f'{where}: seam_offset_seconds must lie within the duration')
+
+
+def manifest_assets(clips: list[dict]) -> list[dict]:
+    """Flatten validated logical clips into distinct content-addressed assets."""
+    assets = {}
+    for clip in clips:
+        assets[clip['file']] = clip
+        for variant in clip.get('variants', {}).values():
+            assets[variant['file']] = variant
+    return list(assets.values())
+
+
 def validate_manifest(document) -> list[dict]:
-    """Return the manifest's clips when every entry is well formed; raise otherwise."""
+    """Return logical clips after validating forward assets and optional variants."""
     if not isinstance(document, dict) or document.get('schema') != SCHEMA:
         raise LibrarySiteError(f'library manifest schema must be {SCHEMA}')
     clips = document.get('clips')
     if not isinstance(clips, list) or not clips or len(clips) > MAX_CLIPS:
         raise LibrarySiteError(f'library manifest needs 1 to {MAX_CLIPS} clips')
-    seen = set()
+    logical_ids, assets = set(), {}
+
+    def remember(asset: dict, where: str) -> None:
+        facts = {field: asset[field] for field in (*ASSET_FIELDS, *AUDIO_FIELDS, *VARIANT_FIELDS)
+                 if field in asset}
+        previous = assets.get(asset['id'])
+        if previous is not None and previous != facts:
+            raise LibrarySiteError(f'{where}: duplicate content id has conflicting asset facts')
+        assets[asset['id']] = facts
+
     for number, clip in enumerate(clips, 1):
         where = f'library manifest clip {number}'
-        if not isinstance(clip, dict):
-            raise LibrarySiteError(f'{where} is not an object')
-        clip_id, file = clip.get('id'), clip.get('file')
-        if not isinstance(clip_id, str) or not CLIP_ID.match(clip_id):
-            raise LibrarySiteError(f'{where}: id must be 12 lowercase hex digits')
-        if clip_id in seen:
+        _validate_asset(clip, where)
+        if clip['id'] in logical_ids:
             raise LibrarySiteError(f'{where}: duplicate id')
-        seen.add(clip_id)
-        if not isinstance(file, str) or not CLIP_FILE.match(file) or file != f'{CLIPS}/{clip_id}.mp4':
-            raise LibrarySiteError(f'{where}: file must be clips/<id>.mp4')
-        width, height = clip.get('width'), clip.get('height')
-        if not _size(width, MAX_SIDE) or not _size(height, MAX_SIDE):
-            raise LibrarySiteError(f'{where}: width and height must be whole pixels up to {MAX_SIDE}')
-        if not _size(clip.get('bytes'), MAX_CLIP_BYTES):
-            raise LibrarySiteError(f'{where}: bytes must be a size up to {MAX_CLIP_BYTES}')
-        expected = 'portrait' if height > width else 'landscape'
-        if clip.get('orientation') not in ORIENTATIONS or clip.get('orientation') != expected:
-            raise LibrarySiteError(f'{where}: orientation must be {expected}')
-        seconds = clip.get('duration_seconds')
-        if (not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not math.isfinite(seconds)
-                or not MIN_SECONDS <= seconds <= MAX_SECONDS):
-            raise LibrarySiteError(f'{where}: duration_seconds must lie in {MIN_SECONDS}..{MAX_SECONDS}')
-        tags = clip.get('tags', {})
-        if not isinstance(tags, dict):
+        logical_ids.add(clip['id'])
+        if not isinstance(clip.get('tags', {}), dict):
             raise LibrarySiteError(f'{where}: tags must be an object')
+        remember(clip, where)
+        variants = clip.get('variants', {})
+        if not isinstance(variants, dict) or any(mode != 'boomerang' for mode in variants):
+            raise LibrarySiteError(f'{where}: variants must be an object containing only boomerang')
+        for mode, variant in variants.items():
+            variant_where = f'{where} variant {mode}'
+            _validate_asset(variant, variant_where, variant=True)
+            if variant['id'] == clip['id']:
+                raise LibrarySiteError(f'{variant_where}: duplicate forward id')
+            remember(variant, variant_where)
     return clips
 
 
@@ -122,7 +195,7 @@ def check_library(library: Path) -> list[dict]:
     folder = library / CLIPS
     if folder.is_symlink() or not folder.is_dir():
         raise LibrarySiteError('library has no clips/ directory')
-    listed = {clip['file'].split('/', 1)[1]: clip for clip in clips}
+    listed = {asset['file'].split('/', 1)[1]: asset for asset in manifest_assets(clips)}
     present = {entry.name: entry for entry in folder.iterdir()}
     unlisted = [name for name in present if name not in listed]
     if unlisted:
@@ -156,8 +229,8 @@ def stage_library_site(studio_out: Path, library: Path, site: Path) -> int:
     for name in STUDIO_FILES:
         shutil.copyfile(studio_out / name, site / name)
     shutil.copyfile(library / MANIFEST, site / 'library' / MANIFEST)
-    for clip in clips:
-        shutil.copyfile(library / clip['file'], site / 'library' / clip['file'])
+    for asset in manifest_assets(clips):
+        shutil.copyfile(library / asset['file'], site / 'library' / asset['file'])
     return len(clips)
 
 

@@ -63,6 +63,86 @@ class StageLibrarySiteTests(unittest.TestCase):
         self.assertEqual((self.site / 'library' / 'manifest.json').read_bytes(),
                          (self.library / 'manifest.json').read_bytes())
 
+    def add_boomerang(self):
+        data = clip_bytes(9)
+        clip_id = hashlib.sha256(data).hexdigest()[:12]
+        source = self.manifest['clips'][0]
+        variant = {key: source[key] for key in ('width', 'height', 'orientation')}
+        variant.update(id=clip_id, file=f'clips/{clip_id}.mp4', bytes=len(data),
+                       duration_seconds=4.8, fps=30, frame_count=144,
+                       seam_offset_seconds=2.4, has_audio=True,
+                       lufs_integrated=-22.5, peak_dbfs=-5.2,
+                       envelope_hz=10, rms_envelope=[0.1] * 48)
+        source['variants'] = {'boomerang': variant}
+        (self.library / variant['file']).write_bytes(data)
+        self.write_manifest()
+        return variant, data
+
+    def test_stages_boomerang_without_changing_logical_clip_identity(self):
+        variant, data = self.add_boomerang()
+        source_id = self.manifest['clips'][0]['id']
+        self.assertEqual(stage_library_site(self.studio, self.library, self.site), 3)
+        self.assertEqual((self.site / 'library' / variant['file']).read_bytes(), data)
+        document = json.loads((self.site / 'library/manifest.json').read_text())
+        self.assertEqual(document['clips'][0]['id'], source_id)
+        self.assertEqual(len(list((self.site / 'library/clips').iterdir())), 4)
+
+    def test_rejects_invalid_boomerang_metadata_before_writing(self):
+        variant, _data = self.add_boomerang()
+        for field, value in [('fps', 29), ('frame_count', 145),
+                             ('seam_offset_seconds', 5), ('has_audio', 1),
+                             ('rms_envelope', [0.1] * 47), ('rms_envelope', [float('nan')] * 48),
+                             ('lufs_integrated', float('inf')), ('peak_dbfs', None),
+                             ('file', '../private.mov')]:
+            with self.subTest(field=field, value=value):
+                original = variant[field]
+                variant[field] = value
+                self.write_manifest()
+                self.refused('manifest')
+                variant[field] = original
+        variant['id'] = self.manifest['clips'][0]['id']
+        variant['file'] = self.manifest['clips'][0]['file']
+        self.write_manifest()
+        self.refused('duplicate')
+
+    def test_identical_variant_content_is_deduplicated_across_logical_clips(self):
+        variant, data = self.add_boomerang()
+        self.manifest['clips'][1]['variants'] = {'boomerang': dict(variant)}
+        self.write_manifest()
+        self.assertEqual(stage_library_site(self.studio, self.library, self.site), 3)
+        self.assertEqual((self.site / 'library' / variant['file']).read_bytes(), data)
+        self.assertEqual(len(list((self.site / 'library/clips').iterdir())), 4)
+
+    def test_duplicate_content_id_with_conflicting_facts_is_refused(self):
+        variant, _data = self.add_boomerang()
+        self.manifest['clips'][1]['variants'] = {'boomerang': {**variant, 'peak_dbfs': -4}}
+        self.write_manifest()
+        self.refused('conflicting asset facts')
+
+    def test_silent_boomerang_allows_explicit_null_measurements(self):
+        variant, _data = self.add_boomerang()
+        variant.update(has_audio=False, lufs_integrated=None, peak_dbfs=None,
+                       rms_envelope=[0] * 48)
+        self.write_manifest()
+        self.assertEqual(stage_library_site(self.studio, self.library, self.site), 3)
+
+    def test_rejects_changed_missing_and_extra_variant_files(self):
+        variant, data = self.add_boomerang()
+        path = self.library / variant['file']
+        path.write_bytes(data[:-1] + b'x')
+        self.refused('does not match its manifest id')
+        path.unlink()
+        self.refused('missing')
+
+    def test_optional_forward_audio_metadata_is_checked(self):
+        source = self.manifest['clips'][0]
+        source.update(has_audio=False, lufs_integrated=None, peak_dbfs=None,
+                      envelope_hz=10, rms_envelope=[0] * 25)
+        validate_manifest(self.manifest)
+        source['rms_envelope'][0] = 2
+        with self.assertRaisesRegex(LibrarySiteError, 'manifest'):
+            validate_manifest(self.manifest)
+
     def test_an_existing_empty_site_is_accepted_and_a_full_one_refused(self):
         self.site.mkdir()
         self.assertEqual(stage_library_site(self.studio, self.library, self.site), 3)

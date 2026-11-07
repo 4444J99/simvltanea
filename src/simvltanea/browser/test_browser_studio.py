@@ -50,6 +50,20 @@ SITE = ROOT / 'site'
 SUBPATH = 'simvltanea/studio'
 FPS = 24
 MIB = 1024 * 1024
+MEDIA_BUDGET_PROBE = r'''(() => {
+  const videos=new Set(), create=Document.prototype.createElement;
+  window.mediaBudget={populated:0,playing:0};
+  const sample=()=>{const loaded=[...videos].filter(video=>video.getAttribute('src'));
+    mediaBudget.populated=Math.max(mediaBudget.populated,loaded.length);
+    mediaBudget.playing=Math.max(mediaBudget.playing,loaded.filter(video=>!video.paused).length);};
+  Document.prototype.createElement=function(...args){const node=create.apply(this,args);
+    if(node instanceof HTMLVideoElement) videos.add(node);return node;};
+  const src=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'src');
+  Object.defineProperty(HTMLMediaElement.prototype,'src',{...src,set(value){src.set.call(this,value);sample();}});
+  for(const method of ['play','load']){const native=HTMLMediaElement.prototype[method];
+    HTMLMediaElement.prototype[method]=function(...args){const result=native.apply(this,args);sample();return result;};}
+  const tick=()=>{sample();requestAnimationFrame(tick)};requestAnimationFrame(tick);
+})();'''
 REPOSITORY = HERE.parents[2]
 # Twelve distinct H.264 MP4 loops with AAC audio and pairwise different periods.
 LOOPS = [(f'loop-{index}.mp4', seconds, hue) for index, (seconds, hue) in
@@ -225,7 +239,9 @@ class StageStudioTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in output.iterdir()), sorted(STUDIO_FILES))
         self.assertEqual(set(STUDIO_FILES), {'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json'})
         self.assertTrue(all(path.is_file() and not path.is_symlink() for path in output.iterdir()))
-        self.assertEqual((output / 'runtime.js').read_bytes(), (HERE / 'browser.runtime.js').read_bytes())
+        runtime_bytes = (output / 'runtime.js').read_bytes()
+        self.assertIn(b'SimvltaneaLive', runtime_bytes)
+        self.assertNotEqual(runtime_bytes, (HERE / 'browser.runtime.js').read_bytes())
         self.assertEqual((output / 'compiler.js').read_bytes(), (HERE / 'browser.compiler.js').read_bytes())
         self.assertEqual((output / 'studio.js').read_bytes(), STUDIO_JS.read_bytes())
         self.assertEqual(json.loads((output / 'layouts.json').read_text()), layout_bundle_v2())
@@ -235,9 +251,9 @@ class StageStudioTests(unittest.TestCase):
         self.assertIn('<title>SIMVLTANEA studio: loops on their own clocks</title>', html)
         for name in ('compiler.js', 'studio.js', 'runtime.js'):
             self.assertIn(f'<script src="{name}" defer></script>', html)
-        # Order matters: the studio installs compositionIO before the runtime reads it.
-        self.assertLess(html.index('compiler.js'), html.index('studio.js'))
-        self.assertLess(html.index('studio.js'), html.index('runtime.js'))
+        # Studio creates its live session from the already loaded runtime module.
+        self.assertLess(html.index('compiler.js'), html.index('runtime.js'))
+        self.assertLess(html.index('runtime.js'), html.index('studio.js'))
 
     def test_staging_is_deterministic_and_overwrites_only_its_own_files(self):
         first, second = self.temp / 'a', self.temp / 'b'
@@ -550,8 +566,8 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertIsNone(page.evaluate('compositionRuntime.error'))
         return page.evaluate('''() => { const r = compositionRuntime, s = r.snapshot();
           s.sha = r.plan.sources.map(x => x.sha256); s.version = r.plan.plan_version;
-          s.muted = [...document.querySelectorAll('#stage video')].map(v => v.muted);
-          s.inline = [...document.querySelectorAll('#stage video')].map(v => v.playsInline);
+          s.muted = [...document.querySelectorAll('#stage video[data-deck=active]')].map(v => v.muted);
+          s.inline = [...document.querySelectorAll('#stage video[data-deck=active]')].map(v => v.playsInline);
           return s; }''')
 
     def advancing(self, page):
@@ -658,8 +674,8 @@ class StudioBrowserTests(unittest.TestCase):
           window.studioOutputMeters = new Map();
           AudioNode.prototype.connect = function (target, ...ports) {
             const result = connect.call(this, target, ...ports);
-            // The compressor is the last node in the studio's output path.
-            if (this instanceof DynamicsCompressorNode && target === this.context.destination) {
+            // Observe the final output node after the sample guard.
+            if (target === this.context.destination) {
               const meter = this.context.createAnalyser();
               connect.call(this, meter);
               studioOutputMeters.set(this.context, meter);
@@ -682,6 +698,35 @@ class StudioBrowserTests(unittest.TestCase):
           return samples.some(sample => Math.abs(sample) > 0.001);
         }""", timeout=10000)
 
+    def test_canvas_fallback_uses_one_protected_audio_context(self):
+        page = self.open('?gen=1&seed=314159', init_script='''(() => {
+          window.MediaRecorder = undefined;
+          const NativeAudio = AudioContext, connect = AudioNode.prototype.connect;
+          window.contextCount = 0;
+          window.AudioContext = class extends NativeAudio {
+            constructor(...args) { super(...args); contextCount++; }
+          };
+          AudioNode.prototype.connect = function(target, ...ports) {
+            const result = connect.call(this, target, ...ports);
+            if (target === this.context.destination) {
+              window.fallbackMeter = this.context.createAnalyser();
+              window.fallbackOutputType = this.constructor.name;
+              connect.call(this, fallbackMeter);
+            }
+            return result;
+          };
+        })();''')
+        self.assertEqual(self.snapshot(page)['record'], 'canvas')
+        self.tap(page, '#speaker')
+        page.wait_for_function('''() => {
+          if (!window.fallbackMeter) return false;
+          const samples = new Float32Array(fallbackMeter.fftSize);
+          fallbackMeter.getFloatTimeDomainData(samples);
+          return samples.some(value => Math.abs(value) > .001);
+        }''')
+        self.assertEqual(page.evaluate('contextCount'), 1)
+        self.assertEqual(page.evaluate('fallbackOutputType'), 'WaveShaperNode')
+
     def test_first_gesture_turns_sound_on_and_m_mutes(self):
         page = self.open('?seed=7')
         self.assertEqual(page.get_attribute('#speaker', 'aria-label'), 'Tap for sound')
@@ -690,7 +735,7 @@ class StudioBrowserTests(unittest.TestCase):
         page.wait_for_function('() => [...compositionRuntime.nodes.values()].some(n => n.audio && n.audio.gain.gain.value > 0)')
         state = page.evaluate('''() => { const r = compositionRuntime;
           return {mode: r.audio.mode, gains: [...r.nodes.values()].map(n => n.audio ? n.audio.gain.gain.value : 0),
-                  muted: [...document.querySelectorAll('#stage video')].map(v => v.muted),
+                  muted: [...document.querySelectorAll('#stage video[data-deck=active]')].map(v => v.muted),
                   audio: r.plan.sources.map(s => s.audio_stream)}; }''')
         self.assertEqual(state['mode'], 'spatial_loops')
         self.assertTrue(any(gain > 0 for gain in state['gains']), state)
@@ -700,11 +745,11 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertEqual(page.get_attribute('#speaker', 'aria-label'), 'Mute')
         page.keyboard.press('m')
         page.wait_for_function('''() => SimvltaneaStudio.snapshot().sound === 'off' &&
-          [...document.querySelectorAll('#stage video')].every(v => v.muted)''')
+          [...document.querySelectorAll('#stage video[data-deck=active]')].every(v => v.muted)''')
         self.assertEqual(page.get_attribute('#speaker', 'aria-label'), 'Unmute')
         page.keyboard.press('m')
         page.wait_for_function('''() => SimvltaneaStudio.snapshot().sound === 'on' &&
-          [...document.querySelectorAll('#stage video')].every(v => !v.muted)''')
+          [...document.querySelectorAll('#stage video[data-deck=active]')].every(v => !v.muted)''')
         text = page.evaluate('document.documentElement.textContent') + INDEX_HTML
         self.assertNotRegex(text.lower(), r'sound is never played|always muted|never plays sound')
 
@@ -748,7 +793,9 @@ class StudioBrowserTests(unittest.TestCase):
         seed = self.snapshot(page)['seed']
         page.locator('body').press('r')
         page.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=seed)
-        self.assertRegex(page.evaluate('location.search'), r'^\?seed=\d+$')
+        # Manual population survives shuffle and is retained in the reproducible URL.
+        self.assertRegex(page.evaluate('location.search'), r'^\?seed=\d+&mix=[sa][\d.]+$')
+        self.assertEqual(self.snapshot(page)['panels'], 7)
         self.playing(page)
         self.assertEqual(self.allowed(page), [])
 
@@ -927,6 +974,48 @@ def fake_manifest(count: int = LIBRARY_CLIPS) -> dict:
 class LibrarySelectionTests(unittest.TestCase):
     """The manifest gate and the tag-weighted rolls, as pure functions under Node."""
 
+    def test_succession_is_seeded_and_cools_departed_logical_clips(self):
+        result = node(r'''const S = require(process.argv[1]);
+          if (!S.createSuccession) { process.stdout.write(JSON.stringify({available:false})); }
+          else {
+            const a = S.createSuccession(123), b = S.createSuccession(123), c = S.createSuccession(124);
+            const first = Array.from({length: 8}, () => a.random());
+            a.depart('logical-source', 4);
+            process.stdout.write(JSON.stringify({available:true, first,
+              again:Array.from({length:8}, () => b.random()), other:Array.from({length:8}, () => c.random()),
+              eligibility:[a.eligible('logical-source', 4.9), a.eligible('logical-source', 14), a.eligible('another', 5)]}));
+          }''', None)
+        self.assertTrue(result['available'])
+        self.assertEqual(result['first'], result['again'])
+        self.assertNotEqual(result['first'], result['other'])
+        self.assertEqual(result['eligibility'], [False, True, True])
+
+    def test_boomerang_variant_preserves_logical_identity_and_checks_assets(self):
+        manifest = fake_manifest(1)
+        clip = manifest['clips'][0]
+        variant = {**clip, 'id': '0123456789ab', 'file': 'clips/0123456789ab.mp4',
+                   'fps': 30, 'frame_count': 120, 'duration_seconds': 4.0,
+                   'seam_offset_seconds': 2.0, 'has_audio': True,
+                   'lufs_integrated': -18.0, 'peak_dbfs': -2.0,
+                   'rms_envelope': [0.25] * 40, 'envelope_hz': 10}
+        variant.pop('tags')
+        clip['variants'] = {'boomerang': variant}
+        clip.update(has_audio=True, lufs_integrated=-18.0, peak_dbfs=-2.0,
+                    rms_envelope=[0.25] * 20, envelope_hz=10)
+        out = node(r'''const S = require(process.argv[1]); let input = '';
+          process.stdin.on('data', d => input += d).on('end', () => {
+            const m = JSON.parse(input), good = S.libraryClips(m);
+            m.clips[0].variants.boomerang.file = '../secret.mp4';
+            const badPath = S.libraryClips(m);
+            m.clips[0].variants.boomerang.file = 'clips/0123456789ab.mp4';
+            m.clips[0].variants.boomerang.rms_envelope[0] = -1;
+            process.stdout.write(JSON.stringify({good, badPath, badEnergy:S.libraryClips(m)}));
+          });''', manifest)
+        self.assertEqual(out['good'][0]['id'], clip['id'])
+        self.assertEqual(out['good'][0].get('variants', {}).get('boomerang', {}).get('id'), variant['id'])
+        self.assertIsNone(out['badPath'])
+        self.assertIsNone(out['badEnergy'])
+
     def test_manifest_gate_accepts_only_a_well_formed_library(self):
         manifest = fake_manifest(4)
         clip = manifest['clips'][0]
@@ -960,7 +1049,7 @@ class LibrarySelectionTests(unittest.TestCase):
           process.stdout.write(JSON.stringify(out)); });''', variants)
         self.assertEqual([item['id'] for item in out['valid']], sorted(item['id'] for item in manifest['clips']))
         # Only comparison keys survive from the tags: no keyword, caption or tag text is kept.
-        self.assertEqual(set(out['valid'][0]), {'id', 'file', 'bytes', 'orientation', 'look', 'mood'})
+        self.assertEqual(set(out['valid'][0]), {'id', 'file', 'bytes', 'width', 'height', 'duration_seconds', 'orientation', 'look', 'mood'})
         self.assertNotIn(TAG_SENTINEL, json.dumps(out))
         self.assertEqual(len(out['no-tags']), 1)
         self.assertIsNone(out['no-tags'][0]['look'])
@@ -1048,8 +1137,8 @@ class StudioLibraryTests(unittest.TestCase):
     unlock = StudioBrowserTests.unlock
     tap = StudioBrowserTests.tap
 
-    def open(self, site='good', query='', width=1280, height=720, init_script=None):
-        context = self.browser.new_context(viewport={'width': width, 'height': height})
+    def open(self, site='good', query='', width=1280, height=720, init_script=None, has_touch=False):
+        context = self.browser.new_context(viewport={'width': width, 'height': height}, has_touch=has_touch)
         self.addCleanup(context.close)
         page = context.new_page()
         page.requests, page.errors, page.logs, page.compiler_workers = [], [], [], []
@@ -1099,6 +1188,55 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertTrue(page.compiler_workers, 'compilation still blocks the UI thread')
         self.assertTrue(all(worker.url == f'{self.origin}/good/compiler.js' for worker in page.compiler_workers))
 
+    def test_touch_mix_controls_and_shuffle_never_exceed_four_foregrounds_plus_standby(self):
+        page = self.open(query='?seed=99&mix=s0.1.2.3.4.5.6.7.8.9.10.11&evolve=0',
+                         has_touch=True, init_script=MEDIA_BUDGET_PROBE)
+        self.assertEqual(self.snapshot(page)['panels'], 4)
+        self.showing(page, self.ids[:4])
+        self.assertEqual(self.snapshot(page)['counts'], [1, 2, 3, 4])
+        for _ in range(8):
+            page.keyboard.press('ArrowUp')
+        self.assertEqual(self.snapshot(page)['panels'], 4)
+        self.assertTrue(page.locator('#more').is_disabled())
+        for _ in range(3):
+            before = self.snapshot(page)['seed']
+            self.tap(page, '#shuffle')
+            page.wait_for_function('seed=>SimvltaneaStudio.snapshot().seed!==seed', arg=before)
+            self.showing(page, self.snapshot(page)['selection'])
+            self.assertEqual(self.snapshot(page)['panels'], 4)
+        budget = page.evaluate('mediaBudget')
+        self.assertLessEqual(budget['populated'], 5, budget)
+        self.assertLessEqual(budget['playing'], 5, budget)
+        self.assertGreaterEqual(budget['populated'], 5, 'standby transition was not exercised')
+        seeded = self.open(query='?seed=99&evolve=0', has_touch=True)
+        self.assertLessEqual(self.snapshot(seeded)['panels'], 4)
+
+    def test_touch_custom_layout_and_local_pool_keep_active_population_bounded(self):
+        page = self.open(query='?seed=99&mix=s0.1.2.3&evolve=0', has_touch=True, init_script=MEDIA_BUDGET_PROBE)
+        self.playing(page, 4)
+        preset = page.evaluate("SimvltaneaStudio.stripsPreset({z1:'2',jitter:'0',reverse:false})")
+        preset['counts'] = {'min': 5, 'max': 12}
+        page.set_input_files('#files', {'name': 'too-many.json', 'mimeType': 'application/json',
+                                       'buffer': json.dumps(preset).encode()})
+        page.wait_for_function("() => SimvltaneaStudio.snapshot().toast.includes('too-many.json')")
+        self.assertIsNone(self.snapshot(page)['layoutFile'])
+        self.assertNotIn('file', [family['name'] for family in self.snapshot(page)['families']])
+        preset['counts'] = {'min': 1, 'max': 12}
+        page.set_input_files('#files', {'name': 'bounded.json', 'mimeType': 'application/json',
+                                       'buffer': json.dumps(preset).encode()})
+        page.wait_for_function("() => SimvltaneaStudio.snapshot().family==='file'")
+        self.assertEqual(self.snapshot(page)['counts'], [1, 2, 3, 4])
+        fixtures = prepare_fixtures()
+        page.set_input_files('#files', [str(fixtures[name]) for name, _, _ in LOOPS])
+        page.wait_for_function("() => SimvltaneaStudio.snapshot().source==='own' && !SimvltaneaStudio.snapshot().busy", timeout=60000)
+        self.assertEqual(len(self.snapshot(page)['loops']), 12)
+        self.assertEqual(self.snapshot(page)['panels'], 4)
+        self.playing(page, 4)
+        self.assertTrue(page.locator('#more').is_disabled())
+        budget = page.evaluate('mediaBudget')
+        self.assertLessEqual(budget['populated'], 5, budget)
+        self.assertLessEqual(budget['playing'], 5, budget)
+
     def test_library_plays_without_worker_support(self):
         page = self.open(query='?seed=7', init_script='window.Worker = undefined;')
         self.showing(page, self.roll(7)['ids'])
@@ -1116,7 +1254,7 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertEqual(self.snapshot(page)['panels'], 4)
         expected = self.snapshot(page)['selection']
         self.showing(page, expected)
-        self.assertEqual(len(page.query_selector_all('#stage video')), 4)
+        self.assertEqual(len(page.query_selector_all('#stage video[data-deck=active]')), 4)
         self.assertFalse(self.snapshot(page)['toastShown'])
 
     def test_first_sound_gesture_during_initial_compilation_is_applied(self):
@@ -1161,6 +1299,162 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertTrue(state['running'])
         self.assertTrue(all(value for value in state['muted']))
         self.assertEqual(self.snapshot(page)['library']['broken'], 0)
+
+    def test_sound_and_panel_edits_preserve_untouched_media(self):
+        page = self.open(query='?seed=99&mix=s0.1.2.3')
+        self.showing(page, self.snapshot(page)['selection'])
+        page.evaluate('''() => {
+          window.residents = [...compositionRuntime.nodes.values()].map(n => n.media);
+          window.originalClock = compositionRuntime.snapshot().compositionTime;
+          window.siblingEvents = [];
+          const time = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime');
+          for (const v of residents.slice(1)) {
+            for (const type of ['pause', 'emptied']) v.addEventListener(type, () => siblingEvents.push(type));
+            // Native loop wraps may emit seeking; only application seeks violate isolation.
+            Object.defineProperty(v, 'currentTime', {
+              get() { return time.get.call(this); },
+              set(value) { siblingEvents.push('seek-write'); time.set.call(this, value); }
+            });
+          }
+        }''')
+        self.unlock(page)
+        self.assertTrue(page.evaluate('''() => [...compositionRuntime.nodes.values()]
+          .every((n, i) => n.media === residents[i])'''))
+        self.assertGreaterEqual(page.evaluate('compositionRuntime.snapshot().compositionTime'),
+                                page.evaluate('originalClock'))
+        page.evaluate('window.originalAudio = compositionRuntime.audio.context')
+        before = self.snapshot(page)['selection']
+        box = page.locator('#stage .loop[data-loop-id="loop-1"]').bounding_box()
+        page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+        page.wait_for_function('b => SimvltaneaStudio.snapshot().selection[0] !== b', arg=before[0])
+        self.showing(page, self.snapshot(page)['selection'])
+        self.assertTrue(page.evaluate('''() => [...compositionRuntime.nodes.values()].slice(1)
+          .every((n, i) => n.media === residents[i + 1])'''))
+
+        self.assertEqual(page.evaluate('siblingEvents'), [])
+        self.assertTrue(page.evaluate('compositionRuntime.audio.context === originalAudio'))
+        page.set_viewport_size({'width': 390, 'height': 844})
+        self.assertTrue(page.evaluate('''() => [...compositionRuntime.nodes.values()].slice(1)
+          .every((n, i) => n.media === residents[i + 1])'''))
+
+    def test_library_evolves_while_manual_population_stays_fixed(self):
+        page = self.open(query='?seed=99&mix=s0.1.2.3')
+        self.showing(page, self.snapshot(page)['selection'])
+        before = self.snapshot(page)['selection']
+        # The requested plan can change while its incoming resident still waits
+        # for a preparation permit. Prove an actual committed replacement.
+        page.wait_for_function('''before => {
+          const r=compositionRuntime, selection=SimvltaneaStudio.snapshot().selection;
+          const actual=[...r.nodes.values()].map(node=>node.item?.name);
+          return !r.draining && actual.join()===selection.join() && actual.join()!==before.join();
+        }''', arg=before, timeout=40000)
+        self.assertEqual(self.snapshot(page)['panels'], 4)
+        state = page.evaluate('compositionRuntime.snapshot()')
+        self.assertEqual(state['maxConcurrentStandbys'], 1)
+        self.tap(page, '#activity')
+        # Hold allows a handoff already in flight to finish. Capture its settled
+        # residents before checking that no further automatic changes begin.
+        page.wait_for_function('''() => {
+          const r=compositionRuntime, selection=SimvltaneaStudio.snapshot().selection;
+          return !r.draining && [...r.nodes.values()].map(node=>node.item?.name).join()===selection.join();
+        }''', timeout=10000)
+        held = self.snapshot(page)['selection']
+        frames = page.evaluate('[...compositionRuntime.nodes.values()].map(node=>node.callbacks)')
+        self.assertFalse(self.snapshot(page)['evolving'])
+        page.wait_for_timeout(3000)
+        self.assertEqual(self.snapshot(page)['selection'], held)
+        actual = page.evaluate('[...compositionRuntime.nodes.values()].map(node=>({name:node.item.name,frames:node.callbacks}))')
+        self.assertEqual([node['name'] for node in actual], held)
+        # Native loop wraps briefly return HAVE_METADATA (readyState=1). Real
+        # decoded-frame progress verifies continuity without racing that dip.
+        self.assertTrue(all(node['frames'] > earlier for node, earlier in zip(actual, frames)), actual)
+
+    def test_four_panel_ecology_changes_actual_territory(self):
+        page = self.open(query='?seed=99&mix=s0.1.2.3')
+        self.showing(page, self.snapshot(page)['selection'])
+        page.wait_for_function('''() => {
+          const widths = [...compositionRuntime.nodes.values()].map(n => n.box.getBoundingClientRect().width);
+          return widths.length === 4 && Math.max(...widths) - Math.min(...widths) > 2;
+        }''', timeout=6000)
+        self.assertEqual(page.evaluate('compositionRuntime.nodes.size'), 4)
+
+    def test_pause_during_initial_priming_is_honored(self):
+        page = self.open(query='?seed=99&mix=s0.1.2.3', init_script='''(() => {
+          const frame = HTMLVideoElement.prototype.requestVideoFrameCallback;
+          HTMLVideoElement.prototype.requestVideoFrameCallback = function(callback) {
+            return frame.call(this, (time, metadata) => setTimeout(() => callback(time, metadata), 600));
+          };
+        })();''')
+        page.wait_for_function('() => compositionRuntime.running && compositionRuntime.draining && !compositionRuntime.ready')
+        self.tap(page, '#play')
+        page.wait_for_function('() => compositionRuntime.ready')
+        self.assertTrue(self.snapshot(page)['paused'])
+        self.assertFalse(page.evaluate('compositionRuntime.running'))
+        self.assertTrue(page.evaluate('() => [...compositionRuntime.nodes.values()].every(n => n.media.paused)'))
+
+    def test_failed_boomerang_keeps_its_healthy_forward_clip(self):
+        page = self.open(query='?seed=99&mix=s0.1.2.3&evolve=0')
+        manifest = json.loads((LIBRARY / 'manifest.json').read_text())
+        clip = sorted(manifest['clips'], key=lambda item: item['id'])[0]
+        variant_id = '0123456789ab'
+        clip['variants'] = {'boomerang': {
+            **{key: clip[key] for key in ('width', 'height', 'orientation', 'bytes')},
+            'id': variant_id, 'file': f'clips/{variant_id}.mp4', 'duration_seconds': 1,
+            'fps': 30, 'frame_count': 30, 'seam_offset_seconds': .5,
+            'has_audio': False, 'lufs_integrated': None, 'peak_dbfs': None,
+            'rms_envelope': [0] * 10, 'envelope_hz': 10,
+        }}
+        page.route('**/library/manifest.json', lambda route: route.fulfill(json=manifest))
+        page.route(f'**/library/clips/{variant_id}.mp4', lambda route: route.fulfill(status=404))
+        page.reload()
+        page.wait_for_function('''() => window.SimvltaneaStudio?.snapshot &&
+          (SimvltaneaStudio.snapshot().library?.broken > 0 || compositionRuntime.ready)''')
+        self.assertEqual(self.snapshot(page)['library']['broken'], 0)
+        self.assertIn(clip['id'], self.snapshot(page)['selection'])
+        self.assertEqual(page.evaluate('compositionRuntime.nodes.get("loop-1").item.asset.id'), clip['id'])
+
+    def test_tap_with_no_spare_clip_keeps_every_sibling(self):
+        page = self.open(query='?seed=99&mix=s0.1&evolve=0')
+        manifest = json.loads((LIBRARY / 'manifest.json').read_text())
+        manifest['clips'] = sorted(manifest['clips'], key=lambda item: item['id'])[:2]
+        page.route('**/library/manifest.json', lambda route: route.fulfill(json=manifest))
+        page.reload()
+        page.wait_for_function('() => window.SimvltaneaStudio?.snapshot && compositionRuntime.ready')
+        self.unlock(page)
+        before = self.snapshot(page)['selection']
+        page.evaluate('window.originalResidents = [...compositionRuntime.nodes.values()].map(n => n.media)')
+        box = page.locator('#stage .loop[data-loop-id="loop-1"]').bounding_box()
+        page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+        self.assertEqual(self.snapshot(page)['selection'], before)
+        self.assertTrue(page.evaluate('''() => [...compositionRuntime.nodes.values()]
+          .every((n, i) => n.media === originalResidents[i])'''))
+
+    def test_pending_manual_selection_outranks_automatic_replacement(self):
+        page = self.open(query='?seed=99&mix=s0.1.2.3', init_script='''(() => {
+          const NativeWorker = Worker, queued = [];
+          window.holdCompilation = false;
+          window.releaseCompilation = () => {
+            holdCompilation = false;
+            queued.splice(0).forEach(send => { try { send(); } catch (_) {} });
+          };
+          window.Worker = class extends NativeWorker {
+            postMessage(input) {
+              if (holdCompilation) queued.push(() => super.postMessage(input));
+              else super.postMessage(input);
+            }
+          };
+        })();''')
+        self.showing(page, self.snapshot(page)['selection'])
+        page.wait_for_function('''() => SimvltaneaStudio.snapshot().ecosystem.residents.some(
+          r => r.deadlineAge - r.age < 0.8)''', timeout=35000)
+        page.evaluate('holdCompilation = true')
+        self.tap(page, '#more')
+        expected = self.snapshot(page)['selection']
+        self.assertEqual(len(expected), 5)
+        page.wait_for_timeout(3500)
+        self.assertEqual(self.snapshot(page)['selection'], expected)
+        page.evaluate('releaseCompilation()')
+        self.showing(page, expected)
 
     def test_library_mode_fetches_only_the_rolls_clips(self):
         page = self.open(query='?seed=424242')
@@ -1232,7 +1526,7 @@ class StudioLibraryTests(unittest.TestCase):
         state = page.evaluate('''() => { const r = compositionRuntime;
           return {mode: r.audio.mode, gains: [...r.nodes.values()].map(n => n.audio.gain.gain.value),
                   perLoop: Object.values(r.plan.audio.per_loop).map(l => l.gain),
-                  muted: [...document.querySelectorAll('#stage video')].map(v => v.muted),
+                  muted: [...document.querySelectorAll('#stage video[data-deck=active]')].map(v => v.muted),
                   audio: r.plan.sources.map(s => s.audio_stream)}; }''')
         self.assertEqual(state['mode'], 'spatial_loops')
         self.assertTrue(all(gain > 0 for gain in state['gains']), state)
@@ -1242,10 +1536,10 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertEqual(self.snapshot(page)['sound'], 'on')
         page.keyboard.press('m')
         page.wait_for_function('''() => SimvltaneaStudio.snapshot().sound === 'off' &&
-          [...document.querySelectorAll('#stage video')].every(v => v.muted)''')
+          [...document.querySelectorAll('#stage video[data-deck=active]')].every(v => v.muted)''')
         page.keyboard.press('m')
         page.wait_for_function('''() => SimvltaneaStudio.snapshot().sound === 'on' &&
-          [...document.querySelectorAll('#stage video')].every(v => !v.muted)''')
+          [...document.querySelectorAll('#stage video[data-deck=active]')].every(v => !v.muted)''')
         # A tapped panel gets a new clip, fetched on demand; the others stay.
         before = self.snapshot(page)['selection']
         box = page.locator('#stage .loop[data-loop-id="loop-1"]').bounding_box()
