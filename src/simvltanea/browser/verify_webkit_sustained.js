@@ -198,7 +198,8 @@ async function sustained(webkit, device, base, out, name, query) {
   } catch (error) { result.failure = String(error.stack || error); }
   finally { if (browser) await browser.close(); }
   result.summary = analyse(result); save(out, name + '.json', result);
-  console.log(JSON.stringify({name, ...result.summary})); return result.summary;
+  console.log(JSON.stringify({name, ...result.summary, errors: result.errors,
+    consoleErrors: result.consoleErrors, httpErrors: result.httpErrors})); return result.summary;
 }
 
 async function audioProof(webkit, out) {
@@ -341,7 +342,8 @@ async function main() {
   finally {
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
     receipt.finishedAtUtc = new Date().toISOString(); save(out, 'receipt.json', receipt);
-    console.log(JSON.stringify({pass: receipt.pass, head: receipt.head, receipt: path.join(out, 'receipt.json')}));
+    console.log(JSON.stringify({pass: receipt.pass, head: receipt.head, receipt: path.join(out, 'receipt.json'),
+      failure: receipt.failure, controls: receipt.controls, audio: receipt.audio}));
     if (!receipt.pass) process.exitCode = 1;
   }
 }
