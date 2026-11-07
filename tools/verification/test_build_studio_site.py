@@ -90,6 +90,48 @@ class BuildStudioSiteTests(unittest.TestCase):
         self.assertEqual((self.output / 'library' / self.clip['file']).read_bytes(), self.data)
         self.assertIn('1 library clips', result.stdout)
 
+    def add_boomerang(self):
+        data = b'public boomerang bytes'
+        clip_id = hashlib.sha256(data).hexdigest()[:12]
+        variant = {'id': clip_id, 'file': f'clips/{clip_id}.mp4',
+                   'width': 480, 'height': 270, 'orientation': 'landscape',
+                   'bytes': len(data), 'duration_seconds': 3.8, 'fps': 30,
+                   'frame_count': 114, 'seam_offset_seconds': 1.9,
+                   'has_audio': False, 'lufs_integrated': None, 'peak_dbfs': None,
+                   'envelope_hz': 10, 'rms_envelope': [0] * 38}
+        self.clip['variants'] = {'boomerang': variant}
+        (self.library / variant['file']).write_bytes(data)
+        self.write_manifest()
+        return variant, data
+
+    def test_downloads_manifest_listed_variants_and_checks_their_hashes(self):
+        variant, data = self.add_boomerang()
+        result = self.run_build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.output / 'library' / variant['file']).read_bytes(), data)
+        self.assertFalse((self.output / 'library/repository.zip').exists())
+
+    def test_variant_file_size_limit_is_enforced_before_publication(self):
+        variant, _data = self.add_boomerang()
+        variant['bytes'] = 25 * 1024 * 1024 + 1
+        self.write_manifest()
+        self.assert_refused(self.run_build(), '25 MiB')
+
+    def test_variant_corruption_refuses_publication(self):
+        variant, data = self.add_boomerang()
+        (self.library / variant['file']).write_bytes(data[:-1] + b'x')
+        self.assert_refused(self.run_build(), 'does not match its manifest id')
+
+    def test_builds_an_admitted_local_library_without_remote_downloads(self):
+        variant, data = self.add_boomerang()
+        (self.library / 'repository.zip').unlink()
+        result = subprocess.run(
+            [sys.executable, '-m', 'tools.publishing.build_studio_site',
+             '--library', str(self.library), '--output', str(self.output)],
+            cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.output / 'library' / variant['file']).read_bytes(), data)
+
     def test_manifest_change_refuses_publication(self):
         self.assert_refused(self.run_build(pin='0' * 64), 'manifest SHA-256')
 
