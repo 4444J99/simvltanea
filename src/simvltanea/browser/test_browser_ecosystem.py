@@ -21,6 +21,107 @@ def execute(body: str):
 
 
 class EcosystemTests(unittest.TestCase):
+    def test_failed_or_delayed_retirement_does_not_restart_presence(self):
+        result = execute('''
+const results=[];
+for(const reason of ['failed','busy','scarce']) {
+  const e=new Engine({seed:1});
+  const residents=[{id:'one',clipKey:'old',duration:2,energy:.5,hasAudio:true}];
+  e.step(0,0,residents,{manualCount:true});
+  const deadline=e.snapshot().residents[0].deadlineAge;
+  const options={manualCount:true};
+  if(reason==='busy')residents[0].pending=true;
+  if(reason==='scarce')options.canReplace=false;
+  let out=e.step(deadline,.1,residents,options);
+  if(reason==='failed')e.settle(out.requests[0],false,deadline);
+  out=e.step(deadline+.1,.1,residents,options);
+  results.push({deadline,next:e.snapshot().residents[0].deadlineAge,
+    presence:out.presence?out.presence[0]:null,born:e.snapshot().residents[0].born});
+}
+console.log(JSON.stringify(results));
+''')
+        for row in result:
+            self.assertGreater(row['next'], row['deadline'])
+            self.assertEqual(row['presence'], .12)
+            self.assertEqual(row['born'], 0)
+
+    def test_single_resident_presence_rises_and_falls_without_normalizing_gain(self):
+        result = execute("""
+const engine=new Engine({seed:42,maxSlots:4});
+const residents=[{id:'a',clipKey:'one',duration:2,age:0,hasAudio:true}];
+let out=engine.step(0,0,residents,{manualCount:true});
+const deadline=engine.snapshot().residents[0].deadlineAge;
+const values=[];
+function capture(){values.push({presence:out.presence?out.presence[0]:null,gain:out.gains[0],weight:out.weights[0],snapshot:engine.snapshot().residents[0].presence??null});}
+capture();
+for(const time of [.6,1.2,(deadline+1.2)/2,deadline,deadline+5]) {
+  out=engine.step(time,.1,residents,{manualCount:true}); capture();
+}
+console.log(JSON.stringify(values));
+""")
+        for actual, expected in zip(result, [0, .5, 1, .56, .12, .12]):
+            self.assertIsNotNone(actual['presence'])
+            self.assertAlmostEqual(actual['presence'], expected)
+            self.assertAlmostEqual(actual['snapshot'], expected)
+            self.assertAlmostEqual(actual['gain'], .85)
+            self.assertAlmostEqual(actual['weight'], 1)
+
+    def test_hold_attacks_then_stays_neutral_and_bypass_is_immediate(self):
+        result = execute("""
+const engine=new Engine({seed:42,maxSlots:2});
+const residents=[{id:'a',clipKey:'one',duration:2,age:0,hasAudio:true}];
+const held=[0,.6,1.2,100].map(time=>{
+  const out=engine.step(time,.1,residents,{enabled:false});
+  return {presence:out.presence?out.presence[0]:null,requests:out.requests.length};
+});
+const bypass=engine.step(101,.1,residents,{enabled:false,effects:false}).presence;
+console.log(JSON.stringify({held,bypass:bypass?bypass[0]:null}));
+""")
+        self.assertEqual([v['presence'] for v in result['held']], [0, .5, 1, 1])
+        self.assertEqual([v['requests'] for v in result['held']], [0] * 4)
+        self.assertEqual(result['bypass'], 1)
+
+    def test_resting_presence_and_output_array_reuse(self):
+        result = execute("""
+const engine=new Engine({seed:42,maxSlots:4});
+const residents=[{id:'a',duration:2,age:2,hasAudio:true},{id:'b',duration:2,age:2,resting:true}];
+const first=engine.step(0,0,residents,{enabled:false});
+const arrays=Object.fromEntries(['weights','gains','prominence','space','fatigue','presence'].map(key=>[key,first[key]]));
+const awake=first.presence?Array.from(first.presence):null;
+const bypass=engine.step(.1,.1,residents,{enabled:false,effects:false});
+const bypassed=bypass.presence?Array.from(bypass.presence):null;
+const next=engine.step(.2,.1,residents.slice(0,1),{enabled:false});
+console.log(JSON.stringify({awake,bypassed,current:next.presence?Array.from(next.presence):null,
+  typed:next.presence instanceof Float64Array,
+  same:Object.keys(arrays).every(key=>arrays[key]===next[key]),
+  snapshot:engine.snapshot().residents.map(r=>r.presence??null)}));
+""")
+        self.assertEqual(result['awake'], [1, 0, 0, 0])
+        self.assertEqual(result['bypassed'], [1, 1, 0, 0])
+        self.assertEqual(result['current'], [1, 0, 0, 0])
+        self.assertTrue(result['typed'])
+        self.assertTrue(result['same'])
+        self.assertEqual(result['snapshot'], [1])
+
+    def test_effects_toggle_preserves_ecology_requests_and_seeded_state(self):
+        result = execute("""
+const on=new Engine({seed:42,maxSlots:4}), off=new Engine({seed:42,maxSlots:4});
+const residents=[{id:'a',duration:2,age:0,hasAudio:true},{id:'b',duration:3,age:0,hasAudio:true}];
+let equal=true;
+for(let i=0;i<500;i++) {
+  const a=on.step(i*.1,.1,residents,{manualCount:true});
+  const b=off.step(i*.1,.1,residents,{manualCount:true,effects:false});
+  for(const key of ['weights','gains','prominence','space','fatigue'])
+    equal=equal&&JSON.stringify(Array.from(a[key]))===JSON.stringify(Array.from(b[key]));
+  equal=equal&&JSON.stringify(a.requests)===JSON.stringify(b.requests);
+  const snapshots=[on.snapshot(),off.snapshot()];
+  for(const snapshot of snapshots)for(const resident of snapshot.residents)delete resident.presence;
+  equal=equal&&JSON.stringify(snapshots[0])===JSON.stringify(snapshots[1]);
+}
+console.log(JSON.stringify(equal));
+""")
+        self.assertTrue(result)
+
     def test_lifetimes_are_full_loops_with_long_clip_exception(self):
         data = execute('''
           const engine = new Engine({seed: 1});

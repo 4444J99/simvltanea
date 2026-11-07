@@ -41,6 +41,42 @@ control audible priority. Generative strips trade bounded territory; authored an
 custom geometry remains as authored. Geometry writes are throttled to 20 Hz.
 The simulation clock pauses with playback and hidden tabs, independently of audio.
 
+## Clip presence filters
+
+The **ƒx** button in the top corner toggles linked audio and image filters.
+They are on by default; `fx=0` in the URL bypasses them, and `fx=1` enables them.
+The explicit setting survives shuffles. Toggling filters keeps the same video
+elements, playback positions, and audio connections.
+
+Each evolving resident rises to a peak over 1.2 seconds, then recedes across its
+planned lifetime. The same presence value controls its gain, a low-pass opening,
+brightness, saturation, and up to 2 CSS pixels of blur. The picture becomes
+clearer and the sound opens as the clip rises. These are tuning defaults, not
+an artist-approved preset.
+
+An overdue clip retains a quiet 0.12 tail until a decoded successor can take over.
+Extending its retirement deadline does not restart its rise. The incoming deck
+starts a separate envelope when it becomes visible; the moving crossfade finishes
+the predecessor's departure. Preparation time and native playhead wraparound do
+not count as the new clip's age.
+
+Presence multiplies the normalized mix gain, so it remains audible even with a
+single resident. The low-pass cutoff moves logarithmically from 420 Hz to at most
+16 kHz or 45 percent of the actual sample rate. The existing master protection
+remains in the signal path. Bypass clears image filters, flattens the filter's
+magnitude response, and removes this amplitude envelope.
+
+Holding automatic changes, or playing a source without automatic succession,
+keeps steady presence after entry. Pause and hidden-tab suspension freeze the
+envelope clock. Reduced-motion mode disables these animated filters. Authored
+exports are unchanged; this feature belongs to the interactive Studio session.
+
+Library and uploaded clips use independent incoming and outgoing audio filters.
+The built-in generated pictures receive image filters, but their synthesized
+voices attach after promotion and do not yet overlap as two independent voices.
+If recording is unavailable and Studio uses its live canvas preview, the Filters
+control is disabled; that fallback keeps its existing image and sound behavior.
+
 ## Audio and asset evidence
 
 The persistent master chain includes compression, a compensated soft clipper and

@@ -39,6 +39,7 @@ pixels (44 on wider screens).
 | Speaker | M | Three states: tap for sound, sound on, muted by you |
 | Volume | none | Master level; appears when the speaker is hovered or focused |
 | Add yours | none | Opens the file picker for your own videos |
+| ƒx Filters | none | Links each clip's audible and visible rise and fall; toggles the effect without restarting playback |
 | Full screen | F | Enters or leaves full screen where the browser allows it |
 | ? | Esc closes | Three short lines: what this is, privacy, the keys |
 | A panel | none | Swaps that panel's loop for one not on screen |
@@ -54,6 +55,10 @@ Messages appear as one short toast that dismisses itself, for example
 | `&mix=s3.7.1` | Written after hand edits (panel taps, count, family): the family's initial and the built-in loops by number. Together with the seed it reproduces the edited composition |
 | `?seconds=<n>` | Length of one pass of the piece, in seconds (default 120). At the end it starts again |
 | `?gen=1` | Plays the built-in loops even when a library is deployed, without requesting it |
+| `&fx=0` / `&fx=1` | Bypasses / enables clip presence filters; reduced motion keeps them disabled |
+
+See [continuous Studio playback](STUDIO_PLAYBACK.md#clip-presence-filters) for
+the current resident lifecycle, filter envelope, and device verification boundaries.
 
 ## Sound
 
