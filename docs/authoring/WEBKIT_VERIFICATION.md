@@ -44,10 +44,13 @@ and browser-closing phases remain distinguishable. Every raw error is retained.
 
 Three narrowly evidenced resource outcomes are reported separately:
 
-- A Blob error-1 message or cancelled Blob request follows retirement of that
-  exact URL by at most 1,000 ms. The retirement must record a paused element at
-  readyState 0, and subsequent samples must not contradict the disposal by
-  showing it active before the error.
+- A Blob error-1 message or cancelled Blob request follows verified retirement
+  of that exact URL. The retirement must record a paused element at readyState
+  0. Every subsequent sample through the end of capture is checked for reuse:
+  the URL must never be a populated source or the current source of an active,
+  populated deck. A stale `currentSrc` on a cleared inactive deck is permitted.
+  Asynchronous delivery can lag disposal by seconds; the receipt records that
+  delay without imposing an unrelated timing limit on confirmed disposal.
 - A plain cancelled Blob request is followed within 1,000 ms by two distinct
   decoded times and increasing callbacks on the same deck and native source
   URL, with no native media error. This proves that the cancelled read did not
@@ -59,6 +62,9 @@ Each classification retains its raw-record reference and timing or frame
 evidence. Unknown URLs, future retirements/aborts, other error types, and
 unproven recovery fail. Independent two-second playback gates still reject
 freezes, even when a resource cancellation has been explained.
+Only the exact request-failure dialects `cancelled` and `net::ERR_ABORTED` qualify
+as cancellations; each requires the same positive disposal, recovery, or explicit
+fetch-abort evidence. The recovery and fetch-abort windows remain 1,000 ms.
 
 All three pacing regimes must appear across the two runs combined; each run
 reports its own coverage. A missing regime is a coverage failure, not proof of

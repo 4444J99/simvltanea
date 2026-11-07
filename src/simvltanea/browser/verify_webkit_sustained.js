@@ -63,7 +63,7 @@ function classifyResourceErrors(result) {
       const reference = {kind, index, url: error?.url, wall: error?.wall};
       const url = error?.url, wall = error?.wall;
       const blob = typeof url === 'string' && url.startsWith('blob:') && Number.isFinite(wall);
-      const cancelled = kind === 'requestFailures' && error.failure?.errorText === 'cancelled';
+      const cancelled = kind === 'requestFailures' && ['cancelled', 'net::ERR_ABORTED'].includes(error.failure?.errorText);
       const aborted = cancelled && error.resourceType === 'fetch' && typeof url === 'string' && /^https?:\/\//.test(url) &&
         Number.isFinite(wall) && (result.events || []).find(event => event.type === 'asset-request-aborted' &&
           event.url === url && Number.isFinite(event.wall) && wall >= event.wall && wall - event.wall <= 1000);
@@ -78,10 +78,13 @@ function classifyResourceErrors(result) {
       const retired = blob && expectedType && (result.events || []).find(event => {
         const lag = wall - event.wall;
         if (event.type !== 'resource-retired' || !['deck', 'metadata'].includes(event.role) || event.url !== url ||
-            event.readyState !== 0 || event.paused !== true || !Number.isFinite(event.wall) || lag < 0 || lag > 1000) return false;
-        // A sampled active source after the retirement contradicts disposal.
-        return !(result.samples || []).some(row => row.wall >= event.wall && row.wall <= wall &&
-          (row.decks || []).some(deck => deck.active && deck.populated && (deck.src === url || deck.currentSrc === url)));
+            event.readyState !== 0 || event.paused !== true || !Number.isFinite(event.wall) || lag < 0) return false;
+        // Cancellation delivery is asynchronous. Identity and confirmed disposal,
+        // not runner receipt latency, determine whether this is the retired read.
+        // Reject re-admission anywhere after disposal, including after the error.
+        // A cleared inactive deck may retain a stale native currentSrc value.
+        return !(result.samples || []).some(row => row.wall >= event.wall &&
+          (row.decks || []).some(deck => deck.populated && (deck.src === url || (deck.active && deck.currentSrc === url))));
       });
       if (retired) {
         classified.expectedRetirements.push({...reference, role: retired.role, id: retired.id,

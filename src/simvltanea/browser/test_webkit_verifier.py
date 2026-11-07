@@ -85,11 +85,54 @@ class WebKitVerifierTests(unittest.TestCase):
         self.assertEqual(summary['resourceErrors']['unexpected'], [])
         self.assertEqual(summary['resourceErrors']['expectedRetirements'][0]['lagMs'], 100)
 
+    def test_delayed_retirement_message_is_allowed_without_source_readmission(self):
+        summary = classify(RETIRED_BLOB + '''
+result.events[0].wall = 3100;
+result.samples[100].decks = [{active: false, populated: false, src: '', currentSrc: retiredUrl}];
+''')
+        self.assertTrue(summary['pass'], summary)
+        self.assertEqual(summary['resourceErrors']['expectedRetirements'][0]['lagMs'], 9000)
+
+    def test_source_readmission_after_error_invalidates_retirement_proof(self):
+        for deck in (
+            "{active: false, populated: true, src: retiredUrl, currentSrc: ''}",
+            "{active: true, populated: true, src: 'blob:new', currentSrc: retiredUrl}",
+            "{active: true, populated: true, src: retiredUrl, currentSrc: retiredUrl}",
+        ):
+            with self.subTest(deck=deck):
+                self.assert_refused(RETIRED_BLOB + 'result.samples[100].decks = [' + deck + '];', 'noErrors')
+
+    def test_browser_cancellation_dialect_still_requires_the_same_positive_evidence(self):
+        for fixture, category in (
+            (RETIRED_BLOB, 'expectedRetirements'),
+            (RECOVERED_BLOB, 'recoveredReads'),
+            (ABORTED_FETCH, 'expectedAborts'),
+        ):
+            with self.subTest(category=category):
+                summary = classify(fixture + '''
+result.requestFailures = [{...result.requestFailures[0], failure: {errorText: 'net::ERR_ABORTED'}}];
+''')
+                self.assertTrue(summary['pass'], summary)
+                self.assertTrue(summary['resourceErrors'][category])
+        self.assert_refused('''
+result.requestFailures = [{wall: 12100, url: 'blob:unexplained', failure: {errorText: 'net::ERR_ABORTED'}}];
+''', 'noErrors')
+
+    def test_verified_delayed_retirement_does_not_hide_a_native_hold_or_error(self):
+        self.assert_refused(RETIRED_BLOB + '''
+result.events[0].wall = 3100;
+result.samples.slice(800, 840).forEach(row => {row.nodes[0].decoded = .5;});
+''', 'decodedProgress')
+        self.assert_refused(RETIRED_BLOB + '''
+result.events[0].wall = 3100;
+result.samples[900].nodes[0].nativeError = {code: 3, message: 'Decode failed'};
+''', 'validMedia')
+
     def test_unknown_or_active_resource_failures_are_not_retirement_cancellations(self):
         for mutation in (
             "result.events[0].url = 'blob:http://127.0.0.1/different';",
             'result.events[0].wall = 12200;',
-            'result.events[0].wall = 10000;',
+            'result.events[0].wall = null;',
             'result.events[0].paused = false;',
             'result.events[0].readyState = 4;',
             "result.events[0].type = 'resident';",
