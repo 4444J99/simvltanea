@@ -16,7 +16,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import math
-import os
 from pathlib import Path
 import re
 import shutil
@@ -24,6 +23,8 @@ import subprocess
 import sys
 import tempfile
 
+from tools import paths as _paths  # Bootstrap repository sources for the standalone module CLI.
+from simvltanea.browser import browser_runtime
 from tools.publishing.stage_library_site import LibrarySiteError, check_library
 
 FPS = 30
@@ -297,7 +298,9 @@ def build_library(source: Path, output: Path, *, fade_frames: int = 2, audio_mod
                     future.cancel()
                 raise
         document = {'schema': 'simvltanea.public-demo/1', 'clips': entries}
-        (work / 'manifest.json').write_text(json.dumps(document, indent=1, sort_keys=True, allow_nan=False) + '\n')
+        (work / 'manifest.json').write_text(
+            json.dumps(document, indent=1, sort_keys=True, allow_nan=False) + '\n',
+            encoding='utf-8', newline='\n')
         try:
             check_library(work)
         except LibrarySiteError as error:
@@ -305,7 +308,9 @@ def build_library(source: Path, output: Path, *, fade_frames: int = 2, audio_mod
         # An existing destination is never replaced, even if it appeared mid-build.
         if output.exists() or output.is_symlink():
             raise BuildError('output appeared while building')
-        os.rename(work, output)
+        # The native no-clobber publisher also refuses an empty directory
+        # created after the check above; ordinary POSIX rename would replace it.
+        browser_runtime._rename_preview(work, output, exchange=False)
         return document
     finally:
         if work.exists():

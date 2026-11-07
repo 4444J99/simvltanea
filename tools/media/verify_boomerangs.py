@@ -62,7 +62,8 @@ def main(argv: list[str] | None = None) -> int:
         document = verify_library(args.library, jobs=args.jobs)
         if args.receipt:
             args.receipt.parent.mkdir(parents=True, exist_ok=True)
-            args.receipt.write_text(json.dumps(document, indent=1, allow_nan=False) + '\n')
+            args.receipt.write_text(json.dumps(document, indent=1, allow_nan=False) + '\n',
+                                    encoding='utf-8', newline='\n')
     except (BuildError, OSError) as error:
         print(f'FAIL: {error}', file=sys.stderr)
         return 2

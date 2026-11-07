@@ -203,6 +203,38 @@ class MediaTests(unittest.TestCase):
             self.assertFalse((root / 'output').exists())
             self.assertEqual(sorted(p.name for p in root.iterdir()), ['source'])
 
+    def test_publication_preserves_destination_created_after_final_check(self):
+        for populated in (False, True):
+            with self.subTest(populated=populated), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                make_library(root / 'source')
+                output = root / 'output'
+                is_symlink = Path.is_symlink
+                identity = None
+
+                def appeared_after_check(path):
+                    nonlocal identity
+                    result = is_symlink(path)
+                    if path == output and not result and list(root.glob('.boomerangs-*')):
+                        # The final existence check has returned false. A second
+                        # writer claims the output just before the native rename.
+                        output.mkdir()
+                        identity = output.stat().st_ino
+                        if populated:
+                            (output / 'keep.txt').write_bytes(b'preserve')
+                    return result
+
+                with mock.patch.object(Path, 'is_symlink', appeared_after_check):
+                    with self.assertRaises(OSError):
+                        loops.build_library(root / 'source', output)
+                self.assertIsNotNone(identity)
+                self.assertEqual(output.stat().st_ino, identity)
+                self.assertEqual(sorted(path.name for path in output.iterdir()),
+                                 ['keep.txt'] if populated else [])
+                if populated:
+                    self.assertEqual((output / 'keep.txt').read_bytes(), b'preserve')
+                self.assertEqual(sorted(path.name for path in root.iterdir()), ['output', 'source'])
+
 
 if __name__ == '__main__':
     unittest.main()
