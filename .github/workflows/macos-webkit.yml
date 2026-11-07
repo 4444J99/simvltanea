@@ -1,0 +1,68 @@
+name: macOS WebKit playback
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-webkit-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  sustained-playback:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/studio-webkit-browsers
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Record Apple runner environment
+        run: |
+          mkdir -p var/proofs/macos-webkit
+          {
+            sw_vers
+            uname -a
+            node --version
+            python3 --version
+            git rev-parse HEAD
+          } > var/proofs/macos-webkit/environment.log
+
+      - name: Install isolated pinned Playwright and macOS WebKit
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/studio-webkit" --no-save --package-lock=false --ignore-scripts playwright@1.65.0 2>&1 | tee var/proofs/macos-webkit/install.log
+          node "$RUNNER_TEMP/studio-webkit/node_modules/playwright/cli.js" install webkit 2>&1 | tee var/proofs/macos-webkit/browser-install.log
+
+      - name: Stage checked-out Studio and pinned public library
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          python3 -m tools.publishing.build_studio_site --output var/site/macos-webkit 2>&1 | tee var/proofs/macos-webkit/build.log
+
+      - name: Prove sustained playback and native audio
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          NODE_PATH="$RUNNER_TEMP/studio-webkit/node_modules" node src/simvltanea/browser/verify_webkit_sustained.js var/site/macos-webkit var/proofs/macos-webkit 2>&1 | tee var/proofs/macos-webkit/run.log
+
+      - name: Preserve success or failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-webkit-${{ github.sha }}
+          path: var/proofs/macos-webkit/
+          if-no-files-found: error
+          retention-days: 14
