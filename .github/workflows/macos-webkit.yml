@@ -17,8 +17,6 @@ jobs:
   sustained-playback:
     runs-on: macos-15
     timeout-minutes: 30
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/studio-webkit-browsers
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -31,6 +29,7 @@ jobs:
       - name: Record Apple runner environment
         run: |
           mkdir -p var/proofs/macos-webkit
+          printf 'PLAYWRIGHT_BROWSERS_PATH=%s/studio-webkit-browsers\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           {
             sw_vers
             uname -a
