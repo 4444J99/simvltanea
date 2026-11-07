@@ -1,7 +1,7 @@
 """Run the lab's Node unit tests and guard its generated configuration reference.
 
 ``tests/unit/*.test.mjs`` are plain ``node --test`` files with no dependencies (engine, layout,
-framing, speech, params, presets). The configuration reference in ``docs/authoring/LAB.md`` is
+framing, speech, params, player, presets). The configuration reference in ``docs/authoring/LAB.md`` is
 generated from ``app/params.js`` by ``scripts/gen_config_reference.mjs``; these tests fail when the
 committed table is stale and prove that regenerating it reproduces the committed bytes.
 
@@ -39,7 +39,7 @@ class LabUnitTests(unittest.TestCase):
     def test_unit_test_files_are_present(self):
         names = {path.name for path in UNIT_TESTS}
         self.assertEqual(names, {f"{name}.test.mjs" for name in
-                                 ("engine", "framing", "layout", "params", "presets", "speech")})
+                                 ("engine", "framing", "layout", "params", "player", "presets", "speech")})
 
     def test_node_unit_suite_passes(self):
         # Explicit files rather than a folder argument: older Node releases treat arguments as globs.
