@@ -338,6 +338,17 @@ function applySlice(node) {
 
   const cancelled = () => new DOMException('Selection superseded', 'AbortError');
 
+  // Conservative interaction profile, not a claim about hardware decoder
+  // capacity: touch laptops and tablets share the mobile four-foreground cap.
+  // any-pointer also catches a coarse touchscreen paired with a fine mouse.
+  function foregroundLimit(environment = root) {
+    const navigator = environment.navigator || {};
+    const coarse = environment.matchMedia?.('(any-pointer: coarse)').matches ||
+      environment.matchMedia?.('(pointer: coarse)').matches;
+    const mobile = navigator.userAgentData?.mobile || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+    return Number(navigator.maxTouchPoints) > 0 || coarse || mobile ? 4 : 12;
+  }
+
   // The permit spans priming AND the entire fade. Admission probes use this
   // same queue: background metadata loading cannot add a second standby.
   class PreparationGate {
@@ -372,6 +383,7 @@ function applySlice(node) {
   class Session {
     constructor(stage, options = {}) {
       this.stage = stage; this.options = options;
+      Object.defineProperty(this, 'maxForeground', {value: foregroundLimit(root), enumerable: true});
       this.crossfadeSec = options.crossfadeSec ?? 1.2;
       this.primeTimeoutMs = options.primeTimeoutMs ?? 10000;
       this.nodes = new Map(); this.slots = new Map(); this.sources = new Map();
@@ -461,13 +473,18 @@ function applySlice(node) {
     }
     reconcile({plan, items, playing = this.playingIntent, atLoopBoundary = false}) {
       if (this.disposed) return Promise.resolve(false);
-      if (!plan || !Array.isArray(plan.tracks) || !plan.tracks.length || plan.tracks.length > 12 ||
+      if (!plan || !Array.isArray(plan.tracks) || !plan.tracks.length || plan.tracks.length > this.maxForeground ||
           !Array.isArray(items) || items.length !== plan.tracks.length ||
           items.some(item => !(item.file instanceof Blob) || !item.sha256)) {
-        return Promise.reject(new Error('Live playback requires 1–12 admitted media items and matching tracks'));
+        return Promise.reject(new Error(`Live playback requires 1–${this.maxForeground} admitted media items and matching tracks`));
       }
       if (new Set(plan.tracks.map(track => track.id)).size !== items.length) {
         return Promise.reject(new Error('Duplicate live slot id'));
+      }
+      // Existing foregrounds remain alive until reconciliation finishes. Refuse
+      // incompatible slot identities before aborting any current transaction.
+      if (new Set([...this.nodes.keys(), ...plan.tracks.map(track => track.id)]).size > this.maxForeground) {
+        return Promise.reject(new Error('Reuse the existing panels within this device\'s live panel limit'));
       }
       this.revision++;
       this.controller?.abort();
@@ -894,7 +911,7 @@ function applySlice(node) {
       this.master?.dispose?.(); this.audio.context?.close().catch(() => {});
     }
   }
-  const api = {Session, MasterSimClock};
+  const api = {Session, MasterSimClock, foregroundLimit};
   root.SimvltaneaLive = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis === 'object' ? globalThis : this);

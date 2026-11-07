@@ -16,6 +16,20 @@ LIVE = HERE / 'browser.live.js'
 
 
 class MasterSimClockTests(unittest.TestCase):
+    def test_foreground_budget_treats_touch_and_coarse_devices_conservatively(self):
+        script = r'''
+const api = require(process.argv[1]);
+const environments = [
+  {navigator:{maxTouchPoints:1}},
+  {navigator:{maxTouchPoints:0},matchMedia:q=>({matches:q==='(any-pointer: coarse)'})},
+  {navigator:{maxTouchPoints:0,userAgent:'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)'}},
+  {navigator:{maxTouchPoints:0,userAgent:'Mozilla/5.0 (X11; Linux x86_64)'},matchMedia:()=>({matches:false})}
+];
+process.stdout.write(JSON.stringify(api.foregroundLimit ? environments.map(api.foregroundLimit) : []));
+'''
+        result = subprocess.run(['node', '-e', script, str(LIVE)], check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(result.stdout), [4, 4, 4, 12])
+
     def test_clock_freezes_pause_and_ignores_background_catchup(self):
         self.assertTrue(LIVE.exists(), 'persistent Studio runtime is not implemented')
         script = r'''
@@ -47,9 +61,9 @@ class PersistentSessionTests(unittest.TestCase):
         cls.browser.close()
         cls.pw.stop()
 
-    def open(self):
+    def open(self, has_touch=False):
         self.assertTrue(LIVE.exists(), 'persistent Studio runtime is not implemented')
-        context = self.browser.new_context(viewport={'width': 800, 'height': 500})
+        context = self.browser.new_context(viewport={'width': 800, 'height': 500}, has_touch=has_touch)
         self.addCleanup(context.close)
         page = context.new_page()
         page.set_content('<style>#stage{position:relative;width:800px;height:500px}.loop{position:absolute;overflow:hidden}</style><main id="stage"></main>')
@@ -89,6 +103,29 @@ class PersistentSessionTests(unittest.TestCase):
         self.assertTrue(page.evaluate("live.nodes.get('loop-2').media===sibling"))
         self.assertEqual(page.evaluate('calls'), [])
         self.assertEqual(page.evaluate('live.audio.context.state'), 'running')
+
+    def test_touch_session_refuses_overbudget_reconcile_before_mutating_residents(self):
+        page = self.open(has_touch=True)
+        page.evaluate('setClips([0,1,2,3])')
+        page.evaluate('window.previous=[...live.nodes.values()].map(node=>node.media)')
+        result = page.evaluate('''async () => {
+          try {await setClips(Array.from({length:12},(_,i)=>i%4));return 'accepted';}
+          catch(error) {return 'rejected';}
+        }''')
+        self.assertEqual(result, 'rejected')
+        self.assertTrue(page.evaluate('[...live.nodes.values()].every((node,i)=>node.media===previous[i] && !node.media.paused)'))
+        self.assertEqual(page.evaluate('live.nodes.size'), 4)
+        # Different slot IDs must not temporarily retain four old and four new foregrounds.
+        result = page.evaluate('''async () => {
+          const plan=planFor([0,1,2,3]);
+          plan.tracks.forEach((track,i)=>track.id=`new-${i}`);
+          for(const layout of Object.values(plan.layout_keyframes[0].layouts))
+            layout.cells.forEach((cell,i)=>cell.loop=`new-${i}`);
+          try {await live.reconcile({plan,items,playing:true});return 'accepted';}
+          catch(error) {return 'rejected';}
+        }''')
+        self.assertEqual(result, 'rejected')
+        self.assertTrue(page.evaluate('[...live.nodes.values()].every((node,i)=>node.media===previous[i])'))
 
     def test_bad_replacement_keeps_outgoing_moving_and_releases_budget(self):
         page = self.open()

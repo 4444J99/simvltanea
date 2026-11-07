@@ -50,6 +50,20 @@ SITE = ROOT / 'site'
 SUBPATH = 'simvltanea/studio'
 FPS = 24
 MIB = 1024 * 1024
+MEDIA_BUDGET_PROBE = r'''(() => {
+  const videos=new Set(), create=Document.prototype.createElement;
+  window.mediaBudget={populated:0,playing:0};
+  const sample=()=>{const loaded=[...videos].filter(video=>video.getAttribute('src'));
+    mediaBudget.populated=Math.max(mediaBudget.populated,loaded.length);
+    mediaBudget.playing=Math.max(mediaBudget.playing,loaded.filter(video=>!video.paused).length);};
+  Document.prototype.createElement=function(...args){const node=create.apply(this,args);
+    if(node instanceof HTMLVideoElement) videos.add(node);return node;};
+  const src=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'src');
+  Object.defineProperty(HTMLMediaElement.prototype,'src',{...src,set(value){src.set.call(this,value);sample();}});
+  for(const method of ['play','load']){const native=HTMLMediaElement.prototype[method];
+    HTMLMediaElement.prototype[method]=function(...args){const result=native.apply(this,args);sample();return result;};}
+  const tick=()=>{sample();requestAnimationFrame(tick)};requestAnimationFrame(tick);
+})();'''
 REPOSITORY = HERE.parents[2]
 # Twelve distinct H.264 MP4 loops with AAC audio and pairwise different periods.
 LOOPS = [(f'loop-{index}.mp4', seconds, hue) for index, (seconds, hue) in
@@ -1123,8 +1137,8 @@ class StudioLibraryTests(unittest.TestCase):
     unlock = StudioBrowserTests.unlock
     tap = StudioBrowserTests.tap
 
-    def open(self, site='good', query='', width=1280, height=720, init_script=None):
-        context = self.browser.new_context(viewport={'width': width, 'height': height})
+    def open(self, site='good', query='', width=1280, height=720, init_script=None, has_touch=False):
+        context = self.browser.new_context(viewport={'width': width, 'height': height}, has_touch=has_touch)
         self.addCleanup(context.close)
         page = context.new_page()
         page.requests, page.errors, page.logs, page.compiler_workers = [], [], [], []
@@ -1173,6 +1187,55 @@ class StudioLibraryTests(unittest.TestCase):
         self.showing(page, self.ids[:12])
         self.assertTrue(page.compiler_workers, 'compilation still blocks the UI thread')
         self.assertTrue(all(worker.url == f'{self.origin}/good/compiler.js' for worker in page.compiler_workers))
+
+    def test_touch_mix_controls_and_shuffle_never_exceed_four_foregrounds_plus_standby(self):
+        page = self.open(query='?seed=99&mix=s0.1.2.3.4.5.6.7.8.9.10.11&evolve=0',
+                         has_touch=True, init_script=MEDIA_BUDGET_PROBE)
+        self.assertEqual(self.snapshot(page)['panels'], 4)
+        self.showing(page, self.ids[:4])
+        self.assertEqual(self.snapshot(page)['counts'], [1, 2, 3, 4])
+        for _ in range(8):
+            page.keyboard.press('ArrowUp')
+        self.assertEqual(self.snapshot(page)['panels'], 4)
+        self.assertTrue(page.locator('#more').is_disabled())
+        for _ in range(3):
+            before = self.snapshot(page)['seed']
+            self.tap(page, '#shuffle')
+            page.wait_for_function('seed=>SimvltaneaStudio.snapshot().seed!==seed', arg=before)
+            self.showing(page, self.snapshot(page)['selection'])
+            self.assertEqual(self.snapshot(page)['panels'], 4)
+        budget = page.evaluate('mediaBudget')
+        self.assertLessEqual(budget['populated'], 5, budget)
+        self.assertLessEqual(budget['playing'], 5, budget)
+        self.assertGreaterEqual(budget['populated'], 5, 'standby transition was not exercised')
+        seeded = self.open(query='?seed=99&evolve=0', has_touch=True)
+        self.assertLessEqual(self.snapshot(seeded)['panels'], 4)
+
+    def test_touch_custom_layout_and_local_pool_keep_active_population_bounded(self):
+        page = self.open(query='?seed=99&mix=s0.1.2.3&evolve=0', has_touch=True, init_script=MEDIA_BUDGET_PROBE)
+        self.playing(page, 4)
+        preset = page.evaluate("SimvltaneaStudio.stripsPreset({z1:'2',jitter:'0',reverse:false})")
+        preset['counts'] = {'min': 5, 'max': 12}
+        page.set_input_files('#files', {'name': 'too-many.json', 'mimeType': 'application/json',
+                                       'buffer': json.dumps(preset).encode()})
+        page.wait_for_function("() => SimvltaneaStudio.snapshot().toast.includes('too-many.json')")
+        self.assertIsNone(self.snapshot(page)['layoutFile'])
+        self.assertNotIn('file', [family['name'] for family in self.snapshot(page)['families']])
+        preset['counts'] = {'min': 1, 'max': 12}
+        page.set_input_files('#files', {'name': 'bounded.json', 'mimeType': 'application/json',
+                                       'buffer': json.dumps(preset).encode()})
+        page.wait_for_function("() => SimvltaneaStudio.snapshot().family==='file'")
+        self.assertEqual(self.snapshot(page)['counts'], [1, 2, 3, 4])
+        fixtures = prepare_fixtures()
+        page.set_input_files('#files', [str(fixtures[name]) for name, _, _ in LOOPS])
+        page.wait_for_function("() => SimvltaneaStudio.snapshot().source==='own' && !SimvltaneaStudio.snapshot().busy", timeout=60000)
+        self.assertEqual(len(self.snapshot(page)['loops']), 12)
+        self.assertEqual(self.snapshot(page)['panels'], 4)
+        self.playing(page, 4)
+        self.assertTrue(page.locator('#more').is_disabled())
+        budget = page.evaluate('mediaBudget')
+        self.assertLessEqual(budget['populated'], 5, budget)
+        self.assertLessEqual(budget['playing'], 5, budget)
 
     def test_library_plays_without_worker_support(self):
         page = self.open(query='?seed=7', init_script='window.Worker = undefined;')

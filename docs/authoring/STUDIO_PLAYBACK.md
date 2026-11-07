@@ -4,11 +4,13 @@ Studio uses a persistent native-video session. The authored composition runtime
 and exporter retain their existing frame-based timeline behavior. Both paths use
 the same layout conventions, including custom layout files and source crops.
 
-An ordinary library visit begins with up to four panels. Explicit seed URLs and
-manual panel controls retain the supported range of one to twelve. Each slot has
-two persistent video elements, but only one global preparation permit covers
-metadata probes, standby playback and crossfades. The permit bounds application
-activity; it is not a measurement of hardware decoder allocation.
+An ordinary library visit begins with up to four panels. Mobile and touch devices
+admit at most four foreground panels, including manual, seed, mix, upload and
+layout requests. Desktop manual controls retain the range of one to twelve.
+Each slot has two persistent video elements, but only one global preparation
+permit covers metadata probes, standby playback and crossfades. On mobile this
+bounds application activity to four foreground videos plus one preparing or
+fading successor; it is not a measurement of hardware decoder allocation.
 
 Tapping a panel replaces its clip. Untouched residents keep their elements,
 playback positions and audio bindings. Shuffle queues replacements and compresses
@@ -63,6 +65,8 @@ On the owner's iPhone, record the model and iOS version, then check initial load
 several minutes of evolving playback, individual taps, repeated shuffles, forward
 and boomerang modes, sound/mute/volume, pause, rotation and background/resume.
 Confirm that untouched panels keep moving and that no transition clears the stage.
+Confirm that panel controls stop at four on the phone, including after uploads
+or opening a shared composition that requests more panels.
 Linux WebKit and an emulated phone viewport are separate automated evidence.
 
 Tracking: [issue #89](https://github.com/4444J99/tool-video-loop-compositor/issues/89)

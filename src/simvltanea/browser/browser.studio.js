@@ -740,6 +740,17 @@
   // How many loops a roll may use: the library's clips minus any that failed to load.
   const available = () => (usingLibrary() ? library.items.length - library.broken.size : pool().length);
   const familyCounts = () => Object.fromEntries(Object.entries(layout.families).map(([name, family]) => [name, family.counts]));
+  const allowedCounts = counts => counts.filter(count => count <= live.maxForeground);
+  function boundedSelection(value) {
+    if (!value) return value;
+    const fits = family => (layout.families[family]?.counts || []).filter(count =>
+      count <= value.loops.length && count <= available());
+    const family = fits(value.family).length ? value.family : 'strips';
+    const count = nearestCount(fits(family), Math.min(value.loops.length, live.maxForeground));
+    if (count === null) return null;
+    return family === value.family && count === value.loops.length ? value :
+      {...value, family, panels: count, loops: value.loops.slice(0, count)};
+  }
 
   // ---- Toast, idle chrome, about ------------------------------------------------
 
@@ -1079,6 +1090,8 @@
   /* Compile layout/export metadata, then reconcile residents in place. The live
    * session owns native loops; editing metadata never restarts its global clock. */
   async function launch({atLoopBoundary = false} = {}) {
+    const bounded = boundedSelection(selection);
+    if (bounded !== selection) { selection = bounded; renderControls(); }
     const token = ++launches, r = runtime(), items = selectedItems();
     pendingSelection = true;
     if (pendingCompilation) pendingCompilation.cancel();
@@ -1179,7 +1192,8 @@
     if (!offered.length) return;
     const wanted = Math.max(offered[0], Math.min(offered[offered.length - 1], target));
     if (wanted !== target) {
-      if (target > available() && counts.includes(target)) toast(own.length ? 'Add more videos for more panels.' : 'That is every loop.');
+      if (target > live.maxForeground && live.maxForeground === 4) toast('Up to four panels on this device.');
+      else if (target > available() && counts.includes(target)) toast(own.length ? 'Add more videos for more panels.' : 'That is every loop.');
       else toast(`${familyLabel(selection.family, layout.own && layout.own.name)}: ${offered[0]} to ${offered[offered.length - 1]} panels.`);
       return;
     }
@@ -1194,7 +1208,7 @@
   }
 
   function setFamily(family) {
-    if (!selection || family === selection.family || !layout.families[family]) return;
+    if (!selection || !layout.families[family]) return;
     const counts = layout.families[family].counts.filter(count => count <= available());
     if (!counts.length) { toast(`${familyLabel(family)} needs ${layout.families[family].counts[0]} loops.`); return; }
     const count = nearestCount(counts, selection.loops.length);
@@ -1436,8 +1450,10 @@
     try {
       const C = compiler(), data = C.loadLayoutBytes(await file.arrayBuffer(), name);
       const info = C.describeLayoutFile(data, name);
+      const counts = allowedCounts(info.counts);
+      if (!counts.length) throw new Error(`This layout needs more than ${live.maxForeground} panels. Choose a smaller layout on this device.`);
       layout.own = {name, data, info};
-      layout.families[OWN_FAMILY] = {counts: info.counts, label: familyLabel(OWN_FAMILY, name)};
+      layout.families[OWN_FAMILY] = {counts, sourceCounts: info.counts, label: familyLabel(OWN_FAMILY, name)};
       renderControls();
       setFamily(OWN_FAMILY);
       toast(`Layout ${name} in use.`);
@@ -1472,9 +1488,9 @@
       if (refusals.length) toast(refusals[0] + (refusals.length > 1 ? ` (+${refusals.length - 1} more not added)` : ''));
       else if (added) toast(`${plural(added, 'loop')} added. Nothing was uploaded.`);
       if (added) {
-        // The visitor's loops replace the built-ins: all of them on screen, up to twelve.
+        // Retain the entire local pool; the live device limit bounds its residents.
         const family = selection && layout.families[selection.family] &&
-          layout.families[selection.family].counts.includes(Math.min(own.length, 12)) ? selection.family : 'strips';
+          layout.families[selection.family].counts.includes(Math.min(own.length, live.maxForeground)) ? selection.family : 'strips';
         const count = nearestCount(layout.families[family].counts.filter(value => value <= own.length), own.length);
         if (count !== null) {
           selection = {seed: freshSeed(), family, loops: own.map((_, index) => index).slice(-count),
@@ -1794,7 +1810,8 @@
     ui.panels.textContent = String(count || '');
     ui.panels.setAttribute('aria-label', `${plural(count, 'panel')}`);
     ui.fewer.disabled = !counts.some(value => value < count);
-    ui.more.disabled = !counts.some(value => value > count) && !(own.length && count < 12);
+    ui.more.disabled = !counts.some(value => value > count) && !(own.length && selection &&
+      layout.families[selection.family].counts.some(value => value > count));
     studio.dataset.family = selection ? selection.family : '';
     studio.dataset.panels = String(count);
     studio.dataset.busy = busy > 0 ? 'true' : 'false';
@@ -1927,7 +1944,8 @@
     const described = compiler().layoutFamilies(bundle);
     layout.bundle = bundle;
     for (const [name, family] of Object.entries(described.families)) {
-      layout.families[name] = {counts: family.counts, label: familyLabel(name)};
+      const counts = allowedCounts(family.counts);
+      if (counts.length) layout.families[name] = {counts, sourceCounts: family.counts, label: familyLabel(name)};
     }
   }).catch(error => {
     toast(oneLine(`The layouts could not be loaded (${error.message || error}).`));
@@ -1945,8 +1963,7 @@
     if (clips && Object.values(familyCounts()).some(counts => counts.some(count => count <= clips.length))) useLibrary(clips);
     let seed = parseSeed(search) ?? freshSeed();
     selection = rollFor(seed);
-    // Find a reproducible modest initial roll; explicit seed/mix URLs retain
-    // their full manual range. The chosen seed alone reproduces this selection.
+    // Find a reproducible modest initial roll within this device's live limit.
     if (usingLibrary() && parseSeed(search) === null && !new URLSearchParams(search).has('mix')) {
       const wanted = Math.min(4, available());
       for (let attempt = 0; attempt < 256 && selection &&
@@ -1956,8 +1973,9 @@
     }
     ecosystem = new root.SimvltaneaEcosystem.Engine({seed});
     succession = createSuccession(seed);
-    const mix = parseMix(new URLSearchParams(search).get('mix'), familyCounts(), pool().length);
-    if (selection && mix) selection = {...selection, ...mix};
+    const sourceCounts = Object.fromEntries(Object.entries(layout.families).map(([name, family]) => [name, family.sourceCounts]));
+    const mix = parseMix(new URLSearchParams(search).get('mix'), sourceCounts, pool().length);
+    if (selection && mix) selection = boundedSelection({...selection, ...mix});
     writeUrl(mix ? formatMix(selection.family, selection.loops) : null);
     renderControls();
     renderPreview();
