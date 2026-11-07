@@ -4,7 +4,7 @@
 
 Branch equality, open PRs/issues, workflow outcomes and releases are live data,
 not enduring statements in this file. The **Current State Projection** workflow
-runs after default-branch CI or package verification completes. Its job summary
+runs after default-branch CI, package verification, or macOS WebKit playback completes. Its job summary
 and timestamped `current-state-<run-id>` artifact contain the observed snapshot.
 A newer incomplete or failing observation must not be replaced with an older
 successful one to claim current health.
@@ -37,6 +37,12 @@ historical decoded regression, editions and layouts.
 and installs a wheel into a fresh external consumer before synthetic preview
 compilation and portrait/landscape rendering. Test totals belong to exact-head
 receipts; overlapping test runners must not be added as independent coverage.
+[macOS WebKit playback](../../.github/workflows/macos-webkit.yml) stages the pinned
+public library and checks sustained playback plus native audio on Apple's desktop
+media backend. The selected post-merge scope requires successful runs of all
+three workflows for the observed SHA. Missing Apple evidence cannot be replaced
+by Linux browser results. See [the WebKit proof contract](../authoring/WEBKIT_VERIFICATION.md);
+this does not certify physical iPhone Safari.
 
 ```bash
 python3 -m tools.verification.sync_layout

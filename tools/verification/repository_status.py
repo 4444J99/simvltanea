@@ -21,7 +21,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import uuid
 
 LANES = tuple(f"lane/{name}" for name in ("verify", "heal", "expand", "evolve"))
-DEFAULT_WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/package.yml")
+DEFAULT_WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/package.yml", ".github/workflows/macos-webkit.yml")
 
 
 class ReadError(RuntimeError):

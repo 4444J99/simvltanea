@@ -2,7 +2,7 @@ name: Current State Projection
 
 on:
   workflow_run:
-    workflows: [CI Verification, Package Verification]
+    workflows: [CI Verification, Package Verification, macOS WebKit playback]
     types: [completed]
   workflow_dispatch:
 
