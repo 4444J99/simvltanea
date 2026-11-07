@@ -39,6 +39,7 @@ pixels (44 on wider screens).
 | Speaker | M | Three states: tap for sound, sound on, muted by you |
 | Volume | none | Master level; appears when the speaker is hovered or focused |
 | Add yours | none | Opens the file picker for your own videos |
+| ƒx Filters | none | Links each clip's audible and visible rise and fall; toggles the effect without restarting playback |
 | Full screen | F | Enters or leaves full screen where the browser allows it |
 | ? | Esc closes | Three short lines: what this is, privacy, the keys |
 | A panel | none | Swaps that panel's loop for one not on screen |
@@ -54,6 +55,10 @@ Messages appear as one short toast that dismisses itself, for example
 | `&mix=s3.7.1` | Written after hand edits (panel taps, count, family): the family's initial and the built-in loops by number. Together with the seed it reproduces the edited composition |
 | `?seconds=<n>` | Length of one pass of the piece, in seconds (default 120). At the end it starts again |
 | `?gen=1` | Plays the built-in loops even when a library is deployed, without requesting it |
+| `&fx=0` / `&fx=1` | Bypasses / enables clip presence filters; reduced motion keeps them disabled |
+
+See [continuous Studio playback](STUDIO_PLAYBACK.md#clip-presence-filters) for
+the current resident lifecycle, filter envelope, and device verification boundaries.
 
 ## Sound
 
@@ -215,10 +220,15 @@ gesture it presents that same plan as plan v2 `spatial_loops`, with
 
 ## Run it locally
 
-`stage_studio(output)` writes five flat files with relative URLs:
-`index.html`, `runtime.js`, `compiler.js`, `studio.js`, and `layouts.json`. It
+`stage_studio(output)` writes ten flat files with relative URLs:
+`index.html`, `runtime.js`, `compiler.js`, `studio.js`, `layouts.json`,
+`lab.html`, `lab_model.js`, `lab_engine.js`, `lab_ui.js`, and `lab_audio.js`. It
 refuses a directory that holds anything else, and staging twice yields
 identical bytes.
+
+The **Effects Lab** link opens a separate live instrument for overlapping
+visual layers, swept comb and pass filters, and independently evolving sound
+and picture clocks. See [Effects Lab](EFFECTS_LAB.md) for its controls and limits.
 
 ```bash
 PYTHONPATH=src python3 -m simvltanea.browser.browser_studio --output var/site/studio

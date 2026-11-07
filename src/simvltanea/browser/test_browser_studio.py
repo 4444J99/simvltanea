@@ -237,7 +237,8 @@ class StageStudioTests(unittest.TestCase):
         output = self.temp / 'nested' / 'studio'
         stage_studio(output)
         self.assertEqual(sorted(path.name for path in output.iterdir()), sorted(STUDIO_FILES))
-        self.assertEqual(set(STUDIO_FILES), {'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json'})
+        self.assertEqual(set(STUDIO_FILES), {'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json',
+                                           'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js'})
         self.assertTrue(all(path.is_file() and not path.is_symlink() for path in output.iterdir()))
         runtime_bytes = (output / 'runtime.js').read_bytes()
         self.assertIn(b'SimvltaneaLive', runtime_bytes)
@@ -717,6 +718,9 @@ class StudioBrowserTests(unittest.TestCase):
           };
         })();''')
         self.assertEqual(self.snapshot(page)['record'], 'canvas')
+        self.assertTrue(page.is_disabled('#effects'))
+        self.assertEqual(page.get_attribute('#effects', 'aria-pressed'), 'false')
+        self.assertFalse(self.snapshot(page)['filters'])
         self.tap(page, '#speaker')
         page.wait_for_function('''() => {
           if (!window.fallbackMeter) return false;
@@ -905,6 +909,11 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertTrue(self.snapshot(page)['held'])
         self.assertTrue(page.is_visible('#start'))
         self.assertFalse(page.evaluate('compositionRuntime.running'))
+        self.assertTrue(page.is_disabled('#effects'))
+        self.assertEqual(page.get_attribute('#effects', 'aria-pressed'), 'false')
+        self.assertFalse(self.snapshot(page)['filters'])
+        self.assertTrue(page.evaluate('''() => [...compositionRuntime.nodes.values()]
+          .every(n => n.media.style.filter === '')'''))
         page.click('#start')
         page.wait_for_function('() => compositionRuntime.running && compositionRuntime.plan.plan_version === 2',
                                timeout=30000)
@@ -1096,6 +1105,48 @@ class LibrarySelectionTests(unittest.TestCase):
 
 
 class StudioLibraryTests(unittest.TestCase):
+    def test_filters_share_lifecycle_presence_and_toggle_without_restarting_clips(self):
+        page = self.open(query='?seed=99&mix=s0')
+        self.showing(page, self.snapshot(page)['selection'])
+        self.assertEqual(page.locator('#effects').count(), 1, 'Filters control is missing')
+        page.evaluate('window.originalMedia=compositionRuntime.nodes.get("loop-1").media')
+        page.wait_for_function('''() => {
+          const node=compositionRuntime.nodes.get('loop-1');
+          return node.active.presence>.5 && node.media.style.filter.includes('brightness');
+        }''')
+        self.unlock(page)
+        page.wait_for_function('compositionRuntime.audio.enabled')
+        page.wait_for_function('''() => {
+          const state=SimvltaneaStudio.snapshot().ecosystem.residents[0];
+          return state.age>4 && state.presence<.9;
+        }''')
+        state = page.evaluate('''() => {const n=compositionRuntime.nodes.get('loop-1');return {
+          presence:n.active.presence,gain:n.audio.target,mixGain:n.targetGain,
+          cutoff:n.audio.filter.frequency.value,type:n.audio.filter.type};}''')
+        self.assertAlmostEqual(state['gain'], state['mixGain'] * state['presence'], delta=.0001)
+        self.assertLess(state['cutoff'], 16000)
+        self.assertEqual(state['type'], 'lowpass')
+        self.tap(page, '#effects')
+        self.assertEqual(page.get_attribute('#effects', 'aria-pressed'), 'false')
+        self.assertFalse(self.snapshot(page)['filters'])
+        self.assertIn('fx=0', page.evaluate('location.search'))
+        self.assertTrue(page.evaluate('''() => {const n=compositionRuntime.nodes.get('loop-1');
+          return n.media===originalMedia && !n.media.paused && n.media.style.filter==='' && n.audio.filter.type==='allpass';}'''))
+        self.tap(page, '#effects')
+        self.assertTrue(self.snapshot(page)['filters'])
+        self.assertIn('fx=1', page.evaluate('location.search'))
+        page.wait_for_function('compositionRuntime.nodes.get("loop-1").media.style.filter!==""')
+
+    def test_filter_bypass_url_is_retained_through_shuffle(self):
+        page = self.open(query='?seed=99&mix=s0.1&fx=0&evolve=0')
+        self.showing(page, self.snapshot(page)['selection'])
+        self.assertFalse(self.snapshot(page).get('filters', True))
+        self.tap(page, '#shuffle')
+        self.showing(page, self.snapshot(page)['selection'])
+        self.assertIn('fx=0', page.evaluate('location.search'))
+        self.assertTrue(page.evaluate('''() => [...compositionRuntime.nodes.values()]
+          .every(n=>n.media.style.filter==='')'''))
+
     """Library mode: a staged studio with a synthetic public library beside it, served on one origin."""
 
     @classmethod

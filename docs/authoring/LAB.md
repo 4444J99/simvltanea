@@ -1,5 +1,10 @@
 # The lab
 
+For overlapping picture layers, swept comb filters, and independently changing
+audio/video clocks, open the [Effects Lab](EFFECTS_LAB.md) from Studio. The
+dataset-based instrument described here focuses on strips, framing, and source
+selection.
+
 The lab is a playable, modular-synth-style web instrument for simultaneous loops.
 N video loops play at once as edge-to-edge strips, heavily cropped; the more strips,
 the less zoomed each one is. Every parameter of the engine, layout, zoom, framing,
