@@ -87,6 +87,7 @@ console.log(JSON.stringify({keys:Object.keys(sandbox.SimvltaneaPresence).sort(),
   value:sandbox.SimvltaneaPresence.presenceEnvelope(5.6,10),
   targets:sandbox.SimvltaneaPresence.filterTargets(.5)}));
 """)
-        self.assertEqual(result['keys'], ['ATTACK_SECONDS', 'filterTargets', 'presenceEnvelope'])
+        self.assertEqual(result['keys'], ['ATTACK_SECONDS', 'DEFAULT_SETTINGS', 'entranceEnvelope',
+                                         'filterTargets', 'normalizeSettings', 'presenceEnvelope'])
         self.assertAlmostEqual(result['value'], .56)
         self.assertAlmostEqual(result['targets']['gain'], .5)

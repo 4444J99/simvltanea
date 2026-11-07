@@ -659,12 +659,35 @@
       eligible: (id, time) => !departed.has(id) || time - departed.get(id) >= 10};
   }
 
+  const EFFECT_PARAMS = Object.freeze({attackSeconds: 'fx_attack', curve: 'fx_curve', tail: 'fx_tail',
+    gainDepth: 'fx_gain', lowpassDepth: 'fx_lowpass', brightnessDepth: 'fx_brightness',
+    saturationDepth: 'fx_saturation', blurPx: 'fx_blur'});
+  const presenceApi = () => root.SimvltaneaPresence ||
+    (typeof module === 'object' && module.exports ? require('./browser.presence.js') : null);
+  function effectSettingsFromSearch(search) {
+    const params = new URLSearchParams(search), values = {};
+    for (const [key, name] of Object.entries(EFFECT_PARAMS)) {
+      const value = params.get(name);
+      if (value !== null && value.trim() !== '') values[key] = key === 'curve' ? value : Number(value);
+    }
+    return presenceApi().normalizeSettings(values);
+  }
+  function effectSettingsSearch(search, settings) {
+    const params = new URLSearchParams(search), P = presenceApi(), values = P.normalizeSettings(settings);
+    for (const [key, name] of Object.entries(EFFECT_PARAMS)) {
+      if (values[key] === P.DEFAULT_SETTINGS[key]) params.delete(name);
+      else params.set(name, String(values[key]));
+    }
+    return params.toString();
+  }
+
   const api = {
     FPS, DEFAULT_SECONDS, DEFAULT_PANELS, MAX_TOTAL_BYTES, MIN_FRAMES, MAX_SPANS_PER_TRACK, OWN_FAMILY,
     quantizeDuration, admitSize, countVerdict, spanVerdict, nearestCount, familyLabel, oneLine, sniffContainer,
     playbackQueries, blobType, mediaSuffix, compositionFrames, formatMiB, seededRandom, parseSeed, createSuccession,
     rollComposition, formatMix, parseMix, stripsPreset, loopGain, audioStream,
     libraryClips, chooseClips, rollLibrary, LIBRARY_CACHE,
+    effectSettingsFromSearch, effectSettingsSearch,
     BUILTINS: BUILTINS.map(item => ({name: item.name, frames: item.frames})),
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -685,6 +708,7 @@
   const ui = {
     frame: $('#frame'), preview: $('#preview'), ghost: $('#ghost'), bar: $('#bar'), play: $('#play'), start: $('#start'),
     corner: $('#corner'), activity: $('#activity'), effects: $('#effects'), loopMode: $('#loop-mode'),
+    filterTune: $('#filter-tune'), filterDialog: $('#filter-settings'),
     shuffle: $('#shuffle'), fewer: $('#fewer'), more: $('#more'), panels: $('#panel-count'),
     families: $('#families'), speaker: $('#speaker'), volume: $('#volume'), add: $('#add'), files: $('#files'),
     fullscreen: $('#fullscreen'), help: $('#help'), about: $('#about'), toast: $('#toast'),
@@ -696,6 +720,7 @@
   let manualPopulation = new URLSearchParams(search).has('mix');
   const reduced = Boolean(root.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   let filtersEnabled = !reduced && new URLSearchParams(search).get('fx') !== '0';
+  let effectSettings = effectSettingsFromSearch(search);
   const FADE_MS = reduced ? 0 : 220, IDLE_MS = 3000, TOAST_MS = 4200;
   const compiler = () => root.SimvltaneaCompiler;
   const runtime = () => root.compositionRuntime;
@@ -723,6 +748,7 @@
   let selection = null, session = null, waiting = [], launches = 0, hold = reduced, paused = false;
   let lastRefusals = [], busy = 0, recordMode = 'pending', previewClock = null;
   const liveVoices = new Map();
+  let liveVoiceClock = null;
   let ecosystem = new root.SimvltaneaEcosystem.Engine({seed: parseSeed(search) ?? 1});
   let succession = createSuccession(parseSeed(search) ?? 1), pendingSelection = false;
   const residentModels = new WeakMap(), residents = [];
@@ -730,8 +756,10 @@
   let previousLogicalIds = new Set(), currentLogicalIds = new Set();
   const live = root.compositionRuntime = new root.SimvltaneaLive.Session(stage, {
     crossfadeSec: reduced ? 0 : 1.2,
-    effects: filtersEnabled, reducedMotion: reduced,
+    effects: filtersEnabled, reducedMotion: reduced, effectSettings,
     onAudioNode: attachLiveVoice,
+    onDeckAudio: attachDeckVoice,
+    onDeckUnload: detachLiveVoice,
     onError: () => toast('That loop could not start. The current picture keeps playing.'),
   });
 
@@ -772,7 +800,7 @@
     idleTimer = setTimeout(() => {
       const active = document.activeElement;
       const focused = active && active !== document.body && (ui.bar.contains(active) || ui.corner.contains(active));
-      if (!focused && ui.about.hidden && !hold) studio.classList.add('idle');
+      if (!focused && ui.about.hidden && !ui.filterDialog.open && !hold) studio.classList.add('idle');
     }, IDLE_MS);
   }
   for (const type of ['pointermove', 'pointerdown', 'keydown', 'focusin']) document.addEventListener(type, wake, true);
@@ -961,35 +989,56 @@
   }
   setInterval(() => {
     try {
-      if (session && session.clock) pumpVoices(session.clock);
+      if (session && !live.disposed) pumpVoices(liveVoiceClock || session.clock);
       if (previewClock && previewClock.audio) pumpVoices(previewClock.audio);
     } catch (_) { /* a closed context; the next launch rebuilds the voices */ }
   }, 120);
 
-  // Generated voices follow their resident deck; unrelated voices keep their buses.
+  // Native analysis remains attached to the resident source. Generated voices
+  // instead follow each persistent deck, including both sides of a handoff.
   function attachLiveVoice(node, context) {
-    const old = liveVoices.get(node.id);
-    if (old) { old.input.disconnect(); liveVoices.delete(node.id); }
     if (!node.audio.analyser) {
       node.audio.analyser = context.createAnalyser(); node.audio.analyser.fftSize = 256;
       node.audio.samples = new Float32Array(256);
       node.audio.source.connect(node.audio.analyser);
     }
-    const item = node.item;
-    if (builtins.includes(item)) {
-      const input = context.createGain(); input.connect(node.audio.filter || node.audio.pan);
-      liveVoices.set(node.id, {period: item.quantized.seconds, events: VOICES[item.name], input,
-        until: context.currentTime, offset: live.clock.simTime - node.media.currentTime});
+    attachDeckVoice(node.active, context);
+  }
+  function attachDeckVoice(deck, context) {
+    if (!deck || !deck.binding || deck.enteredAt === null || !context) return;
+    const item = deck.item, old = liveVoices.get(deck);
+    if (old && old.item === item && old.binding === deck.binding) {
+      refreshVoiceClock(); return;
     }
+    if (old) { old.input.disconnect(); liveVoices.delete(deck); }
+    if (builtins.includes(item)) {
+      const input = context.createGain(); input.connect(deck.binding.filter || deck.binding.pan);
+      liveVoices.set(deck, {item, binding: deck.binding, period: item.quantized.seconds,
+        events: VOICES[item.name], input, until: context.currentTime - 0.15,
+        offset: live.clock.simTime - deck.media.currentTime});
+    }
+    refreshVoiceClock();
+  }
+  function detachLiveVoice(deck) {
+    const voice = liveVoices.get(deck);
+    if (!voice) return;
+    liveVoices.delete(deck); voice.input.disconnect();
     refreshVoiceClock();
   }
   function refreshVoiceClock() {
     if (!session || !live.audio.context) return;
-    for (const [id, voice] of liveVoices) if (!live.nodes.has(id)) {
-      voice.input.disconnect(); liveVoices.delete(id);
+    const decks = new Set([...live.nodes.values()].flatMap(node => node.decks));
+    for (const [deck, voice] of liveVoices) if (!decks.has(deck) || deck.item !== voice.item) {
+      voice.input.disconnect(); liveVoices.delete(deck);
     }
-    session.clock = {context: live.audio.context, voices: [...liveVoices.values()], generation: -1,
-      running: () => live.running, origin: () => live.origin, epoch: () => live.generation};
+    // Adding a voice must not replay the lookahead window of its siblings. Only
+    // an actual live clock epoch change resets their scheduling horizons.
+    if (!liveVoiceClock || liveVoiceClock.context !== live.audio.context) {
+      liveVoiceClock = {context: live.audio.context, voices: [], generation: live.generation,
+        running: () => live.running, origin: () => live.origin, epoch: () => live.generation};
+    }
+    liveVoiceClock.voices = [...liveVoices.values()];
+    session.clock = liveVoiceClock;
   }
 
   // ---- The runtime hook ------------------------------------------------------
@@ -1730,7 +1779,7 @@
       !library.broken.has(item.index) && succession.eligible(item.clip.id, time));
     const out = ecosystem.step(time, dt, residents, {
       enabled: evolving && !hold && !reduced && usingLibrary(), manualCount: manualPopulation,
-      effects: filtersEnabled,
+      effects: filtersEnabled, effectSettings,
       canReplace: eligible && !ecologicalRequest && !pendingSelection,
       canRest: !ecologicalRequest,
     });
@@ -1771,6 +1820,7 @@
   function renderActivity() {
     ui.effects.setAttribute('aria-pressed', String(filtersEnabled && filtersAvailable()));
     ui.effects.disabled = !filtersAvailable();
+    ui.filterTune.disabled = !filtersAvailable();
     ui.effects.title = reduced ? 'Filters paused for reduced motion' : !filtersAvailable() ?
       'Filters unavailable for this preview' : filtersEnabled ? 'Filters on' : 'Filters off';
     ui.activity.setAttribute('aria-label', evolving ? 'Hold changes' : 'Let it evolve');
@@ -1790,6 +1840,39 @@
     const params = new URLSearchParams(root.location.search); params.set('fx', filtersEnabled ? '1' : '0');
     history.replaceState(null, '', `${root.location.pathname}?${params}`);
     renderActivity();
+  });
+  const filterControls = [
+    ['attackSeconds', 'fx-attack', 1, ' s'], ['tail', 'fx-tail', 100, '%'],
+    ['gainDepth', 'fx-gain', 100, '%'], ['lowpassDepth', 'fx-lowpass', 100, '%'],
+    ['brightnessDepth', 'fx-brightness', 100, '%'], ['saturationDepth', 'fx-saturation', 100, '%'],
+    ['blurPx', 'fx-blur', 1, ' px'],
+  ];
+  function renderFilterSettings() {
+    for (const [key, id, scale, unit] of filterControls) {
+      const value = Number((effectSettings[key] * scale).toFixed(2));
+      $(`#${id}`).value = String(value); $(`#${id}-value`).textContent = `${value}${unit}`;
+    }
+    $('#fx-curve').value = effectSettings.curve;
+  }
+  function applyFilterSettings(patch) {
+    effectSettings = live.setEffectSettings(patch);
+    const query = effectSettingsSearch(root.location.search, effectSettings);
+    history.replaceState(null, '', `${root.location.pathname}${query ? `?${query}` : ''}`);
+    renderFilterSettings();
+  }
+  for (const [key, id, scale] of filterControls) {
+    $(`#${id}`).addEventListener('input', event => applyFilterSettings({[key]: Number(event.target.value) / scale}));
+  }
+  $('#fx-curve').addEventListener('change', event => applyFilterSettings({curve: event.target.value}));
+  $('#fx-reset').addEventListener('click', () => applyFilterSettings(root.SimvltaneaPresence.DEFAULT_SETTINGS));
+  $('#fx-close').addEventListener('click', () => ui.filterDialog.close());
+  ui.filterTune.addEventListener('click', () => {
+    if (!filtersAvailable()) return;
+    setAbout(false); renderFilterSettings(); ui.filterDialog.showModal();
+    ui.filterTune.setAttribute('aria-expanded', 'true'); wake();
+  });
+  ui.filterDialog.addEventListener('close', () => {
+    ui.filterTune.setAttribute('aria-expanded', 'false'); ui.filterTune.focus(); wake();
   });
   ui.loopMode.addEventListener('click', () => {
     loopMode = loopMode === 'boomerang' ? 'forward' : 'boomerang';
@@ -1878,7 +1961,7 @@
   // Every first gesture turns the sound on; the page itself never needs one to play.
   const firstGesture = event => {
     if (sound.unlocked && (!live.audio.context || live.audio.context.state === 'running')) return;
-    if (event.target.closest && event.target.closest('#speaker, #about, #help')) return;
+    if (event.target.closest && event.target.closest('#speaker, #about, #help, #filter-settings, #filter-tune')) return;
     if (event.type === 'keydown' && (event.ctrlKey || event.metaKey || event.altKey || event.key === 'Tab' ||
       event.key === 'Shift' || event.key === 'Escape')) return;
     if (event.type === 'keydown' && (event.key === 'm' || event.key === 'M')) return;  // M itself turns sound on
@@ -1908,6 +1991,7 @@
 
   const INTERACTIVE = 'button,input,select,textarea,a[href],[role="radio"],[role="slider"]';
   document.addEventListener('keydown', event => {
+    if (ui.filterDialog.open) return;
     if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
     const inControl = event.target.closest && event.target.closest(INTERACTIVE);
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
@@ -2015,7 +2099,7 @@
         next: library.next, requested: library.requested} : null,
       builtinsReady: builtins.filter(item => item.sha256).length,
       selection: selectedItems().map(item => item.name), style: selection ? selection.style : null,
-      sound: soundState(), volume: sound.volume, evolving, filters: filtersEnabled && filtersAvailable(), loopMode,
+      sound: soundState(), volume: sound.volume, evolving, filters: filtersEnabled && filtersAvailable(), effectSettings, loopMode,
       ecosystem: ecosystem.snapshot(), refusals: lastRefusals.slice(), toast: ui.toast.textContent,
       toastShown: ui.toast.classList.contains('on'), phase: studio.dataset.phase || 'preview',
       layoutFile: layout.own ? {name: layout.own.name, kind: layout.own.info.kind, layout: layout.own.info.name} : null,

@@ -386,14 +386,17 @@ function applySlice(node) {
       Object.defineProperty(this, 'maxForeground', {value: foregroundLimit(root), enumerable: true});
       this.crossfadeSec = options.crossfadeSec ?? 1.2;
       this.effectsEnabled = Boolean(options.effects) && !options.reducedMotion;
+      this.effectSettings = root.SimvltaneaPresence?.normalizeSettings(options.effectSettings) ?? null;
       this.primeTimeoutMs = options.primeTimeoutMs ?? 10000;
+      this.progressTimeoutMs = options.progressTimeoutMs ?? 2000;
       this.nodes = new Map(); this.slots = new Map(); this.sources = new Map();
       this.plan = null; this.ready = false; this.running = false; this.finished = false;
       this.error = null; this.lastFailure = null; this.disposed = false;
       this.frame = 0; this.generation = 0; this.orientation = null; this.orientationOverride = null;
       this.starting = false; this.initializing = false; this.restarting = false;
       this.playingIntent = false; this.revision = 0; this.pending = null; this.draining = false;
-      this.controller = null; this.fade = null; this.seam = null; this.territory = null; this.bindings = new WeakMap();
+      this.controller = null; this.fade = null; this.seam = null; this.promotion = null;
+      this.territory = null; this.bindings = new WeakMap();
       this.audio = {context: null, mode: 'none', enabled: false, blocked: null, input: null};
       this.sound = {enabled: false, volume: .7}; this.master = null;
       this.events = []; this.activeStandbys = 0; this.maxConcurrentStandbys = 0;
@@ -434,6 +437,11 @@ function applySlice(node) {
     notifyAudio(node) {
       try { this.options.onAudioNode?.(node, this.audio.context); }
       catch (error) { this.report(error, node); }
+    }
+    notifyDeckAudio(deck) {
+      if (deck.enteredAt === null || !deck.binding || !deck.item) return;
+      try { this.options.onDeckAudio?.(deck, this.audio.context); }
+      catch (error) { this.report(error); }
     }
     status() {
       this.stage.dataset.status = this.running ? 'playing' : this.ready ? 'paused' : 'loading';
@@ -579,17 +587,31 @@ function applySlice(node) {
     waitForSeam(node, signal) {
       if (!this.running || node.resting || !node.media || node.media.currentTime < .04) return Promise.resolve();
       return new Promise((resolve, reject) => {
-        let previous = node.media.currentTime;
+        const began = this.clock.simTime, allowance = this.progressTimeoutMs / 1000;
+        const media = node.media, duration = media.duration;
+        const deadline = began + allowance + (Number.isFinite(duration) && duration > 0 ? Math.max(0, duration - media.currentTime) : 0);
+        let previous = media.currentTime, decodedTime = node.decoded?.mediaTime, progressAt = began, done = false;
         const finish = error => {
+          if (done) return; done = true;
           unsubscribe(); signal.removeEventListener('abort', abort);
           if (this.seam?.node === node) this.seam = null;
           error ? reject(error) : resolve();
         };
         const abort = () => finish(cancelled());
-        const unsubscribe = this.clock.subscribe(() => {
-          const current = node.media.currentTime;
-          if (current + .05 < previous) finish();
+        const unsubscribe = this.clock.subscribe(time => {
+          const current = media.currentTime;
+          if (current + .05 < previous) { finish(); return; }
+          if (media.requestVideoFrameCallback ? node.decoded?.mediaTime !== decodedTime : current !== previous) progressAt = time;
+          decodedTime = node.decoded?.mediaTime;
           previous = current;
+          // WebKit can remain ready/playing while native looping stops presenting
+          // frames. Such a source cannot produce the seam this permit waits for.
+          if (time - progressAt >= allowance || time >= deadline) {
+            node.stallCount++;
+            this.record('seam-fallback', node.id, {reason: time - progressAt >= allowance ? 'no-frames' : 'no-wrap',
+              waitedSec: time - began, currentTime: current, decodedTime});
+            finish();
+          }
         });
         this.seam = {node, finish};
         signal.addEventListener('abort', abort, {once: true});
@@ -601,17 +623,34 @@ function applySlice(node) {
       // advance after becoming visible until play() is requested again. Keep
       // this request on the promotion stack, with no intervening RAF.
       return new Promise((resolve, reject) => {
-        let done = false;
-        const finish = error => {
+        const media = deck.media;
+        let done = false, fulfilled = false, frames = 0, frame = null, previous = deck.decoded?.mediaTime;
+        const finish = (error, verified = false) => {
           if (done) return; done = true; clearTimeout(timer);
           signal.removeEventListener('abort', abort);
-          error ? reject(error) : resolve();
+          media.removeEventListener('timeupdate', fallback);
+          if (frame !== null) media.cancelVideoFrameCallback?.(frame);
+          if (this.promotion?.deck === deck) this.promotion = null;
+          error ? reject(error) : resolve(verified);
         };
         const abort = () => finish(cancelled());
-        const timer = setTimeout(() => finish(new Error('Promoted clip did not resume playback in time')), this.primeTimeoutMs);
+        const progress = current => {
+          if (current !== previous) { frames++; previous = current; }
+          if (fulfilled && frames >= 2) finish(null, true);
+        };
+        const decoded = (_, metadata) => {
+          frame = null; progress(metadata.mediaTime);
+          if (!done) frame = media.requestVideoFrameCallback(decoded);
+        };
+        const fallback = () => { if (media.readyState >= 2) progress(media.currentTime); };
+        const timer = setTimeout(() => finish(new Error('Promoted clip did not present new frames in time')),
+          Math.min(this.primeTimeoutMs, this.progressTimeoutMs));
+        this.promotion = {deck, finish};
         signal.addEventListener('abort', abort, {once: true});
         if (signal.aborted) { abort(); return; }
-        try { deck.media.play().then(() => finish(), finish); }
+        if (media.requestVideoFrameCallback) frame = media.requestVideoFrameCallback(decoded);
+        else { previous = media.currentTime; media.addEventListener('timeupdate', fallback); }
+        try { media.play().then(() => { fulfilled = true; if (frames >= 2) finish(null, true); }, finish); }
         catch (error) { finish(error); }
       });
     }
@@ -643,6 +682,7 @@ function applySlice(node) {
           incoming.presence = this.effectsEnabled ? 0 : 1;
           incoming.presenceTarget = null;
           this.applyDeckEffects(incoming);
+          this.notifyDeckAudio(incoming);
           incoming.media.style.zIndex = '1';
           if (outgoing) outgoing.media.style.zIndex = '0';
           if (outgoing && this.running && !node.resting && duration > 0) {
@@ -665,12 +705,15 @@ function applySlice(node) {
           incoming.weight = 1; incoming.media.style.opacity = '1'; incoming.media.dataset.deck = 'active';
           if (outgoing) outgoing.weight = 0;
           node.promoting = incoming;
-          if (!this.running || node.resting) incoming.media.pause();
+          if (!this.running) incoming.media.pause();
           incoming.media.muted = !incoming.binding || !this.sound.enabled || !this.audio.enabled;
           this.applyLayout(); this.updateAudio();
-          if (this.running && !node.resting) await this.playPromoted(incoming, signal);
+          // A pause settles the waiter without frame proof. If play resumes in
+          // the same task, verify again before committing the visible deck.
+          let verified = false;
+          while (this.running && !verified && !signal.aborted) verified = await this.playPromoted(incoming, signal);
           if (signal.aborted) throw cancelled();
-          if (!this.running || node.resting) incoming.media.pause();
+          if (!this.running) incoming.media.pause();
           // Promotion is now committed. Until this point the outgoing decoder,
           // Blob URL and ecological identity remain authoritative. Publishing
           // provisional node.item would destroy its lifetime on a late refusal.
@@ -699,6 +742,8 @@ function applySlice(node) {
       }, {signal});
     }
     unload(deck) {
+      try { this.options.onDeckUnload?.(deck); }
+      catch (error) { this.report(error); }
       deck.weight = 0;
       if (deck.binding) {
         const now = this.audio.context.currentTime;
@@ -717,7 +762,8 @@ function applySlice(node) {
     }
     bind(deck) {
       const context = this.audio.context;
-      if (!context || deck.binding) return deck.binding;
+      if (!context) return deck.binding;
+      if (deck.binding) { this.notifyDeckAudio(deck); return deck.binding; }
       let binding = this.bindings.get(deck.media);
       if (!binding) {
         const source = context.createMediaElementSource(deck.media), filter = context.createBiquadFilter();
@@ -727,7 +773,7 @@ function applySlice(node) {
         gain.gain.value = 0; source.connect(filter); filter.connect(pan); pan.connect(gain); gain.connect(this.audio.input);
         binding = {source, filter, pan, gain, target: 0, cutoff: null}; this.bindings.set(deck.media, binding);
       }
-      deck.binding = binding; this.applyDeckEffects(deck, true); return binding;
+      deck.binding = binding; this.applyDeckEffects(deck, true); this.notifyDeckAudio(deck); return binding;
     }
     async unlock(context = null) {
       if (this.disposed) return false;
@@ -785,22 +831,39 @@ function applySlice(node) {
         this.updateNodeAudio(node);
       }
     }
+    setEffectSettings(settings) {
+      if (!root.SimvltaneaPresence) throw new Error('Clip presence filters are unavailable');
+      this.effectSettings = root.SimvltaneaPresence.normalizeSettings({...this.effectSettings, ...settings});
+      for (const node of this.nodes.values()) {
+        for (const deck of node.decks) if (this.effectsEnabled) this.applyDeckEffects(deck);
+        this.updateNodeAudio(node);
+      }
+      return this.effectSettings;
+    }
     setPresence(id, value) {
       const node = this.nodes.get(id);
       if (!node?.active) return;
       const presence = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
       node.active.presence = node.active.presenceTarget = presence;
-      this.applyDeckEffects(node.active); this.updateNodeAudio(node);
+      if (this.effectsEnabled) this.applyDeckEffects(node.active);
+      this.updateNodeAudio(node);
     }
     applyDeckEffects(deck, immediate = false) {
+      const settings = this.effectSettings || root.SimvltaneaPresence?.DEFAULT_SETTINGS;
       const targets = this.effectsEnabled && root.SimvltaneaPresence
-        ? root.SimvltaneaPresence.filterTargets(deck.presence, this.audio.context?.sampleRate) : null;
+        ? root.SimvltaneaPresence.filterTargets(deck.presence, this.audio.context?.sampleRate, settings) : null;
       const decimal = value => Number(value.toFixed(3));
-      const filter = targets ? `brightness(${decimal(targets.brightness)}) saturate(${decimal(targets.saturation)}) blur(${decimal(targets.blurPx)}px)` : '';
+      const filters = [];
+      if (targets) {
+        if (settings.brightnessDepth > 0) filters.push(`brightness(${decimal(targets.brightness)})`);
+        if (settings.saturationDepth > 0) filters.push(`saturate(${decimal(targets.saturation)})`);
+        if (settings.blurPx > 0) filters.push(`blur(${decimal(targets.blurPx)}px)`);
+      }
+      const filter = filters.join(' ');
       if (deck.media.style.filter !== filter) deck.media.style.filter = filter;
       if (!deck.binding) return;
       const binding = deck.binding;
-      const type = targets ? 'lowpass' : 'allpass';
+      const type = targets && settings.lowpassDepth > 0 ? 'lowpass' : 'allpass';
       if (binding.filter.type !== type) binding.filter.type = type;
       const cutoff = targets?.cutoffHz ?? Math.min(20000, this.audio.context.sampleRate * .45);
       if (immediate || binding.cutoff === null || binding.cutoff === undefined || Math.abs(binding.cutoff - cutoff) > .5) {
@@ -808,7 +871,7 @@ function applySlice(node) {
         const now = this.audio.context.currentTime, frequency = binding.filter.frequency;
         if (immediate) {
           frequency.cancelScheduledValues(now); frequency.setValueAtTime(cutoff, now);
-        } else frequency.setTargetAtTime(cutoff, now, .08);
+        } else frequency.setTargetAtTime(cutoff, now, .015);
       }
     }
     setResting(id, resting) {
@@ -816,10 +879,8 @@ function applySlice(node) {
       if (!node || node.resting === Boolean(resting)) return;
       node.resting = Boolean(resting); node.phase = node.resting ? 'RESTING' : 'ACTIVE';
       node.box.style.transition = 'opacity 400ms linear'; node.box.style.opacity = node.resting ? '.35' : '1';
-      if (node.media) {
-        if (node.resting) node.media.pause();
-        else if (this.running) node.media.play().catch(error => this.report(error, node));
-      }
+      // Ecological rest changes prominence, not the native playback lifecycle.
+      // Keeping this foreground loop running avoids a WebKit pause/wake edge.
       this.updateNodeAudio(node);
     }
     updateNodeAudio(node) {
@@ -831,7 +892,9 @@ function applySlice(node) {
         if (!deck.binding || this.audio.context.state !== 'running') continue;
         // Presence is applied after mix normalization. Otherwise normalization
         // turns a lone receding voice back up to the full mix ceiling.
-        const target = gain * deck.weight * (this.effectsEnabled ? deck.presence : 1);
+        const modulation = this.effectsEnabled && root.SimvltaneaPresence
+          ? root.SimvltaneaPresence.filterTargets(deck.presence, this.audio.context.sampleRate, this.effectSettings).gain : 1;
+        const target = gain * deck.weight * modulation;
         if (Math.abs(deck.binding.target - target) > .00001) {
           deck.binding.target = target;
           deck.binding.gain.gain.setTargetAtTime(target, this.audio.context.currentTime, .015);
@@ -851,9 +914,11 @@ function applySlice(node) {
         for (const deck of node.decks) {
           if (deck.enteredAt === null || deck.presenceTarget !== null ||
               (deck !== node.active && deck !== this.fade?.incoming && deck !== node.promoting)) continue;
-          const attack = root.SimvltaneaPresence?.ATTACK_SECONDS ?? 1.2;
-          deck.presence = Math.max(0, Math.min(1, (time - deck.enteredAt) / attack));
-          this.applyDeckEffects(deck); changed = true;
+          deck.presence = root.SimvltaneaPresence
+            ? root.SimvltaneaPresence.entranceEnvelope(time - deck.enteredAt, this.effectSettings)
+            : Math.max(0, Math.min(1, (time - deck.enteredAt) / 1.2));
+          if (this.effectsEnabled) this.applyDeckEffects(deck);
+          changed = true;
         }
         if (changed) this.updateNodeAudio(node);
       }
@@ -864,7 +929,12 @@ function applySlice(node) {
         // black stage (25% at the midpoint). Keep the outgoing image opaque.
         fade.incoming.media.style.opacity = String(progress); fade.outgoing.media.style.opacity = '1';
         this.updateNodeAudio(fade.node);
-        if (progress === 1) { this.fade = null; fade.finish(); }
+        if (progress === 1) {
+          // The ecology subscriber still runs before replace() can continue its
+          // awaited fade. Keep audio ownership across that microtask boundary.
+          fade.node.promoting = fade.incoming;
+          this.fade = null; fade.finish();
+        }
       }
       if (this.proof && time - this.proofAt >= .25) {
         this.proofAt = time;
@@ -881,6 +951,7 @@ function applySlice(node) {
       // settles the handoff; it must not strand a semaphore until another click.
       if (this.fade) { const fade = this.fade; this.fade = null; fade.finish(); }
       if (this.seam) this.seam.finish();
+      if (this.promotion) this.promotion.finish();
       this.updateAudio(); this.status();
     }
     pause() { this.playingIntent = false; if (this.pending) this.pending.playing = false; this.suspend(); }
@@ -890,8 +961,10 @@ function applySlice(node) {
       if (this.running || document.hidden) return;
       this.running = true; this.generation++; this.clock.start();
       const jobs = [];
-      for (const node of this.nodes.values()) if (node.media && !node.resting && node.media.paused) {
-        jobs.push(node.media.play().catch(error => this.report(error, node)));
+      for (const node of this.nodes.values()) {
+        for (const media of new Set([node.media, node.promoting?.media])) if (media?.paused) {
+          jobs.push(media.play().catch(error => this.report(error, node)));
+        }
       }
       this.updateAudio(); this.status(); await Promise.all(jobs);
     }
@@ -961,7 +1034,7 @@ function applySlice(node) {
         finished: false, error: this.error, orientation: this.orientation, orientationOverride: this.orientationOverride,
         activeStandbys: this.activeStandbys, maxConcurrentStandbys: this.maxConcurrentStandbys,
         pending: Boolean(this.pending) || this.draining, lastFailure: this.lastFailure,
-        effects: this.effectsEnabled,
+        effects: this.effectsEnabled, effectSettings: this.effectSettings,
         audio: {mode: this.audio.mode, enabled: this.audio.enabled, contextState: this.audio.context?.state ?? null},
         loops: [...this.nodes.values()].map(node => ({id: node.id, source: node.source, kind: 'video',
           currentTime: node.media?.currentTime ?? 0, rate: 1, paused: node.media?.paused ?? true,

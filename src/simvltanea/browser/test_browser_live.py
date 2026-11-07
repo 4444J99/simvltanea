@@ -315,6 +315,51 @@ class PersistentSessionTests(unittest.TestCase):
         self.assertEqual(page.evaluate("live.nodes.get('loop-2').box.style.opacity"), '1')
         self.assertIsNone(page.evaluate("live.nodes.get('loop-2').targetGain"))
 
+    def test_ecological_rest_keeps_native_loop_moving_without_pause_or_play(self):
+        page = self.open()
+        page.evaluate("document.addEventListener('click',()=>{window.unlocked=live.unlock();live.setSound({enabled:true,volume:.2})},{once:true})")
+        page.mouse.click(10, 10)
+        page.evaluate('unlocked')
+        page.evaluate('''() => {
+          window.resident=live.nodes.get('loop-1');window.restCalls=[];
+          for(const name of ['play','pause']) {const native=resident.media[name].bind(resident.media);
+            resident.media[name]=(...args)=>{restCalls.push(name);return native(...args)};}
+          window.decodedBefore=resident.decoded.mediaTime;live.setResting('loop-1',true);
+        }''')
+        self.assertEqual(page.evaluate('restCalls'), [], 'ecological rest interrupted the native loop')
+        self.assertEqual(page.evaluate('resident.box.style.opacity'), '0.35')
+        page.wait_for_function('resident.decoded.mediaTime!==decodedBefore && resident.audio.gain.gain.value<.001')
+        page.evaluate("live.setResting('loop-1',false)")
+        self.assertEqual(page.evaluate('restCalls'), [])
+        self.assertFalse(page.evaluate('resident.media.paused'))
+        self.assertEqual(page.evaluate('resident.box.style.opacity'), '1')
+        self.assertGreater(page.evaluate('resident.audio.target'), 0)
+
+    def test_global_pause_and_resume_include_resting_residents(self):
+        page = self.open()
+        page.evaluate("live.setResting('loop-2',true);live.pause()")
+        self.assertTrue(page.evaluate('[...live.nodes.values()].every(node=>node.media.paused)'))
+        page.evaluate('live.play()')
+        self.assertTrue(page.evaluate('[...live.nodes.values()].every(node=>!node.media.paused)'),
+                        'explicit resume left a resting foreground paused until its next wake')
+        self.assertTrue(page.evaluate("live.nodes.get('loop-2').resting"))
+        self.assertEqual(page.evaluate("live.nodes.get('loop-2').box.style.opacity"), '0.35')
+        page.evaluate("window.decodedBefore=live.nodes.get('loop-2').decoded.mediaTime")
+        page.wait_for_function("live.nodes.get('loop-2').decoded.mediaTime!==decodedBefore")
+
+    def test_replacing_a_resting_clip_keeps_it_dim_silent_and_moving(self):
+        page = self.open()
+        page.evaluate("document.addEventListener('click',()=>{window.unlocked=live.unlock();live.setSound({enabled:true,volume:.2})},{once:true})")
+        page.mouse.click(10, 10)
+        page.evaluate('unlocked')
+        page.evaluate("live.setResting('loop-1',true)")
+        self.assertTrue(page.evaluate('setClips([2,1])'))
+        self.assertFalse(page.evaluate("live.nodes.get('loop-1').media.paused"), 'replacement introduced a native pause inside REST')
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').resting"))
+        self.assertEqual(page.evaluate("live.nodes.get('loop-1').box.style.opacity"), '0.35')
+        self.assertEqual(page.evaluate("live.nodes.get('loop-1').audio.target"), 0)
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
     def test_audio_observer_failure_does_not_black_out_committed_resident(self):
         page = self.open()
         page.evaluate("document.addEventListener('click',()=>{window.unlocked=live.unlock()},{once:true})")
@@ -336,9 +381,7 @@ class PersistentSessionTests(unittest.TestCase):
             return Math.sqrt(data.reduce((sum,x)=>sum+x*x,0)/data.length)};}''')
         page.wait_for_function('rms()>.005')
         before = page.evaluate('rms()')
-        # Isolate the native filter response from the live effect writer while
-        # keeping the source media and AudioContext playing.
-        page.evaluate("live.clock.pause();[...live.nodes.values()].forEach(node=>{node.audio.filter.type='lowpass';node.audio.filter.frequency.value=30})")
+        page.evaluate("[...live.nodes.values()].forEach(node=>{node.audio.filter.type='lowpass';node.audio.filter.frequency.value=30})")
         page.wait_for_timeout(350)
         self.assertLess(page.evaluate('rms()'), before * .2)
 
@@ -372,6 +415,56 @@ class PersistentSessionTests(unittest.TestCase):
         age = page.evaluate("live.clock.simTime-live.nodes.get('loop-1').birthTime")
         self.assertGreaterEqual(age, .4)
         self.assertLess(age, .65, 'priming time leaked into the new resident lifetime')
+
+    def test_frozen_outgoing_does_not_hold_the_preparation_permit_forever(self):
+        page = self.open()
+        page.evaluate('''() => {
+          live.progressTimeoutMs=300;
+          const node=live.nodes.get('loop-1');window.outgoing=node.media;
+          // Model WebKit's ready/playing resident whose clock and decoded frames stop.
+          outgoing.pause();Object.defineProperty(outgoing,'currentTime',{get:()=>.5});
+          Object.defineProperty(outgoing,'paused',{get:()=>false});
+          Object.defineProperty(outgoing,'duration',{get:()=>60});
+          // Native WebKit can repeatedly present the same frame: callbacks alone
+          // are not evidence that the rendered media timeline has progressed.
+          live.clock.subscribe(()=>{node.callbacks++;node.decoded={mediaTime:.5};});
+          window.sibling=live.nodes.get('loop-2').media;window.siblingCalls=[];
+          for(const name of ['play','pause','load']) {const native=sibling[name].bind(sibling);
+            sibling[name]=(...args)=>{siblingCalls.push(name);return native(...args)};}
+          window.done=false;window.change=live.reconcile({plan:planFor([2,1]),items:[items[2],items[1]],
+            playing:true,atLoopBoundary:true}).then(result=>{done=true;return result});
+        }''')
+        page.wait_for_function("live.nodes.get('loop-1').phase==='READY'")
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===outgoing && outgoing.hasAttribute('src')"))
+        page.wait_for_timeout(1600)
+        self.assertTrue(page.evaluate('done'), 'a frozen outgoing loop stranded the sole preparation permit')
+        self.assertTrue(page.evaluate('change'))
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+        self.assertTrue(page.evaluate("live.nodes.get('loop-2').media===sibling"))
+        self.assertEqual(page.evaluate('siblingCalls'), [])
+        self.assertEqual(page.evaluate("live.events.filter(event=>event.type==='seam-fallback').map(event=>event.id)"), ['loop-1'])
+        self.assertEqual(page.evaluate("live.events.find(event=>event.type==='seam-fallback').reason"), 'no-frames')
+
+    def test_seam_wait_pause_and_superseding_request_release_preparation(self):
+        page = self.open()
+        for action in ('pause', 'supersede'):
+            page.evaluate('''() => {
+              const media=live.nodes.get('loop-1').media;
+              Object.defineProperty(media,'currentTime',{configurable:true,get:()=>.5});
+              window.change=live.reconcile({plan:planFor([2,1]),items:[items[2],items[1]],
+                playing:true,atLoopBoundary:true});
+            }''')
+            page.wait_for_function("live.nodes.get('loop-1').phase==='READY'")
+            if action == 'pause':
+                page.evaluate('live.pause()')
+                self.assertTrue(page.evaluate('change'))
+                self.assertTrue(page.evaluate("live.nodes.get('loop-1').media.paused"))
+                page.evaluate('setClips([0,1])')
+            else:
+                page.evaluate('setClips([0,1])')
+                self.assertFalse(page.evaluate('change'))
+            self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+        self.assertEqual(page.evaluate("live.events.filter(event=>event.type==='seam-fallback').length"), 0)
 
     def test_territory_changes_framing_without_restarting_residents(self):
         page = self.open()
@@ -494,6 +587,55 @@ class PersistentSessionTests(unittest.TestCase):
         self.assertLess(cutoff, 1000, 'new entrance inherited the preceding clip cutoff')
         page.evaluate('change')
 
+    def test_fulfilled_promotion_without_new_decoded_frames_keeps_outgoing(self):
+        page = self.open()
+        page.evaluate('''() => {
+          const node=live.nodes.get('loop-1');window.outgoing=node.media;
+          const next=node.decks.find(deck=>deck!==node.active).media, play=next.play.bind(next);
+          next.play=()=>{if(next.dataset.deck!=='active') return play();
+            next.pause();return Promise.resolve();};
+          window.sibling=live.nodes.get('loop-2').media;window.siblingCalls=[];
+          for(const name of ['play','pause','load']) {const native=sibling[name].bind(sibling);
+            sibling[name]=(...args)=>{siblingCalls.push(name);return native(...args)};}
+        }''')
+        self.assertFalse(page.evaluate('setClips([2,1])'), 'fulfilled play() was mistaken for decoded playback')
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===outgoing && !outgoing.paused && outgoing.hasAttribute('src')"))
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+        self.assertEqual(page.evaluate('siblingCalls'), [])
+
+    def test_visible_promotion_uses_short_progress_bound_instead_of_loading_timeout(self):
+        page = self.open()
+        page.evaluate('''() => {
+          live.primeTimeoutMs=10000;live.progressTimeoutMs=200;
+          const node=live.nodes.get('loop-1');window.outgoing=node.media;
+          const next=node.decks.find(deck=>deck!==node.active).media, play=next.play.bind(next);
+          next.play=()=>{if(next.dataset.deck!=='active') return play();
+            window.promotionVisible=true;next.pause();return Promise.resolve();};
+          window.done=false;window.change=setClips([2,1]).then(result=>{done=true;return result});
+        }''')
+        page.wait_for_function('window.promotionVisible===true')
+        page.wait_for_timeout(700)
+        self.assertTrue(page.evaluate('done'), 'visible stale successor retained the ten-second loading timeout')
+        self.assertFalse(page.evaluate('change'))
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===outgoing && !outgoing.paused"))
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
+    def test_pause_while_verifying_promoted_frames_preserves_pause_intent(self):
+        page = self.open()
+        page.evaluate('''() => {
+          const node=live.nodes.get('loop-1'), next=node.decks.find(deck=>deck!==node.active).media;
+          const play=next.play.bind(next);
+          next.play=()=>{if(next.dataset.deck!=='active') return play();
+            window.promoting=true;next.pause();return Promise.resolve();};
+          window.change=setClips([2,1]);
+        }''')
+        page.wait_for_function('window.promoting===true')
+        page.evaluate('live.pause()')
+        self.assertTrue(page.evaluate('change'))
+        self.assertFalse(page.evaluate('live.running || live.playingIntent'))
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').media.paused"))
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
     def test_superseding_pending_post_promotion_play_releases_preparation(self):
         page = self.open()
         page.evaluate('''() => {
@@ -507,6 +649,89 @@ class PersistentSessionTests(unittest.TestCase):
         self.assertFalse(page.evaluate('change'))
         self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===original && !original.paused"))
         self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
+    def test_immediate_resume_during_frame_verification_keeps_promoted_deck_moving(self):
+        page = self.open()
+        page.evaluate('''() => {
+          const node=live.nodes.get('loop-1'),next=node.decks.find(d=>d!==node.active).media;
+          const native=next.play.bind(next);let held=false;
+          next.play=()=>{if(next.dataset.deck==='active' && !held) {
+            held=true;next.pause();window.verifying=true;return Promise.resolve();}return native();};
+          window.change=setClips([2,1]);
+        }''')
+        page.wait_for_function('window.verifying && Boolean(live.promotion)')
+        page.evaluate('''async () => {live.pause();const resumed=live.play();await Promise.all([resumed,change]);}''')
+        self.assertFalse(page.evaluate("live.nodes.get('loop-1').media.paused"),
+                         'immediate resume omitted the provisional incoming deck')
+        before = page.evaluate("live.nodes.get('loop-1').callbacks")
+        page.wait_for_function("n=>live.nodes.get('loop-1').callbacks>n+2", arg=before, timeout=2000)
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
+    def test_finished_fade_keeps_incoming_audible_until_promotion_continuation(self):
+        page = self.open()
+        page.evaluate("document.addEventListener('click',()=>{window.unlocked=live.unlock();live.setSound({enabled:true,volume:.5})},{once:true})")
+        page.mouse.click(10, 10)
+        page.evaluate('unlocked')
+        page.evaluate("() => {live.crossfadeSec=.8;window.change=setClips([2,1]);}")
+        page.wait_for_function('Boolean(live.fade)')
+        edges = page.evaluate('''() => {
+          live.clock.pause();const fade=live.fade,media=fade.incoming.media;
+          const descriptor=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'muted'),edges=[];
+          Object.defineProperty(media,'muted',{get(){return descriptor.get.call(this)},set(value){
+            if(value!==descriptor.get.call(this))edges.push(value);descriptor.set.call(this,value);}});
+          live.tick(fade.began+fade.duration);
+          // The ecology subscriber runs before replace() resumes its awaited fade.
+          live.setTargetGain(fade.node.id,.4);
+          return edges;
+        }''')
+        self.assertNotIn(True, edges, 'fade completion temporarily revoked incoming audio ownership')
+        page.evaluate('change')
+
+    def test_rejected_immediate_resume_rolls_back_unverified_successor(self):
+        page = self.open()
+        page.evaluate('''() => {
+          const node=live.nodes.get('loop-1');window.outgoing=node.media;
+          const next=node.decks.find(d=>d!==node.active).media,native=next.play.bind(next);let held=false;
+          next.play=()=>{if(next.dataset.deck!=='active')return native();
+            if(!held){held=true;next.pause();window.verifying=true;return Promise.resolve();}
+            return Promise.reject(new Error('resume refused'));};
+          window.change=setClips([2,1]);
+        }''')
+        page.wait_for_function('window.verifying && Boolean(live.promotion)')
+        page.evaluate('''async () => {live.pause();await live.play();}''')
+        self.assertFalse(page.evaluate('change'), 'resuming treated a pause-settled waiter as frame proof')
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===outgoing && !outgoing.paused"))
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
+    def test_deck_audio_lifecycle_announces_entry_before_commit_and_cleans_failed_entry(self):
+        page = self.open()
+        page.evaluate("document.addEventListener('click',()=>{window.unlocked=live.unlock();live.setSound({enabled:true,volume:.5})},{once:true})")
+        page.mouse.click(10, 10)
+        page.evaluate('unlocked')
+        page.evaluate('''() => {
+          window.deckEvents=[];
+          live.options.onDeckAudio=(deck,context)=>deckEvents.push({type:'entry',name:deck.item.name,
+            entered:deck.enteredAt!==null,bound:Boolean(deck.binding),sameContext:context===live.audio.context,
+            committed:[...live.nodes.values()].some(n=>n.active===deck)});
+          live.options.onDeckUnload=deck=>deckEvents.push({type:'unload',name:deck.item?.name});
+          live.crossfadeSec=.7;window.change=setClips([2,1]);
+        }''')
+        page.wait_for_function('Boolean(live.fade)')
+        entries = page.evaluate("deckEvents.filter(e=>e.type==='entry' && e.name==='clip-2')")
+        self.assertTrue(entries, 'generated audio has no per-deck entry hook during the visible fade')
+        self.assertTrue(all(e['entered'] and e['bound'] and e['sameContext'] for e in entries))
+        self.assertFalse(entries[0]['committed'])
+        page.evaluate('change')
+        self.assertIn(dict(type='unload', name='clip-0'), page.evaluate('deckEvents'))
+        page.evaluate('''() => {
+          deckEvents.length=0;const n=live.nodes.get('loop-1'),next=n.decks.find(d=>d!==n.active).media;
+          const native=next.play.bind(next);next.play=()=>next.dataset.deck==='active'
+            ? Promise.reject(new Error('promotion refused')) : native();
+        }''')
+        self.assertFalse(page.evaluate('setClips([3,1])'))
+        unloaded = page.evaluate("deckEvents.filter(e=>e.type==='unload').map(e=>e.name)")
+        self.assertEqual(unloaded, ['clip-3'])
+        self.assertEqual(page.evaluate("live.nodes.get('loop-1').item.name"), 'clip-2')
 
 
 if __name__ == '__main__':

@@ -16,6 +16,9 @@ Tapping a panel replaces its clip. Untouched residents keep their elements,
 playback positions and audio bindings. Shuffle queues replacements and compresses
 queued crossfades to 0.2 seconds. The old clip keeps looping if its successor fails.
 Failed boomerang derivatives fall back to their admitted forward source.
+Promotion requires fulfilled playback and two distinct decoded media times before
+retiring the old deck. A visible successor that cannot demonstrate progress within
+two seconds rolls back to the retained outgoing clip.
 
 ## Rhythm and controls
 
@@ -23,13 +26,20 @@ Automatic residents draw a 10–24 second target lifetime and round up to a whol
 number of native loops. A long clip can therefore exceed 24 seconds. Readiness,
 cooldowns and the single preparation permit take priority over the rhythm. An
 automatic handoff waits for an outgoing native loop boundary; manual taps do not.
+If decoded media time stops advancing for two simulation seconds, or the expected
+remaining loop plus that allowance elapses without a boundary, the waiting handoff
+continues with its prepared successor. This releases the shared preparation permit
+instead of letting one frozen native loop block the whole stage. A `seam-fallback`
+event records the reason. Normal advancing loops retain boundary alignment.
 Departed logical clips have a ten-second return cooldown, shared by both variants.
 
 Steady, sparse and burst regimes vary arrival spacing. Sparse periods target a
 time-averaged population near 65 percent for four panels, with at least two active
 residents. Readiness and lifetime guards can change the achieved average. Resting
-residents retain a dimmed still frame and contribute no sound. A manual panel
-count disables automatic resting and survives shuffle; finite replacements continue.
+residents keep their native loops moving, dimmed and silent, avoiding an extra
+pause/resume transition when they wake. Explicit pause still stops every resident,
+including resting ones. A manual panel count disables automatic resting and
+survives shuffle; finite replacements continue.
 
 The infinity button holds automatic changes after any current handoff completes.
 The direction button switches published forward and boomerang playback. Local
@@ -48,8 +58,32 @@ They are on by default; `fx=0` in the URL bypasses them, and `fx=1` enables them
 The explicit setting survives shuffles. Toggling filters keeps the same video
 elements, playback positions, and audio connections.
 
+The adjacent **☷ Filter settings** button opens adjustable timing, sound, and
+image controls. The field keeps playing while the dialog is open. Escape closes
+the dialog and returns focus to its button. Reset filters restores the defaults;
+it does not change the composition or the separate Filters bypass switch.
+
+| Control | Range | Default |
+| --- | --- | --- |
+| Rise | 0.1–5 seconds | 1.2 seconds |
+| Curve | Linear or smooth | Linear |
+| Waiting presence | 5–50 percent | 12 percent |
+| Volume swell | 0–100 percent | 100 percent |
+| Low-pass filter | 0–100 percent | 100 percent |
+| Brightness swell | 0–100 percent | 100 percent |
+| Color swell | 0–100 percent | 100 percent |
+| Blur | 0–2 CSS pixels | 2 pixels |
+
+Set an effect's strength to zero to bypass it independently. Settings apply to
+the live field while each clip retains its own envelope phase. Nondefault values
+are retained as bounded `fx_attack`, `fx_curve`, `fx_tail`, `fx_gain`,
+`fx_lowpass`, `fx_brightness`, `fx_saturation`, and `fx_blur` URL parameters.
+No local media names, paths, bytes, or tags enter these parameters. The five-second
+rise bound keeps an arriving deck's rise consistent with the scheduler's shortest
+ten-second planned lifespan.
+
 Each evolving resident rises to a peak over 1.2 seconds, then recedes across its
-planned lifetime. The same presence value controls its gain, a low-pass opening,
+planned lifetime. The same presence value controls its selected gain, low-pass opening,
 brightness, saturation, and up to 2 CSS pixels of blur. The picture becomes
 clearer and the sound opens as the clip rises. These are tuning defaults, not
 an artist-approved preset.
@@ -72,8 +106,11 @@ envelope clock. Reduced-motion mode disables these animated filters. Authored
 exports are unchanged; this feature belongs to the interactive Studio session.
 
 Library and uploaded clips use independent incoming and outgoing audio filters.
-The built-in generated pictures receive image filters, but their synthesized
-voices attach after promotion and do not yet overlap as two independent voices.
+Built-in generated loops also attach one synthesized voice to each entering deck,
+so both sounds overlap through their own filters and gains during the visual
+handoff. Retirement or failure disconnects only that deck's voice; other voices
+retain their scheduling position. Sound unlocked during a handoff attaches both
+visible decks to the same existing audio context.
 If recording is unavailable and Studio uses its live canvas preview, the Filters
 control is disabled; that fallback keeps its existing image and sound behavior.
 
@@ -104,6 +141,13 @@ Confirm that untouched panels keep moving and that no transition clears the stag
 Confirm that panel controls stop at four on the phone, including after uploads
 or opening a shared composition that requests more panels.
 Linux WebKit and an emulated phone viewport are separate automated evidence.
+
+The local filter integration includes the bounds and decoded-frame promotion
+checks from draft [PR #90](https://github.com/4444J99/tool-video-loop-compositor/pull/90)
+at `0f3743769e75011097d781e7d9c14b8fd66681a3`. Its November 7 sustained Linux
+WebKit evidence still reports 27.302-second and 10.803-second frozen residents.
+Those checks prevent a frozen seam from indefinitely blocking later handoffs;
+they do not establish sustained WebKit continuity or physical iPhone acceptance.
 
 Tracking: [issue #89](https://github.com/4444J99/tool-video-loop-compositor/issues/89)
 and [PR #88](https://github.com/4444J99/tool-video-loop-compositor/pull/88).
