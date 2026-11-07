@@ -24,4 +24,7 @@ dist/
 /archive/raw/*
 !/archive/raw/README.md
 !/archive/raw/.gitkeep
+/src/simvltanea/lab/**/data/
+/src/simvltanea/lab/**/media/
+/src/simvltanea/lab/**/still/
 # END SIMVLTANEA layout

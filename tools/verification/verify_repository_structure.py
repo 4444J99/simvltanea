@@ -98,7 +98,12 @@ def path_violation(path: str, layout: Layout = LAYOUT) -> str | None:
         return None if path in policy["CONFIG_FILES"] else "config/ allows documented lint configuration files"
     if path.startswith(layout.relative("editions") + "/"):
         return None if path == layout.relative("registry") or path == layout.relative("editions") + "/README.md" else "editions/ allows the production registry and its guide"
-    source_role = next((base for base in policy["SOURCE_EXTENSIONS"] if path.startswith(base + "/")), None)
+    for base, names in policy.get("PRIVATE_DATASET_DIRECTORIES", {}).items():
+        if path.startswith(base + "/") and any(part in names for part in PurePosixPath(path[len(base)+1:]).parts[:-1]):
+            folders = ", ".join(f"{name}/" for name in sorted(names))
+            return f"{base}/ must not contain dataset folders ({folders}); real media and clips.json stay private"
+    # The most specific source role wins, so a scoped entry can allow extensions for one subpackage only.
+    source_role = max((base for base in policy["SOURCE_EXTENSIONS"] if path.startswith(base + "/")), key=len, default=None)
     if source_role is not None:
         area = source_role
     if area in policy["SOURCE_EXTENSIONS"]:

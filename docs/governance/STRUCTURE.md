@@ -69,7 +69,17 @@ and `generators/`. Root package modules retain compatibility with existing
 imports and CLI commands. Browser JavaScript is distributed with its subpackage.
 Feature APIs use ordinary imports with explicit `__all__` declarations.
 
-Feature tests live directly in `authoring/`, `browser/`, `rendering/`,
+The playable lab, `src/simvltanea/lab/`, is a static web app distributed with its
+subpackage (see [the lab](../authoring/LAB.md)). `src/` allows `.js`, `.md`, `.py`
+and `.typed` files; one scoped `source_extensions` entry in the layout contract also
+allows `.css`, `.html` and `.mjs` (Node unit tests) below `{package}/lab` only, and
+`{package}/lab/package.json` is a registered source file exception. The most
+specific matching entry wins, so the rest of `src/` is unchanged. The
+`private_dataset_directories` policy names the dataset folders (`data/`, `media/`,
+`still/`) that must never appear below the lab: the structure verifier rejects them
+even when force-added, and `sync_layout` derives matching ignore rules.
+
+Feature tests live directly in `authoring/`, `browser/`, `lab/`, `rendering/`,
 `tools/editions/`, and `tools/verification/`. Pytest uses importlib mode with qualified test imports. Both pytest and the historical
 `python3 -m unittest discover -s tests` command discover these suites.
 

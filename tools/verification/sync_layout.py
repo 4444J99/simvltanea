@@ -17,7 +17,10 @@ def ignore_block(layout: Layout) -> str:
     lines += ['!/' + path for path in sorted(layout.policy_paths('allowed_lane_placeholders'))]
     lines += ['/' + path + '/' for path in sorted(layout.policy_paths('proof_output_directories'))]
     raw = layout.relative('archive') + '/raw'
-    lines += ['/' + raw + '/*', '!/' + raw + '/README.md', '!/' + raw + '/.gitkeep', _END]
+    lines += ['/' + raw + '/*', '!/' + raw + '/README.md', '!/' + raw + '/.gitkeep']
+    for base, names in sorted(layout.policy.get('private_dataset_directories', {}).items()):
+        lines += ['/' + layout.expand(base) + '/**/' + name + '/' for name in sorted(names)]
+    lines += [_END]
     return '\n'.join(lines) + '\n'
 
 

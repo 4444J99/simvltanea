@@ -194,6 +194,27 @@ class RepositoryStructureTests(unittest.TestCase):
                 self.assertIn(path, reported, violations)
         self.assertEqual(violations, sorted(violations))
 
+    def test_lab_web_files_are_scoped_and_lab_datasets_are_rejected(self):
+        allowed = ("src/simvltanea/lab/app/index.html", "src/simvltanea/lab/app/lab.css",
+                   "src/simvltanea/lab/app/main.js", "src/simvltanea/lab/tests/unit/engine.test.mjs",
+                   "src/simvltanea/lab/package.json")
+        rejected = ("src/simvltanea/browser/page.html", "src/simvltanea/lab.css", "src/simvltanea/lab/clips.json",
+                    "src/simvltanea/lab/data/clips.json", "src/simvltanea/lab/media/clip.mp4",
+                    "src/simvltanea/lab/still/clip.jpg", "src/simvltanea/lab/app/data/notes.md",
+                    "src/simvltanea/lab/site/media/main.js")
+        for path in allowed + rejected:
+            self.write(self.root, path)
+        self.git(self.root, "add", "--all", "--force")
+        violations = structure.verify_structure(self.root)
+        reported = {path for path, _ in violations}
+        for path in allowed:
+            with self.subTest(allowed=path):
+                self.assertNotIn(path, reported, violations)
+        for path in rejected:
+            with self.subTest(rejected=path):
+                self.assertIn(path, reported, violations)
+        self.assertIn("dataset folders", dict(violations)["src/simvltanea/lab/data/clips.json"])
+
     def test_test_module_names_are_enforced(self):
         for path in ("tests/helper.py", "tests/fixture_test.py", "tests/nested/helper.py"):
             self.write(self.root, path)

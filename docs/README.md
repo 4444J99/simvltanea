@@ -5,6 +5,7 @@
 - [Proxy clips](authoring/PROXY_CLIPS.md): small, browser-playable copies of phone clips
 - [Layout presets](authoring/LAYOUT_PRESETS.md): full-bleed strips for 1 to 12 loops, zoom tied to the count, and authored pairs for 2 to 7
 - [Browser studio](authoring/BROWSER_STUDIO.md): play your own 2 to 7 loops at once in a static, client-only page
+- [The lab](authoring/LAB.md): a playable, modular-synth-style instrument for many loops at once, with every parameter a live control
 - [Configurable layout](governance/LAYOUT.md)
 - [Structure](governance/STRUCTURE.md), [naming](governance/NAMING.md), [branches](governance/BRANCHES.md), and [status](governance/STATUS.md)
 - [Provenance](provenance/PROVENANCE.md) and [recovery](provenance/RECOVERY.md)

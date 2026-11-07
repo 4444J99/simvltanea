@@ -1,0 +1,9 @@
+{
+  "name": "simvltanea-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:unit": "node --test tests/unit/*.test.mjs",
+    "docs": "node scripts/gen_config_reference.mjs"
+  }
+}
