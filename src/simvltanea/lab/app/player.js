@@ -26,6 +26,7 @@ export class Player {
     this.tokenSeq = 0; this.frameNo = 0; this.lastTs = 0;
     this.autoSeed = (Math.floor(Math.random() * 999998) + 1);
     this.seed = 0; this.levels = [];
+    this._lastSeedParam = 0; this._audioStartPromise = null;
     this.reveal = null; this.lastSpeed = 1;
     this.framer = new Framer(); this.frameSig = ''; this.frameSeed = null; this.framingDirty = true;
     this.mq = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -56,6 +57,7 @@ export class Player {
     this.rejected = this.records.rejected;
     this.dataVersion = json.version;
     this.seed = this.store.get('source.seed') || this.autoSeed;
+    this._lastSeedParam = this.store.get('source.seed') || 0;
     this.eff = this.store.effective(0);
     this.sched = new Scheduler(this.records, this.eff, this.eff['layout.panels'], this.seed);
     this.measure();
@@ -111,7 +113,7 @@ export class Player {
     const solo = el('button', 'pbtn psolo', { type: 'button', 'aria-label': `Solo panel ${k + 1}`, 'aria-pressed': 'false', title: 'Solo' }); solo.textContent = 'S';
     tools.append(idx, mute, solo);
     root.append(vu, tools);
-    const panel = { k, root, slots, active: -1, rec: null, vu, mute, solo, bus: null, analyser: null, panner: null, buf: null, level: 0, pan: 0, size: 1, rect: null, lastBox: '', fx: null };
+    const panel = { k, root, slots, active: -1, rec: null, vu, mute, solo, bus: null, analyser: null, panner: null, buf: null, level: 0, pan: 0, size: 1, rect: null, lastBox: '', fx: null, filter: null, ecoGain: null, eco: { age: 0, fatigue: 0, prominence: 0 }, promWeight: 1, promVel: 0 };
     root.addEventListener('click', (e) => { if (!e.target.closest('.ptools')) this.openReveal(panel.k); });
     root.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target === root) { e.preventDefault(); this.openReveal(panel.k); } });
     mute.addEventListener('click', (e) => { e.stopPropagation(); this.toggleList('audio.muted_panels', panel.k + 1); });
@@ -186,13 +188,29 @@ export class Player {
   }
 
   // ---- layout ----
-  _layoutPass(wall) {
+  _layoutPass(clock) {
     const e = this.eff, n = this.panels.length;
     if (!this.W || !this.H || !n) return;
-    const sig = [this.W, this.H, n, e['layout.direction'], e['layout.split'], e['layout.split_custom'].join(','), e['layout.overlap'], this.seed, e['layout.radius'], e['audio.size_gain']].join('|');
+    const promMode = !!e['layout.prominence'];
+    const promDigest = promMode ? this.panels.map((p) => (p.promWeight || 1).toFixed(2)).join(',') : '';
+    const sig = [this.W, this.H, n, e['layout.direction'], e['layout.split'], e['layout.split_custom'].join(','), e['layout.overlap'], this.seed, e['layout.radius'], e['audio.size_gain'], promDigest].join('|');
     if (sig !== this.layoutSig) {
       this.layoutSig = sig;
-      this.layout = computeLayout({ W: this.W, H: this.H, n, direction: e['layout.direction'], split: e['layout.split'], custom: e['layout.split_custom'], overlap: e['layout.overlap'], seed: this.seed });
+      let promWeights = null;
+      if (promMode) {
+        const dt = 1 / 60;
+        for (const p of this.panels) {
+          const target = e['audio.ecology'] ? (p.eco?.prominence ?? 1) : (0.5 + (p.level || 0) * 1.85);
+          const t = Math.max(0.1, Math.min(2.35, target));
+          const omega = 2.0, damp = 1.0;
+          const diff = t - (p.promWeight || 1);
+          p.promVel = (p.promVel || 0) + (omega * omega * diff - 2 * damp * omega * (p.promVel || 0)) * dt;
+          p.promWeight = (p.promWeight || 1) + (p.promVel || 0) * dt;
+          p.promWeight = Math.max(0.3, Math.min(2.35, p.promWeight));
+        }
+        promWeights = this.panels.map((p) => p.promWeight);
+      }
+      this.layout = computeLayout({ W: this.W, H: this.H, n, direction: e['layout.direction'], split: e['layout.split'], custom: e['layout.split_custom'], overlap: e['layout.overlap'], seed: this.seed, weights: promWeights });
       this.layout.rects.forEach((r, i) => {
         const p = this.panels[i], s = p.root.style;
         s.left = r.x + 'px'; s.top = r.y + 'px'; s.width = r.w + 'px'; s.height = r.h + 'px';
@@ -230,9 +248,9 @@ export class Player {
           if (si === p.active && s.holdN !== n) { s.path = nextHold(s.path, this.t - s.t0, ctx, reduced); s.t0 = this.t; s.holdN = n; }
           win = driftWindowAt(s.path, this.t - s.t0, ctx, reduced);
         }
-        const f = focalPoint(mode, key, wall, e['zoom.drift_speed']);
+        const f = focalPoint(mode, key, clock, e['zoom.drift_speed']);
         const rw = renderWindow({ mode: s.win.mode, win, baseZoom: zoom, minZoom: ctx.minZoom, srcAspect: ctx.srcAspect, cellAspect: ctx.cellAspect, focal: f, staticFocal: focalPoint('static', key), wander: !s.path });
-        const jn = jAmp > 0 ? lfo('random', wall, e['layout.jitter_rate'], 'jit' + p.k) : 0;
+        const jn = jAmp > 0 ? lfo('random', clock, e['layout.jitter_rate'], 'jit' + p.k) : 0;
         const fit = fitVideo({ cw: r.w, ch: r.h, vw: s.vw, vh: s.vh, zoom: rw.zoom, focal: rw.focal, axis, jitterAmp: jAmp, jitterNow: jn });
         s.cur = windowFromFit(fit, r.w, r.h);
         s.curWin = win;
@@ -306,23 +324,36 @@ export class Player {
 
   // ---- audio ----
   async startAudio() {
-    if (this.audio.started) return true;
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return false;
-    const ctx = new Ctx({ latencyHint: 'interactive' });
-    try { await ctx.resume(); } catch { /* resumed later by the gesture */ }
-    const master = ctx.createGain();
-    const comp = ctx.createDynamicsCompressor();
-    master.connect(comp); comp.connect(ctx.destination);
-    this.audio = { started: true, ctx, master, comp, lastLimiter: '' };
-    for (const p of this.panels) {
-      this._ensurePanelAudio(p);
-      for (const s of p.slots) s.video.muted = this.speechMuted(s.rec);
+    if (this.audio.started) {
+      // iOS Safari can put the context into 'interrupted'/'suspended'; resume it on the gesture.
+      const ctx = this.audio.ctx;
+      if (ctx && ctx.state !== 'running') {
+        try { await ctx.resume(); } catch { /* resumed later by the gesture */ }
+      }
+      return true;
     }
-    for (const p of this.panels) { const s = p.slots[p.active]; if (s) this._audioActivate(p, s, p.slots[1 - p.active]); }
-    this._audioLayoutDirty = true;
-    this._emit({ type: 'audio' });
-    return true;
+    if (this._audioStartPromise) return this._audioStartPromise;
+    this._audioStartPromise = (async () => {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) { this._audioStartPromise = null; return false; }
+      const ctx = new Ctx({ latencyHint: 'interactive' });
+      try { await ctx.resume(); } catch { /* resumed later by the gesture */ }
+      const master = ctx.createGain();
+      const comp = ctx.createDynamicsCompressor();
+      master.connect(comp); comp.connect(ctx.destination);
+      this.audio = { started: true, ctx, master, comp, lastLimiter: '' };
+      for (const p of this.panels) {
+        this._ensurePanelAudio(p);
+        for (const s of p.slots) s.video.muted = this.speechMuted(s.rec);
+      }
+      for (const p of this.panels) { const s = p.slots[p.active]; if (s) this._audioActivate(p, s, p.slots[1 - p.active]); }
+      this._audioLayoutDirty = true;
+      this._emit({ type: 'audio' });
+      return true;
+    })();
+    const result = await this._audioStartPromise;
+    if (!result) this._audioStartPromise = null;
+    return result;
   }
 
   _ensurePanelAudio(p) {
@@ -330,14 +361,18 @@ export class Player {
     if (!p.bus) {
       p.bus = ctx.createGain(); p.panner = ctx.createStereoPanner(); p.analyser = ctx.createAnalyser();
       p.analyser.fftSize = 512; p.buf = new Float32Array(p.analyser.fftSize);
+      p.filter = ctx.createBiquadFilter(); p.filter.type = 'lowpass'; p.filter.frequency.value = 20000;
+      p.ecoGain = ctx.createGain(); p.ecoGain.gain.value = 1;
+      p.filter.connect(p.ecoGain); p.ecoGain.connect(p.bus);
       p.bus.connect(p.panner); p.panner.connect(master); p.bus.connect(p.analyser);
     }
+    if (!p.eco) p.eco = { age: 0, fatigue: 0, prominence: 0 };
     for (const s of p.slots) {
       if (s.src) continue;
       s.video.muted = this.speechMuted(s.rec);
       s.src = ctx.createMediaElementSource(s.video);
       s.gain = ctx.createGain(); s.gain.gain.value = 0;
-      s.src.connect(s.gain); s.gain.connect(p.bus);
+      s.src.connect(s.gain); s.gain.connect(p.filter);
     }
   }
 
@@ -382,10 +417,47 @@ export class Player {
       if (lim === 'off') { c.threshold.value = 0; c.ratio.value = 1; c.knee.value = 0; }
       else { c.threshold.value = e['audio.limiter_ceiling']; c.ratio.value = 20; c.knee.value = 0; c.attack.value = 0.003; c.release.value = 0.1; }
     }
-    for (const p of this.panels) {
-      if (!p.bus) continue;
+    const ecoOn = !!e['audio.ecology'];
+    const dt = 1 / 60;
+    const energies = this.panels.map((pn) => (this.silent(pn.k) ? 0 : (pn.level || 0)));
+    const prominences = new Array(this.panels.length).fill(1);
+    if (ecoOn) {
+      for (let i = 0; i < this.panels.length; i++) {
+        const pn = this.panels[i];
+        if (!pn.eco) pn.eco = { age: 0, fatigue: 0, prominence: 0 };
+        const en = energies[i];
+        pn.eco.age += dt;
+        const rate = e['audio.fatigue_rate'] ?? 0.15;
+        pn.eco.fatigue = Math.max(0, pn.eco.fatigue + (en * rate - 0.05) * dt);
+        const floor = e['audio.vitality_floor'] ?? 0.05;
+        const vitalityBid = en < floor ? (floor - en + 0.05) : 0;
+        const inhib = e['audio.inhibition'] ?? 0.4;
+        const neighbor = ((energies[i - 1] || 0) + (energies[i + 1] || 0)) / 2;
+        const raw = en * (1 / (1 + pn.eco.fatigue)) * (1 - inhib * neighbor) + vitalityBid * 0.1;
+        const tau = e['audio.prominence_tau'] ?? 0.3;
+        const alpha = dt / (tau + dt);
+        pn.eco.prominence += alpha * (Math.max(0, raw) - pn.eco.prominence);
+        prominences[i] = pn.eco.prominence;
+      }
+      let sumsq = 0;
+      for (const v of prominences) sumsq += v * v;
+      const rms = sumsq > 0 ? Math.sqrt(sumsq / prominences.length) : 1;
+      for (let i = 0; i < prominences.length; i++) prominences[i] = rms > 0 ? prominences[i] / rms : 1;
+    } else {
+      for (const pn of this.panels) if (pn.eco) { pn.eco.fatigue = 0; pn.eco.prominence = 1; }
+    }
+    this.panels.forEach((p, idx) => {
+      if (!p.bus) return;
       const g = this.silent(p.k) ? 0 : p.size;
       if (Math.abs((p.lastGain ?? -1) - g) > 1e-4) { p.bus.gain.setTargetAtTime(g, now, 0.02); p.lastGain = g; }
+      if (p.ecoGain) {
+        const target = prominences[idx];
+        if (Math.abs((p.lastEco ?? -1) - target) > 1e-4) { p.ecoGain.gain.setTargetAtTime(target, now, 0.05); p.lastEco = target; }
+      }
+      if (p.filter) {
+        const cutoff = ecoOn ? (200 + Math.min(2.5, Math.max(0, prominences[idx])) * 3000) : 20000;
+        if (Math.abs((p.lastCut ?? -1) - cutoff) > 1) { p.filter.frequency.setTargetAtTime(cutoff, now, 0.05); p.lastCut = cutoff; }
+      }
       const pan = e['audio.pan'] ? clamp(p.pan * e['audio.pan_width'], -1, 1) : 0;
       if (Math.abs((p.lastPan ?? 9) - pan) > 1e-4) { p.panner.pan.setTargetAtTime(pan, now, 0.02); p.lastPan = pan; }
       p.panValue = pan;
@@ -395,7 +467,8 @@ export class Player {
         const n = this.normGain(s.rec);
         if (Math.abs(n - s.norm) > 1e-4) { s.gain.gain.cancelScheduledValues(now); s.gain.gain.setTargetAtTime(n, now, 0.03); s.norm = n; }
       }
-    }
+    });
+
   }
 
   audioState() {
@@ -420,19 +493,21 @@ export class Player {
   _frame(ts) {
     requestAnimationFrame((t) => this._frame(t));
     const dt = Math.min(0.1, Math.max(0, (ts - this.lastTs) / 1000)); this.lastTs = ts;
-    const wall = ts / 1000;
     if (!this.paused && !this.revealPaused) this.t += dt;
-    const eff = this.store.effective(wall);
+    const eff = this.store.effective(this.t);
     this.eff = eff;
     const sch = this.sched;
     const seedParam = eff['source.seed'];
-    if (seedParam && seedParam !== this.seed) { this.seed = seedParam; sch.reseed(seedParam); }
+    if (seedParam !== this._lastSeedParam) {
+      this._lastSeedParam = seedParam;
+      if (seedParam) { this.seed = seedParam; sch.reseed(seedParam); }
+    }
     sch.setParams(eff);
     const n = eff['layout.panels'];
     if (n !== this.panels.length) this.syncPanels(n);
     if (!this.paused && !this.revealPaused) for (const c of sch.tick(this.t)) this.loadClip(c.panel, c.clip);
     else if (sch.panels.some((p) => p.clip < 0)) for (const c of sch.tick(this.t)) this.loadClip(c.panel, c.clip);
-    this._layoutPass(wall);
+    this._layoutPass(this.t);
     const speed = eff['timing.speed'];
     if (Math.abs(speed - this.lastSpeed) > 0.005) { this.lastSpeed = speed; for (const p of this.panels) for (const s of p.slots) s.video.playbackRate = speed; }
     if (this.audio.started) this._audioPass();

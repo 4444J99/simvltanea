@@ -86,14 +86,14 @@ def opaque_ids(root: pathlib.Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(path.name + ".tmp")
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(descriptor, "w") as handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(secrets.token_hex(32))
         try:
             os.link(temporary, path)  # never replace a salt another run created meanwhile
         except FileExistsError:
             pass
         temporary.unlink()
-    key = bytes.fromhex(path.read_text().strip())
+    key = bytes.fromhex(path.read_text(encoding="utf-8").strip())
     return lambda uuid: hmac.new(key, uuid.lower().encode(), hashlib.sha256).hexdigest()[:20]
 
 
@@ -183,7 +183,7 @@ def convert_still(source: pathlib.Path, target: pathlib.Path) -> bool:
 def audio_screen(root: pathlib.Path, uuid: str) -> dict:
     """Derived fields only from screen_audio.py, never the transcript; ``{"screened": false}`` without a record."""
     try:
-        record = json.loads((root / "analysis" / "audio" / f"{uuid}.json").read_text())
+        record = json.loads((root / "analysis" / "audio" / f"{uuid}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"screened": False}
     if not isinstance(record, dict) or record.get("screened") is not True:
@@ -209,9 +209,72 @@ def eligible(record) -> dict | None:
 
 def write_json(path: pathlib.Path, value) -> None:
     temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(value, separators=(",", ":")))
+    temporary.write_text(json.dumps(value, separators=(",", ":")), encoding="utf-8")
     os.replace(temporary, path)
 
+
+
+
+def rms_energy_contour(mp4: pathlib.Path, sample_rate: int = 16000, window: float = 0.1) -> list[float]:
+    """10 Hz RMS energy contour (linear, 0..1) of an MP4's audio track."""
+    if not pathlib.Path(mp4).exists():
+        return []
+    cp = subprocess.run(["ffmpeg", "-v", "error", "-i", str(mp4), "-map", "0:a:0", "-ac", "1",
+                         "-ar", str(sample_rate), "-f", "s16le", "-"], capture_output=True)
+    if cp.returncode != 0 or not cp.stdout:
+        return []
+    import array, math
+    samples = array.array("h")
+    samples.frombytes(cp.stdout)
+    if samples.byteswap is not None:
+        # ffmpeg on little-endian hosts emits little-endian PCM; ensure native order.
+        try:
+            if sys.byteorder == "big":
+                samples.byteswap()
+        except Exception:
+            pass
+    window_samples = max(1, int(sample_rate * window))
+    out: list[float] = []
+    for i in range(0, len(samples), window_samples):
+        chunk = samples[i:i + window_samples]
+        if len(chunk) < window_samples // 2:
+            break
+        acc = 0.0
+        for v in chunk:
+            acc += float(v) * float(v)
+        rms = math.sqrt(acc / len(chunk)) / 32768.0
+        out.append(round(rms, 6))
+    return out
+
+
+def build_boomerang(src: pathlib.Path, dst: pathlib.Path, has_audio: bool) -> bool:
+    """Build a forward-reverse (boomerang) MP4 from src, trimming 1 frame at each turnaround."""
+    cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(src)]
+    if has_audio:
+        fc = ("[0:v]split=2[vf][vr0];"
+              "[vf]trim=start_frame=1,setpts=PTS-STARTPTS[vf2];"
+              "[vr0]reverse,trim=start_frame=1,setpts=PTS-STARTPTS[vr2];"
+              "[vf2][vr2]concat=n=2:v=1:a=0[vout];"
+              "[0:a]asplit=2[a1][a2];"
+              "[a2]areverse,atrim=0:9999,asetpts=PTS-STARTPTS[a2r];"
+              "[a1][a2r]acrossfade=d=0.04:c1=tri:c2=tri[aout]")
+        cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", "[aout]"]
+    else:
+        fc = ("[0:v]split=2[vf][vr0];"
+              "[vf]trim=start_frame=1,setpts=PTS-STARTPTS[vf2];"
+              "[vr0]reverse,trim=start_frame=1,setpts=PTS-STARTPTS[vr2];"
+              "[vf2][vr2]concat=n=2:v=1:a=0[vout]")
+        cmd += ["-filter_complex", fc, "-map", "[vout]"]
+    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "27",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    if has_audio:
+        cmd += ["-c:a", "aac", "-b:a", "64k", "-ac", "1"]
+    cmd += [str(dst)]
+    cp = subprocess.run(cmd, capture_output=True, text=True)
+    if cp.returncode != 0 or not dst.exists():
+        dst.unlink(missing_ok=True)
+        return False
+    return True
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -219,6 +282,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"private storage root (outside the checkout, or under var/); default ${ROOT_ENV}")
     parser.add_argument("--dest", type=pathlib.Path, default=os.environ.get(DEST_ENV) or None,
                         help=f"lab dataset directory (private); default ${DEST_ENV}")
+    parser.add_argument("--boomerang", action="store_true",
+                        help="also build forward-reverse (boomerang) MP4s with a 0.04s triangular acrossfade")
     return parser
 
 
@@ -247,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
     seen_ids: set[str] = set()
     for tag_file in sorted((root / "analysis" / "tags").glob("*.json")):
         try:
-            record = json.loads(tag_file.read_text())
+            record = json.loads(tag_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             skipped += 1
             continue
@@ -283,12 +348,14 @@ def main(argv: list[str] | None = None) -> int:
         clips.append({
             "id": clip_id,
             "video": f"media/{clip_id}.mp4",
+            "boomerang": "",
             "still": f"still/{clip_id}.jpg" if jpg.exists() else "",
             "duration": round(built["duration"], 3),
             "width": geometry["display_width"], "height": geometry["display_height"],
             "orientation": geometry["orientation"],
             "has_audio": built["audio"],
             "loudness_db": mean_volume(mp4) if built["audio"] else None,
+            "energy": rms_energy_contour(mp4) if built["audio"] else [],
             "audio": audio_screen(root, uuid),
             "captured_at": original["creation"],
             "tags": {**{k: analysis.get(k) for k in TAG_KEYS},
@@ -298,10 +365,27 @@ def main(argv: list[str] | None = None) -> int:
             "features": {**{k: features.get(k) for k in FEATURE_KEYS},
                          "grid8": color_grid(mp4, built["duration"])},
         })
+    if args.boomerang:
+        for clip in clips:
+            if clip.get("boomerang"):
+                continue
+            cid = clip["id"]
+            mp4 = dest / "media" / f"{cid}.mp4"
+            bdst = dest / "media" / f"{cid}.boomerang.mp4"
+            if not bdst.exists():
+                build_boomerang(mp4, bdst, bool(clip.get("has_audio")))
+            if bdst.exists():
+                clip["boomerang"] = f"media/{cid}.boomerang.mp4"
     for sub, suffix in (("media", ".mp4"), ("still", ".jpg")):
         for path in (dest / sub).iterdir():
             if path.suffix == suffix and OPAQUE_ID_RE.fullmatch(path.stem) and path.stem not in seen_ids:
                 path.unlink()
+    if args.boomerang:
+        for path in (dest / "media").iterdir():
+            if path.suffix == ".mp4" and path.name.endswith(".boomerang.mp4"):
+                stem = path.name[: -len(".boomerang.mp4")]
+                if OPAQUE_ID_RE.fullmatch(stem) and stem not in seen_ids:
+                    path.unlink()
     write_json(dest / "data" / "clips.json", {"version": 1, "clips": clips})
     size = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file())
     print(f"lab dataset: {len(clips)} clips, {skipped} skipped, {size / 1e6:.1f} MB")

@@ -45,13 +45,19 @@ export function edgesFor(total, weights) {
   return edges;
 }
 
-export function computeLayout({ W, H, n, direction = 'auto', split = 'equal', custom = [], overlap = 0, seed = 1 }) {
+export function computeLayout({ W, H, n, direction = 'auto', split = 'equal', custom = [], overlap = 0, seed = 1, weights = null }) {
   W = Math.max(1, Math.round(W)); H = Math.max(1, Math.round(H));
   n = Math.max(1, Math.round(n));
   const axis = stripAxis(direction, W, H);
   const total = axis === 'columns' ? W : H;
-  const weights = splitWeights(n, split, custom, seed);
-  const edges = edgesFor(total, weights);
+  let _weights;
+  if (Array.isArray(weights) && weights.length === n && weights.every((x) => Number.isFinite(x) && x > 0)) {
+    const sum = weights.reduce((a, b) => a + b, 0);
+    _weights = weights.map((x) => x / sum);
+  } else {
+    _weights = splitWeights(n, split, custom, seed);
+  }
+  const edges = edgesFor(total, _weights);
   const o = Math.max(0, Math.round(overlap));
   const rects = [];
   for (let i = 0; i < n; i++) {
@@ -61,7 +67,7 @@ export function computeLayout({ W, H, n, direction = 'auto', split = 'equal', cu
     const mk = (s, e) => (axis === 'columns' ? { x: s, y: 0, w: e - s, h: H } : { x: 0, y: s, w: W, h: e - s });
     rects.push({ ...mk(a2, b2), tile: mk(a, b), index: i });
   }
-  return { W, H, axis, n, weights, edges, rects };
+  return { W, H, axis, n, weights: _weights, edges, rects };
 }
 
 // zoom(N) = max(floor, Z1 / N^gamma); manual override replaces the curve. Never below 1 (cover).

@@ -385,6 +385,9 @@ export class Scheduler {
     this.playlistPtr = 0;
     this.nextSwap = null;
     this.syncNext = null;
+    this.regime = 'STEADY_FLOW';
+    this.regimeChangedAt = 0;
+    this.lastArrival = -Infinity;
     this.bad = new Set();
     this.sig = {};
     this.P = null;
@@ -396,6 +399,7 @@ export class Scheduler {
   reseed(seed) {
     this.seed = seed >>> 0; this.rng = mulberry32(this.seed);
     this.lastEnd.fill(-Infinity); this.shown.fill(0); this.hist.fill(-1); this.serial = 0;
+    this.regime = 'STEADY_FLOW'; this.regimeChangedAt = 0; this.lastArrival = -Infinity;
     for (const pn of this.panels) pn.clip = -1;
     this._rebuildOrder();
     this.reset(this.now || 0);
@@ -460,10 +464,58 @@ export class Scheduler {
     return a + this.rng() * (b - a);
   }
   _quant(h) { const beat = this.P['timing.beat']; return Math.max(beat, Math.ceil(h / beat - 1e-9) * beat); }
+  _snapHold(h, rec) {
+    const P = this.P;
+    if (!P['timing.snap_to_loop']) return h;
+    const d = rec?.duration;
+    if (!Number.isFinite(d) || d <= 0) return h;
+    const lo = Math.max(1, P['timing.life_min'] ?? 10);
+    const hi = Math.max(lo, P['timing.life_max'] ?? 24);
+    const kMin = Math.max(1, Math.ceil(lo / d));
+    const kMax = Math.max(kMin, Math.floor(hi / d));
+    let bestK = kMin, bestDiff = Infinity;
+    for (let k = kMin; k <= kMax; k++) {
+      const diff = Math.abs(k * d - h);
+      if (diff < bestDiff) { bestDiff = diff; bestK = k; }
+    }
+    let out = bestK * d;
+    const mult = this._regimeMultiplier();
+    out = out * mult;
+    // re-snap after multiplier? keep within bounds
+    const k2 = Math.min(kMax, Math.max(kMin, Math.round(out / d)));
+    return k2 * d;
+  }
+  _regimeMultiplier() {
+    switch (this.regime) {
+      case 'SPARSE_BREATH': return 1.5;
+      case 'BURST_CHORUS': return 0.7;
+      default: return 1.0;
+    }
+  }
+  _updateRegime(now) {
+    const P = this.P;
+    const mode = P['timing.macro_regime'];
+    if (!mode || mode === 'off') { this.regime = 'STEADY_FLOW'; return; }
+    const m = String(mode).toLowerCase();
+    if (m !== 'markov') {
+      if (m.includes('sparse')) this.regime = 'SPARSE_BREATH';
+      else if (m.includes('burst')) this.regime = 'BURST_CHORUS';
+      else if (m.includes('steady')) this.regime = 'STEADY_FLOW';
+      else this.regime = 'STEADY_FLOW';
+      return;
+    }
+    if (now - this.regimeChangedAt < 20) return;
+    const r = this.rng();
+    if (this.regime === 'STEADY_FLOW') this.regime = r < 0.33 ? 'SPARSE_BREATH' : r < 0.66 ? 'BURST_CHORUS' : 'STEADY_FLOW';
+    else if (this.regime === 'SPARSE_BREATH') this.regime = r < 0.5 ? 'STEADY_FLOW' : r < 0.75 ? 'BURST_CHORUS' : 'SPARSE_BREATH';
+    else this.regime = r < 0.5 ? 'STEADY_FLOW' : r < 0.75 ? 'SPARSE_BREATH' : 'BURST_CHORUS';
+    this.regimeChangedAt = now;
+  }
 
   // Advance time. Returns [{panel, clip(record index), prev}] for panels whose clip changed.
   tick(now) {
     this.now = now;
+    this._updateRegime(now);
     const changes = [];
     if (this.pool.length === 0) return changes;
     const P = this.P;
@@ -491,6 +543,11 @@ export class Scheduler {
       dueList.sort((a, b) => a - b);
     } else {
       this.panels.forEach((pn, k) => { if (!pn.stopped && now >= pn.due) dueList.push(k); });
+      const delta = this.P['timing.delta_min'] || 0;
+      if (delta > 0 && dueList.length > 1 && now - this.lastArrival < delta) {
+        // inter-arrival guard: defer all but the earliest-due panel
+        dueList.length = 0;
+      }
     }
     for (const k of dueList) {
       const pn = this.panels[k];
@@ -508,6 +565,7 @@ export class Scheduler {
         changes.push({ panel: k, clip: r.clip, prev });
       }
       pn.n++;
+      if (r.clip >= 0 && changes.length >= 0) { this.lastArrival = now; }
       if (sync || swapI > 0) pn.due = now;
       else {
         let h = this._holdSeconds();
@@ -515,6 +573,7 @@ export class Scheduler {
           const phase = P['timing.stagger'] * ((k * 0.6180339887) % 1);
           h *= 1 - phase;
         }
+        if (r.clip >= 0) h = this._snapHold(h, this.records[r.clip]);
         pn.due = now + Math.max(0.05, h);
       }
     }
