@@ -63,6 +63,17 @@ def execute(body: str):
 
 
 class HeldSourceManifestTests(unittest.TestCase):
+    def test_diagnostic_admits_library_without_browser_globals(self):
+        # Requiring the diagnostic also imports the real Studio source. Its
+        # browser-only URL synchronization must not prevent Node verification.
+        result = execute(r'''
+const out = api.buildManifest(original, readAsset, targets);
+console.log(JSON.stringify({window: typeof window, history: typeof history,
+  document: typeof document, clips: out.manifest.clips.length}));
+''')
+        self.assertEqual(result, {'window': 'undefined', 'history': 'undefined',
+                                  'document': 'undefined', 'clips': 5})
+
     def test_query_admits_predecessor_and_three_siblings_using_canonical_indexes(self):
         result = execute(r'''
 original.clips.reverse();

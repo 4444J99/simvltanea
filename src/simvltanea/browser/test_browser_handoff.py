@@ -25,6 +25,75 @@ const state=session.watchHandoff(node,incoming,outgoing,controller.signal);
 const frame=(t,ms=50)=>{wall+=ms;state.observe(wall,t)};
 '''
 
+REPLACEMENT = r'''
+// Native media delivery is controlled; the production prime, freshness, fade,
+// promotion and rollback methods run unchanged. This tests scheduling, not a
+// claim about a native decoder's maximum latency on every machine.
+state.stop();
+const {FrameProgress}=require(process.argv[1]);
+const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve()};
+const beginReplacement=async({isRescue=true,frozen=true,duration=.2}={})=>{
+  wall=850;session.clock={simTime:.85};
+  const item={file:new Blob(['public clip']),sha256:'a'.repeat(64)},source='source-one';
+  const residentIdentity={};
+  const oldMedia=Object.assign(new EventTarget(),{currentSrc:'blob:outgoing',currentTime:0,
+    paused:false,seeking:frozen,readyState:4,error:null,style:{opacity:'1'},dataset:{loopId:'one'},
+    pause(){this.paused=true},removeAttribute(){this.currentSrc=''},load(){}});
+  Object.assign(outgoing,{media:oldMedia,sourceEpoch:1,item,weight:1,presence:.42,
+    presenceTarget:.42,spectralPriority:.7,enteredAt:0,residentIdentity,
+    callbacks:10,decoded:{mediaTime:5.4},progress:new FrameProgress(true)});
+  outgoing.progress.assign(outgoing.url,0);outgoing.progress.observe(0,5.4);
+  outgoing.progress.setForeground(true,0,true);
+  outgoing.loopSeek={id:'one',url:outgoing.url,epoch:1,attempt:{generation:1,
+    decoded:5.4,progressed:!frozen,time:.63,strategy:'pause-seek-play'}};
+  const callbacks=new Map();let frameId=0;
+  Object.assign(media,{style:{opacity:'0'},dataset:{loopId:'one'},
+    load(){this.currentSrc=this.src||''},pause(){this.paused=true},
+    removeAttribute(){this.src='';this.currentSrc=''},
+    requestVideoFrameCallback(fn){const id=++frameId;callbacks.set(id,fn);return id},
+    cancelVideoFrameCallback(id){callbacks.delete(id)}});
+  Object.assign(incoming,{progress:new FrameProgress(true),weight:0,presence:1,
+    presenceTarget:null,spectralPriority:1,enteredAt:null,callbacks:0,decoded:null});
+  Object.assign(node,{decks:[outgoing,incoming],media:oldMedia,item,source,
+    residentIdentity,birthTime:12,audio:null,box:{style:{}},resting:false});
+  let leases=0;
+  Object.assign(session,{options:{nativeLoopSeekRecovery:false},audio:{context:null,enabled:false},
+    sound:{enabled:false},sources:new Map(),events:[],effectsEnabled:false,
+    proof:{},proofAt:Infinity,proofRetired:[],proofRetiredCount:0,proofMaxGapMs:0,
+    gate:{async acquire(){assert.equal(leases++,0);return()=>{leases--}}},
+    applyLayout(){},applyDeckEffects(){},notifyDeckAudio(){},notifyAudio(){},updateAudio(){},updateNodeAudio(){}});
+  const rescue=isRescue?{outgoing,detail:{url:outgoing.url,sourceEpoch:1},
+    assert(){assert.equal(node.active,outgoing);assert.equal(session.generation,1)}}:null;
+  node.nativeRescue=rescue;
+  let outcome;
+  const pending=session.replacePrepared(node,item,source,controller.signal,duration,false,rescue,{urgent:isRescue})
+    .then(()=>{outcome='committed'},error=>{outcome=error});
+  await flush();assert.equal(node.phase,'PRIMING');
+  const present=async(t,ms=0)=>{
+    advance(ms);session.clock.simTime=wall/1000;media.currentTime=t;
+    incoming.decoded={mediaTime:t};incoming.callbacks++;incoming.progress.observe(wall,t);
+    incoming.handoff?.observe(wall,t);
+    const ready=[...callbacks.values()];callbacks.clear();
+    for(const callback of ready)callback(wall,{mediaTime:t});
+    await flush();
+  };
+  const fresh=async()=>{
+    // Recorded macOS overrun: last old frame -> first incoming frame1714ms,
+    // fresh admission1915ms, retirement2133ms. Remove avoidable fade latency;
+    // native CI must still prove the unchanged2000ms limit independently.
+    advance(864);await present(0);
+    assert.equal(session.fade,null);
+    advance(0);await flush();await present(1/30,100);
+    assert.equal(session.fade,null,'one incoming frame must not reveal a successor');
+    await present(2/30,100);
+    assert.ok(session.fade);assert.equal(node.active,outgoing);
+  };
+  const tick=async(ms)=>{advance(ms);session.clock.simTime=wall/1000;
+    session.tick(session.clock.simTime,ms/1000);await flush()};
+  return {fresh,present,tick,pending,rescue,item,source,get outcome(){return outcome},get leases(){return leases}};
+};
+'''
+
 
 class HandoffMonitorTests(unittest.TestCase):
     def run_js(self, body):
@@ -33,6 +102,46 @@ class HandoffMonitorTests(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('complete', result.stdout)
+
+    def test_delayed_frozen_rescue_uses_short_fade_and_still_proves_promoted_frames(self):
+        self.run_js(REPLACEMENT + '''const r=await beginReplacement();await r.fresh();
+await r.tick(51);
+assert.ok(session.promotion,'fresh rescue must stop retaining the frozen picture for the full200ms fade');
+assert.equal(node.active,outgoing);assert.equal(r.leases,1);
+await r.present(.1,10);assert.equal(node.active,outgoing,'one promoted frame cannot commit');
+await r.present(4/30,10);await r.pending;
+assert.equal(r.outcome,'committed');assert.equal(node.active,incoming);assert.equal(r.leases,0);
+assert.equal(node.item,r.item);assert.equal(node.source,r.source);assert.equal(node.birthTime,12);
+assert.equal(r.rescue.committed,true);
+const retired=session.proofRetired.find(row=>row.url==='blob:outgoing');
+assert.ok(retired.maxGapMs<2000);assert.ok(retired.maxGapMs>=1900,'old gap must not be reset');
+const receipt=session.events.find(event=>event.type==='native-loop-rescue-committed');
+assert.equal(receipt.admissionChanges,2);assert.equal(receipt.promotionChanges,2);
+assert.equal(receipt.admissionSeeking,false);assert.equal(receipt.promotionSeeking,false);
+assert.equal(jobs.size,0);''')
+
+    def test_short_rescue_fade_preserves_promotion_failure_rollback(self):
+        self.run_js(REPLACEMENT + '''const r=await beginReplacement();await r.fresh();
+media.play=()=>Promise.reject(new DOMException('Native playback refused','NotAllowedError'));
+await r.tick(51);assert.ok(r.outcome,'failed promotion must settle after the shortened fade');await r.pending;
+assert.equal(r.outcome.name,'NotAllowedError');assert.equal(node.active,outgoing);
+assert.equal(node.media,outgoing.media);assert.equal(outgoing.url,'blob:outgoing');
+assert.equal(outgoing.weight,1);assert.equal(incoming.url,null);assert.equal(r.leases,0);
+assert.equal(session.events.some(event=>event.type==='native-loop-rescue-committed'),false);
+assert.equal(jobs.size,0);''')
+
+    def test_rescue_shortcut_preserves_ordinary_and_recovered_source_fades(self):
+        for options, expected in (
+            ('{isRescue:false,frozen:false,duration:1.2}', 1.2),
+            ('{isRescue:false,frozen:true,duration:1.2}', .2),
+            ('{isRescue:true,frozen:false,duration:.2}', .2),
+        ):
+            with self.subTest(options=options):
+                self.run_js(REPLACEMENT + f'''const r=await beginReplacement({options});await r.fresh();
+await r.tick(51);assert.ok(session.fade);assert.equal(session.fade.duration,{expected});
+assert.equal(session.promotion,null);assert.equal(node.active,outgoing);
+controller.abort();await r.pending;assert.equal(r.outcome.name,'AbortError');
+assert.equal(node.active,outgoing);assert.equal(r.leases,0);assert.equal(jobs.size,0);''')
 
     def test_freshness_needs_two_distinct_nonseeking_frames_and_fulfilled_play(self):
         self.run_js('''let ready=false;state.ready.then(()=>{ready=true},()=>{});

@@ -1,5 +1,5 @@
 // Keep the application address in sync with the embedded Watch session.
-{
+if (typeof window !== 'undefined' && typeof history !== 'undefined') {
   const originalReplace = history.replaceState.bind(history);
   history.replaceState = function(...args) {
     const result = originalReplace(...args);
