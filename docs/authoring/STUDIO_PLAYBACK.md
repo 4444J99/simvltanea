@@ -176,8 +176,24 @@ error-free element, and a running visible session. Current library boomerangs
 provide that timing; forward and personal clips do not participate. Pause,
 backgrounding, resting, and replacement or source changes in the watched slot
 invalidate the evidence. A sibling's pending replacement does not suspend the guard.
-A delayed host callback contributes at most 100 milliseconds. Another attempt
-requires decoded recovery and a newly observed loop boundary.
+A delayed host callback contributes at most 100 milliseconds. Another ordinary
+attempt requires decoded recovery and a newly observed loop boundary. Resuming
+after a cancelled attempt can establish a new attempt owned by the current
+session only if that same previously attempted source remains frozen at its seek target.
+
+If the first native attempt does not produce two nonseeking frames within another
+200 milliseconds of foreground simulation time, one standby repair can prepare
+the same cached clip through the existing global permit. It retains the outgoing
+picture until the normal freshness and promotion checks succeed, with a fade of
+at most 0.2 seconds. This is an operation budget; an occupied permit or a slow
+decoder can still delay completion. Failure retains the outgoing resident.
+
+A successful decoder repair preserves the clip, its birth time, age and presence
+settings. Its logical resident identity transfers only after verified promotion,
+so pending exports can recognize the same resident without accepting unrelated
+new admissions. Source changes, removal, pause, backgrounding and disposal cancel
+owned repair work. A sibling edit does not cancel it. The unchanged asset-timing
+requirement excludes generated built-in voices from this repair path.
 
 Proof output retains bounded attempt, recovery, rejection and interruption
 receipts, including the operation strategy and immediate native state. Recovery

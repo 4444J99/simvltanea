@@ -1208,9 +1208,14 @@
     const ownsIntent = () => token === launches && selection === requested && pool() === sourcePool;
     let published = false, attempted = false, settledCohort = null;
     const ownsCohort = value => value && r.revision === value.revision && r.plan === value.plan &&
-      r.nodes.size === value.cohort.length && value.cohort.every(({id, node, deck, item, url, epoch}) =>
-        r.nodes.get(id) === node && node.active === deck && node.item === item &&
-        deck.url === url && deck.sourceEpoch === epoch);
+      r.nodes.size === value.cohort.length && value.cohort.every(({id, node, deck, item, source, url, epoch, residentIdentity}) =>
+        r.nodes.get(id) === node && node.item === item && node.source === source &&
+        ((node.active === deck && deck.url === url && deck.sourceEpoch === epoch) ||
+          // A verified decoder rescue transfers this opaque identity without
+          // changing the resident or its bytes. A new admission cannot inherit
+          // it, and still has to satisfy the revision and intent fences above.
+          (residentIdentity && node.residentIdentity === residentIdentity &&
+            node.active?.residentIdentity === residentIdentity)));
     const finish = () => {
       if (token !== launches) return;
       if (!published && !ownsIntent()) return;
@@ -1284,7 +1289,8 @@
       const revision = r.revision;
       const cohort = plan.tracks.map(track => {
         const node = r.nodes.get(track.id), deck = node?.active;
-        return {id: track.id, node, deck, item: node?.item, url: deck?.url, epoch: deck?.sourceEpoch};
+        return {id: track.id, node, deck, item: node?.item, source: node?.source,
+          url: deck?.url, epoch: deck?.sourceEpoch, residentIdentity: node?.residentIdentity};
       });
       // Initial admission may have no outgoing resident to keep. Do not export
       // a requested source which never became a real resident.

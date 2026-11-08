@@ -1,7 +1,7 @@
 /* Opt-in native experiment setup. Never loaded by Studio or deployed. */
 'use strict';
 const {observeSources} = require('./verify_webkit_held_sources.js');
-const {ORIGIN} = require('./verify_webkit_seek_cohort.js');
+const {ORIGIN, RESCUE_POLICY, rescueAudit} = require('./verify_webkit_seek_cohort.js');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
 // Runs before Studio executes. The setter receives its newly constructed
@@ -13,6 +13,7 @@ function installStrategy({pauseBeforeSeek}) {
   Object.defineProperty(globalThis, 'compositionRuntime', {configurable: true,
     set(value) {
       if (!value?.options || value.nodes?.size) throw new Error('Strategy assignment occurred after media admission');
+      if (value.options.nativeLoopStandbyRescue === false) throw new Error('Production standby rescue must remain enabled');
       value.options.nativeLoopSeekPauseBeforeSeek = pauseBeforeSeek;
       globalThis.__seekCohort = {assignedAt: performance.now(), pauseBeforeSeek, beforeMedia: true};
       Object.defineProperty(globalThis, 'compositionRuntime', {value, writable: true, configurable: true, enumerable: true});
@@ -22,11 +23,14 @@ function installStrategy({pauseBeforeSeek}) {
 function strategySnapshot() {
   const state = globalThis.__seekCohort;
   return {pauseBeforeSeek: globalThis.compositionRuntime?.options.nativeLoopSeekPauseBeforeSeek,
+    standbyRescue: globalThis.compositionRuntime?.options.nativeLoopStandbyRescue !== false,
+    rescuePolicy: globalThis.compositionRuntime?.nativeLoopRescuePolicy?.(),
     assignedAt: state?.assignedAt, beforeMedia: state?.beforeMedia};
 }
 
 async function initialize(page, result, options) {
-  result.cohortOptions = {pauseBeforeSeek: options.pauseBeforeSeek};
+  result.cohortOptions = {pauseBeforeSeek: options.pauseBeforeSeek, standbyRescue: true,
+    recoveryChain: 1, rescuePolicy: {...RESCUE_POLICY}};
   await page.addInitScript(installStrategy, result.cohortOptions);
 }
 
@@ -70,7 +74,8 @@ function rememberSlots() {
   const runtime = globalThis.compositionRuntime;
   globalThis.__seekCohort.remembered = new Map([...runtime.nodes].map(([id, node]) => [id,
     {node, box: node.box, decks: node.decks.slice(), media: node.decks.map(deck => deck.media),
-      active: node.active, binding: node.active?.binding, item: node.item}]));
+      active: node.active, binding: node.active?.binding, item: node.item, source: node.source,
+      birth: node.birthTime, residentIdentity: node.residentIdentity}]));
 }
 
 function isolation(changedSlot) {
@@ -82,6 +87,10 @@ function isolation(changedSlot) {
   }), peersStable: [...remembered].filter(([id]) => id !== changedSlot).every(([id, old]) => {
     const node = runtime.nodes.get(id);
     return node?.active === old.active && node.item === old.item && node.active?.binding === old.binding;
+  }), logicalPeersStable: [...remembered].filter(([id]) => id !== changedSlot).every(([id, old]) => {
+    const node = runtime.nodes.get(id);
+    return node?.item === old.item && node.source === old.source && node.birthTime === old.birth &&
+      node.residentIdentity === old.residentIdentity && (node.active !== old.active || node.active?.binding === old.binding);
   })};
 }
 
@@ -117,12 +126,17 @@ function overlapSnapshot() {
     const current = runtime.nodes.get(id);
     return current.active === old.active && current.item === old.item && current.active.binding === old.binding;
   });
+  const logicalPeersStable = [...remembered].filter(([id]) => id !== 'loop-3').every(([id, old]) => {
+    const current = runtime.nodes.get(id);
+    return current.item === old.item && current.source === old.source && current.birthTime === old.birth &&
+      current.residentIdentity === old.residentIdentity && (current.active !== old.active || current.active.binding === old.binding);
+  });
   return {wall, running: runtime.running, hidden: document.hidden, audioState: runtime.audio.context?.state,
     foregroundLimit: runtime.maxForeground, populated: decks.filter(deck => deck.media.hasAttribute('src')).length,
     playing: decks.filter(deck => deck.media.hasAttribute('src') && !deck.media.paused).length,
     standbys: runtime.activeStandbys, maxStandbys: runtime.maxConcurrentStandbys,
     nodes: [...runtime.nodes.values()].map(owner => native(owner, owner.active)),
-    phase: node.phase, incoming: native(node, incoming), slotsStable, peersStable};
+    phase: node.phase, incoming: native(node, incoming), slotsStable, peersStable, logicalPeersStable};
 }
 
 async function prepare(page, {sample, pause, journal}, targets, result = {}, options) {
@@ -131,7 +145,9 @@ async function prepare(page, {sample, pause, journal}, targets, result = {}, opt
     + 'not the original wall timing, deck ages or ecological history.', origin: ORIGIN, samples: [],
     incomingObservations: [], siblingOverlap: []});
   result.strategyStart = await page.evaluate(strategySnapshot);
-  assert(result.strategyStart.beforeMedia && result.strategyStart.pauseBeforeSeek === options.pauseBeforeSeek,
+  assert(result.strategyStart.beforeMedia && result.strategyStart.pauseBeforeSeek === options.pauseBeforeSeek &&
+    result.strategyStart.standbyRescue === true && Object.entries(RESCUE_POLICY)
+      .every(([key, value]) => result.strategyStart.rescuePolicy?.[key] === value),
     'Controlled strategy was not installed before initial media');
   const capture = async () => {
     const row = await page.evaluate(sample, true); result.samples.push(row);
@@ -247,9 +263,12 @@ function interventions(result, targets) {
     aggregateEnd[counter] === all.filter(event => event.type === type).length);
   const pass = Boolean(Number.isFinite(assignedAt) && complete && !excluded.length &&
     recoveries.length === attributed.filter(event => event.type === 'native-loop-seek-recovered').length);
-  return {pass, strategy, assignedAt, status: attempts.length ? (recoveries.length ? 'RECOVERY_OBSERVED' : 'ATTEMPTED') : 'NOT_EXERCISED',
+  const rescue = rescueAudit(result, targets);
+  return {pass: pass && rescue.pass, strategy, assignedAt, rescue,
+    status: attempts.length ? (recoveries.length ? 'RECOVERY_OBSERVED' : 'ATTEMPTED') : 'NOT_EXERCISED',
     receiptSource: 'proofProgressSummary.nativeLoopSeek.receipts',
-    scope: 'Only exact cohort source epochs after strategy assignment; decoded recovery is observation, not a causal comparison.',
+    scope: 'Only exact cohort source epochs after strategy assignment. Native seek recovery and verified cached-source '
+      + 'rescue are reported separately; both arms retain the same rescue chain. Decoded recovery is observation, not a causal comparison.',
     aggregateEnd, complete: Boolean(complete), attempts, recoveries, excluded, receipts: attributed};
 }
 

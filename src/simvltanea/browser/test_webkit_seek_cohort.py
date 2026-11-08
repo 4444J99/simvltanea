@@ -108,6 +108,56 @@ const replay = {cohortOptions: {pauseBeforeSeek: true},
   samples: quartet(finalCohort, 2644)};
 '''
 
+# The predecessor is observed before its guard. The successor's native callback
+# trace independently proves two hidden frames and two post-promotion frames.
+RESCUE = r'''
+replay.cohortOptions.recoveryChain = 1;
+replay.cohortOptions.standbyRescue = true;
+replay.prelude.strategyStart.standbyRescue = true;
+replay.strategyFinal.standbyRescue = true;
+const rescuePolicy = {enabled: true, graceSimSec: .2, maximumFadeSec: .2, fadeSec: .2};
+replay.cohortOptions.rescuePolicy = {...rescuePolicy};
+replay.prelude.strategyStart.rescuePolicy = {...rescuePolicy};
+replay.strategyFinal.rescuePolicy = {...rescuePolicy};
+const predecessor = replay.samples[0].nodes[3];
+const base = {id: predecessor.id, url: predecessor.progress.url, sourceEpoch: 1, deck: 1,
+  attemptedAt: 2.7, strategy: 'pause-seek-play', item: predecessor.item,
+  sha256: predecessor.sha, birth: predecessor.birth};
+const guard = {...base, type: 'native-loop-seek-recovery', wall: 2700, time: 2.7};
+const queued = {...base, type: 'native-loop-rescue-queued', wall: 2900, time: 2.9};
+const started = {...base, type: 'native-loop-rescue-started', wall: 2901, time: 2.901};
+const committed = {...base, type: 'native-loop-rescue-committed', wall: 3000, time: 3,
+  successorUrl: 'blob:http://studio.test/rescue', successorEpoch: 1, successorDeck: 0,
+  freshAfterWall: 2910, freshAfterChanges: 0, admissionChanges: 2, admissionLastWall: 2930,
+  admissionDecoded: .2, admissionSeeking: false, promotionAfterWall: 2950,
+  promotionAfterChanges: 2, promotionChanges: 2, promotionLastWall: 2970,
+  promotionDecoded: .4, promotionSeeking: false};
+const rescueReceipts = [queued, started, committed];
+const interrupted = {...base, type: 'native-loop-seek-interrupted', wall: 2999, time: 2.999,
+  reason: 'retired'};
+const freshTrace = [{wall: 2920, mediaTime: .1, changes: 1}, {wall: 2930, mediaTime: .2, changes: 2},
+  {wall: 2960, mediaTime: .3, changes: 3}, {wall: 2970, mediaTime: .4, changes: 4}];
+for (const [index, row] of quartet(finalCohort, 3055).entries()) {
+  const node = row.nodes[3]; node.deck = 0;
+  node.progress.url = committed.successorUrl;
+  node.progress.foregroundSince = committed.admissionLastWall + 1;
+  node.progress.sourceChanges = node.progress.changes = node.callbacks = 5 + index;
+  node.progress.trace = [...freshTrace, ...Array.from({length: index + 1}, (_, n) => ({
+    wall: 3055 + n * 137, mediaTime: [4.8, 4.95, .1][n], changes: 5 + n}))];
+  Object.assign(row.decks[3], {deck: 0, src: committed.successorUrl, currentSrc: committed.successorUrl,
+    callbacks: node.callbacks, progress: node.progress});
+  replay.samples.push(row);
+}
+for (const row of [...replay.prelude.samples, ...replay.samples]) {
+  const receipts = rescueReceipts.filter(event => event.wall <= row.wall);
+  row.progressSummary.nativeLoopRescue = {queued: Number(row.wall >= 2900), started: Number(row.wall >= 2901),
+    committed: Number(row.wall >= 3000), cancelled: 0, deferred: 0, dropped: 0, receipts};
+  row.progressSummary.nativeLoopSeek = {attempted: Number(row.wall >= 2700), recovered: 0, rejected: 0,
+    interrupted: Number(row.wall >= 2999), dropped: 0,
+    receipts: [guard, interrupted].filter(event => event.wall <= row.wall)};
+}
+'''
+
 
 def execute(body: str):
     completed = subprocess.run(['node', '-e', FIXTURE + body, str(HELPER)],
@@ -562,6 +612,234 @@ console.log(JSON.stringify(api.coverage(replay, targets)));
 ''')
         self.assertFalse(result['pass'])
         self.assertFalse(result['checks']['heldComposition'])
+
+
+class RescueCohortTests(unittest.TestCase):
+    def test_later_foreground_snapshot_cannot_backdate_reveal_before_admission(self):
+        result = execute(COHORT + RESCUE + r'''
+for (const row of replay.samples) for (const deck of row.decks)
+  if (deck.progress?.url === committed.successorUrl) deck.progress.foregroundSince = committed.admissionLastWall - 1;
+console.log(JSON.stringify(api.rescueAudit(replay, targets).pass));
+''')
+        self.assertFalse(result)
+
+    def test_partial_new_protocol_cannot_downgrade_to_legacy_strategy_checks(self):
+        result = execute(COHORT + r'''
+const mutations = [
+  value => {value.cohortOptions.recoveryChain = null;},
+  value => {value.cohortOptions.standbyRescue = false;},
+  value => {value.strategyFinal.rescuePolicy = {enabled: false};},
+  value => {for (const row of [...value.prelude.samples, ...value.samples])
+    row.progressSummary.nativeLoopRescue = {queued:0,started:0,committed:0,cancelled:0,deferred:0,dropped:0,receipts:[]};},
+];
+console.log(JSON.stringify(mutations.map(mutate => {
+  const value = structuredClone(replay); mutate(value);
+  return api.coverage(value, targets).checks.strategiesMatch;
+})));
+''')
+        self.assertEqual(result, [False] * 4)
+
+    def test_observed_successor_must_remain_hidden_until_its_second_fresh_frame(self):
+        result = execute(COHORT + RESCUE + r'''
+const early = replay.samples.find(row => row.wall === 2918);
+early.decks.push({id: 'loop-4', deck: 0, active: false, weight: 0, populated: true,
+  src: committed.successorUrl, currentSrc: committed.successorUrl, nativeError: null,
+  progress: {schema:1, supported:true, live:true, url:committed.successorUrl, epoch:1,
+    changes:0, sourceChanges:0, foreground:false, running:false, foregroundSince:null,
+    lastForegroundChangeWall:null, currentGapMs:0, maxGapMs:0, trace:[]}});
+const baseline = api.rescueAudit(replay, targets).pass;
+const mutations = [
+  deck => {deck.weight = 1;}, deck => {deck.weight = NaN;}, deck => {delete deck.weight;},
+  deck => {deck.active = true;}, deck => {deck.progress.foreground = true;},
+  deck => {deck.progress.running = true;}, deck => {deck.progress.foregroundSince = 2900;},
+];
+console.log(JSON.stringify({baseline, invalid: mutations.map(mutate => {
+  const value = structuredClone(replay);
+  mutate(value.samples.find(row => row.wall === 2918).decks.at(-1));
+  return api.rescueAudit(value, targets).pass;
+})}));
+''')
+        self.assertTrue(result['baseline'])
+        self.assertEqual(result['invalid'], [False] * 7)
+
+    def test_causal_attempt_and_lifecycle_times_cannot_be_missing_or_regress(self):
+        result = execute(COHORT + RESCUE + r'''
+const mutations = [
+  value => {for (const row of value.samples) {
+    for (const event of row.progressSummary.nativeLoopRescue.receipts) delete event.attemptedAt;
+    for (const event of row.progressSummary.nativeLoopSeek.receipts) {
+      delete event.attemptedAt; if (event.type === 'native-loop-seek-recovery') delete event.time;
+    }
+  }},
+  value => {for (const row of value.samples) for (const event of row.progressSummary.nativeLoopRescue.receipts) event.time = -1;},
+  value => {for (const row of value.samples) for (const event of row.progressSummary.nativeLoopRescue.receipts)
+    if (event.type.endsWith('started')) event.time = 100;},
+  value => {for (const row of value.samples) for (const event of row.progressSummary.nativeLoopSeek.receipts)
+    if (event.type.endsWith('interrupted')) delete event.time;},
+];
+console.log(JSON.stringify(mutations.map(mutate => {
+  const value = structuredClone(replay); mutate(value); return api.rescueAudit(value, targets).pass;
+})));
+''')
+        self.assertEqual(result, [False] * 4)
+
+    def test_terminal_seek_guard_cannot_authorize_a_later_rescue_commit(self):
+        result = execute(COHORT + RESCUE + r'''
+const cases = ['native-loop-seek-recovered', 'native-loop-seek-interrupted'].flatMap(type => [2800, 2950].map(wall => ({type, wall})));
+console.log(JSON.stringify(cases.map(({type, wall}) => {
+  const value = structuredClone(replay), event = {...guard, type, wall, time:wall/1000,
+    attemptedAt:guard.time, decodedChanges:2, seeking:false, reason:'source-changed'};
+  for (const row of value.samples) if (row.wall >= wall) {
+    row.progressSummary.nativeLoopSeek.receipts.push(event);
+    row.progressSummary.nativeLoopSeek[type.endsWith('recovered') ? 'recovered' : 'interrupted']++;
+  }
+  return api.rescueAudit(value, targets).pass;
+})));
+''')
+        self.assertEqual(result, [False] * 4)
+
+    def test_recovery_after_queue_may_cancel_rescue_without_authorizing_a_bridge(self):
+        result = execute(COHORT + RESCUE + r'''
+committed.type = 'native-loop-rescue-cancelled'; committed.reason = 'outgoing-recovered';
+const recovered = {...guard, type:'native-loop-seek-recovered', wall:2998, time:2.998,
+  attemptedAt:guard.time, decodedChanges:2, seeking:false};
+for (const row of replay.samples) {
+  if (row.wall >= 2998) {row.progressSummary.nativeLoopSeek.receipts.push(recovered); row.progressSummary.nativeLoopSeek.recovered = 1;}
+  if (row.wall >= 3000) {row.progressSummary.nativeLoopRescue.committed = 0; row.progressSummary.nativeLoopRescue.cancelled = 1;}
+}
+const cancelled = api.rescueAudit(replay, targets);
+committed.type = 'native-loop-rescue-deferred'; committed.reason = 'Incoming frames did not become ready';
+for (const row of replay.samples) if (row.wall >= 3000) {
+  row.progressSummary.nativeLoopRescue.cancelled = 0; row.progressSummary.nativeLoopRescue.deferred = 1;
+  row.progressSummary.nativeLoopSeek.recovered = 0;
+  row.progressSummary.nativeLoopSeek.receipts = row.progressSummary.nativeLoopSeek.receipts.filter(event => event !== recovered);
+}
+const deferred = api.rescueAudit(replay, targets);
+console.log(JSON.stringify([cancelled, deferred].map(report => ({pass:report.pass,bridges:report.bridges.length}))));
+''')
+        self.assertEqual(result, [{'pass': True, 'bridges': 0}] * 2)
+
+    def test_both_arms_require_the_recorded_production_rescue_policy(self):
+        result = execute(COHORT + RESCUE + r'''
+const mutations = [
+  value => {delete value.strategyFinal.rescuePolicy;},
+  value => {value.prelude.strategyStart.rescuePolicy.enabled = false;},
+  value => {value.strategyFinal.rescuePolicy.graceSimSec = .5;},
+  value => {value.strategyFinal.rescuePolicy.fadeSec = 1.2;},
+  value => {value.cohortOptions.rescuePolicy.maximumFadeSec = 1.2;},
+];
+console.log(JSON.stringify(mutations.map(mutate => {
+  const value = structuredClone(replay); mutate(value);
+  return api.coverage(value, targets).checks.strategiesMatch;
+})));
+''')
+        self.assertEqual(result, [False] * 5)
+
+    def test_logical_peer_claim_alone_cannot_override_a_physical_isolation_failure(self):
+        result = execute(COHORT + r'''
+replay.prelude.targetIsolation.peersStable = false;
+replay.prelude.targetIsolation.logicalPeersStable = true;
+console.log(JSON.stringify(api.coverage(replay, targets).checks));
+''')
+        self.assertFalse(result['targetIsolation'])
+
+    def test_owned_rescue_preserves_held_composition_without_rewriting_raw_observations(self):
+        result = execute(COHORT + RESCUE + r'''
+const before = JSON.stringify(replay);
+const report = api.coverage(replay, targets);
+console.log(JSON.stringify({report, unchanged: JSON.stringify(replay) === before}));
+''')
+        self.assertTrue(result['report']['pass'], result['report'])
+        self.assertTrue(result['unchanged'])
+        self.assertEqual(len(result['report']['rescueAudit']['bridges']), 1)
+        self.assertFalse(result['report']['physicalStability']['heldComposition'])
+
+    def test_owned_peer_rescue_keeps_exact_sibling_incoming_frame_ownership(self):
+        result = execute(COHORT + RESCUE + r'''
+for (const event of [guard, queued, started, committed, interrupted]) event.wall -= 1300;
+for (const key of ['freshAfterWall', 'admissionLastWall', 'promotionAfterWall', 'promotionLastWall'])
+  committed[key] -= 1300;
+for (const point of freshTrace) point.wall -= 1300;
+for (const row of [...replay.prelude.samples, ...replay.samples]) {
+  const node = row.nodes[3];
+  if (row.wall >= committed.wall) {
+    node.deck = 0; node.progress.url = committed.successorUrl;
+    node.progress.foregroundSince = committed.admissionLastWall + 1;
+    const local = 5 + Math.round((row.wall - 1822) / 137);
+    node.progress.sourceChanges = node.progress.changes = node.callbacks = local;
+    node.progress.trace = [...freshTrace, {wall: row.wall, mediaTime: node.decoded, changes: local}];
+    Object.assign(row.decks[3], {deck: 0, src: committed.successorUrl, currentSrc: committed.successorUrl,
+      callbacks: local, progress: node.progress});
+  }
+  row.progressSummary.nativeLoopRescue = {queued: Number(row.wall >= queued.wall),
+    started: Number(row.wall >= started.wall), committed: Number(row.wall >= committed.wall),
+    cancelled: 0, deferred: 0, dropped: 0, receipts: rescueReceipts.filter(event => event.wall <= row.wall)};
+  row.progressSummary.nativeLoopSeek = {attempted: Number(row.wall >= guard.wall), recovered: 0, rejected: 0,
+    interrupted: Number(row.wall >= interrupted.wall), dropped: 0,
+    receipts: [guard, interrupted].filter(event => event.wall <= row.wall)};
+}
+for (const row of replay.prelude.incomingObservations) {
+  row.peersStable = false; row.logicalPeersStable = true;
+}
+replay.prelude.siblingIsolation.peersStable = false;
+replay.prelude.siblingIsolation.logicalPeersStable = true;
+const report = api.coverage(replay, targets);
+console.log(JSON.stringify({checks: report.checks, audit: report.rescueAudit, physical: report.physicalStability}));
+''')
+        self.assertTrue(result['audit']['pass'], result['audit'])
+        self.assertTrue(all(result['checks'].values()), result['checks'])
+        self.assertFalse(result['physical']['siblingIsolation'])
+        self.assertIs(result['physical'].get('siblingIncomingOverlap'), False)
+
+    def test_unproven_rescue_cannot_authorize_a_decoder_identity_change(self):
+        result = execute(COHORT + RESCUE + r'''
+const mutations = [
+  value => {for (const row of value.samples) delete row.progressSummary.nativeLoopRescue;},
+  value => {for (const row of value.samples) row.progressSummary.nativeLoopRescue.committed = 2;},
+  value => {for (const row of value.samples) row.progressSummary.nativeLoopRescue.receipts =
+    row.progressSummary.nativeLoopRescue.receipts.filter(event => event.type !== 'native-loop-rescue-started');},
+  value => {for (const row of [...value.prelude.samples, ...value.samples])
+    row.progressSummary.nativeLoopSeek.receipts = [];},
+  value => {for (const row of value.samples) for (const event of row.progressSummary.nativeLoopRescue.receipts)
+    if (event.type.endsWith('committed')) event.successorUrl = 'blob:foreign';},
+  value => {for (const row of value.samples) for (const event of row.progressSummary.nativeLoopRescue.receipts)
+    event.sha256 = targets[0].sha256;},
+  value => {for (const row of value.samples) for (const event of row.progressSummary.nativeLoopRescue.receipts)
+    if (event.type.endsWith('committed')) event.admissionChanges = 1;},
+  value => {for (const row of value.samples) for (const event of row.progressSummary.nativeLoopRescue.receipts)
+    if (event.type.endsWith('committed')) event.admissionSeeking = true;},
+  value => {for (const row of value.samples) for (const event of row.progressSummary.nativeLoopRescue.receipts)
+    if (event.type.endsWith('committed')) event.promotionChanges = 1;},
+  value => {for (const row of value.samples) for (const event of row.progressSummary.nativeLoopRescue.receipts)
+    if (event.type.endsWith('committed')) event.freshAfterWall = 2940;},
+  value => {for (const row of value.samples) for (const deck of row.decks)
+    if (deck.progress.url === committed.successorUrl) deck.progress.trace = [];},
+  value => {for (const row of value.samples) for (const deck of row.decks)
+    if (deck.progress.url === committed.successorUrl) deck.progress.trace[1].mediaTime = .1;},
+  value => {for (const row of value.samples) for (const node of row.nodes)
+    if (node.progress.url === committed.successorUrl) node.birth++;},
+];
+console.log(JSON.stringify(mutations.map(mutate => {
+  const value = structuredClone(replay); mutate(value);
+  const report = api.coverage(value, targets);
+  return {pass: report.pass, held: report.checks.heldComposition};
+})));
+''')
+        self.assertEqual(result, [{'pass': False, 'held': False}] * 13)
+
+    def test_rescue_does_not_exempt_native_hold_or_source_wrap_gates(self):
+        result = execute(COHORT + RESCUE + r'''
+const cases = [
+  ['preludeNativeProgress', value => {value.prelude.samples[0].progressSummary.maxGapMs = 2000;}],
+  ['finalSourcesSustained', value => {for (const row of value.samples) for (const node of row.nodes)
+    if (node.id === 'loop-1') node.decoded = node.progress.mediaTime = .1;}],
+];
+console.log(JSON.stringify(cases.map(([check, mutate]) => {
+  const value = structuredClone(replay); mutate(value);
+  const report = api.coverage(value, targets); return {pass: report.pass, gate: report.checks[check]};
+})));
+''')
+        self.assertEqual(result, [{'pass': False, 'gate': False}] * 2)
 
 
 if __name__ == '__main__':

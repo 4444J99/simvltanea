@@ -64,7 +64,12 @@ samples and the application's proof-only resource-retirement events. They are
 not exact browser emission timestamps. Navigation, sustained playback, controls
 and browser-closing phases remain distinguishable. Every raw error is retained.
 
-Three narrowly evidenced resource outcomes are reported separately:
+Births and natural succession follow logical residents, independently of physical
+deck ownership. A verified same-clip decoder repair preserves that identity and
+cannot satisfy the succession requirement. Its outgoing and incoming frame
+histories still contribute independently to the original continuity limits.
+
+Four narrowly evidenced resource outcomes are reported separately:
 
 - A Blob error-1 message or cancelled Blob request follows verified retirement
   of that exact URL. The retirement must record a paused element at readyState
@@ -83,6 +88,11 @@ Three narrowly evidenced resource outcomes are reported separately:
   callback counts alone are insufficient.
 - A plain cancelled HTTP fetch follows an explicit application abort of that
   exact outstanding asset request by at most 1,000 ms.
+- A cancelled hidden preparation read has the same owned deck, URL and epoch
+  through priming, parking, fresh-frame verification and successful promotion.
+  Its outgoing resident must continue progressing while the standby is parked.
+  Only an independently proven retirement console record is excluded from its
+  error association; another error for the same URL still rejects admission.
 
 Each classification retains its raw-record reference and timing or frame
 evidence. Unknown URLs, future retirements/aborts, other error types, and
@@ -212,6 +222,13 @@ including the two-second decoded hold, observation coverage, errors, native
 wraps and resource limits, remains required, together with the cohort coverage.
 The candidate controlled verdict is required; the reference arm is diagnostic.
 Neither can replace any original phase's full natural-evolution verdict.
+
+Both arms keep the same production standby-rescue policy enabled; only the
+pause-before-seek operation differs. Held composition can cross a physical
+decoder change only with a complete, source-owned repair receipt and independent
+fresh-frame and retirement evidence. Logical clip identity and birth time must
+remain unchanged. Missing, stale or unrelated bridge evidence fails coverage;
+native wraps are never inferred by joining frames from different sources.
 
 Attempt attribution uses authoritative `nativeLoopSeek` proof receipts, joined
 to exact cohort slot, source hash, URL and epoch after option assignment. The

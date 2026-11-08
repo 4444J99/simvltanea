@@ -27,8 +27,38 @@ class SeekAdapterTests(unittest.TestCase):
             const report=api.strategySnapshot();
             assert.equal(report.pauseBeforeSeek,pauseBeforeSeek);
             assert.equal(report.beforeMedia,true);
+            assert.equal(report.standbyRescue,true);
             assert.ok(Number.isFinite(report.assignedAt));
           }
+        """)
+
+    def test_control_and_candidate_cannot_silently_disable_production_rescue(self):
+        self.run_node("""
+          for (const pauseBeforeSeek of [false,true]) {
+            delete globalThis.compositionRuntime;
+            api.installStrategy({pauseBeforeSeek});
+            assert.throws(()=>{globalThis.compositionRuntime={
+              options:{nativeLoopStandbyRescue:false},nodes:new Map()};}, /rescue/);
+          }
+        """)
+
+    def test_physical_isolation_is_preserved_beside_logical_resident_evidence(self):
+        self.run_node("""
+          const nodes=new Map(Array.from({length:4},(_,index)=>{
+            const decks=[{media:{},binding:{}},{media:{},binding:{}}];
+            return ['loop-'+(index+1),{box:{},decks,active:decks[0],item:{},source:{},
+              birthTime:7,residentIdentity:{}}];
+          }));
+          globalThis.compositionRuntime={nodes};globalThis.__seekCohort={};
+          api.rememberSlots();
+          const peer=nodes.get('loop-1');peer.active=peer.decks[1];
+          let report=api.isolation('loop-4');
+          assert.equal(report.slotsStable,true);assert.equal(report.peersStable,false);
+          assert.equal(report.logicalPeersStable,true);
+          peer.birthTime++;
+          assert.equal(api.isolation('loop-4').logicalPeersStable,false);
+          peer.birthTime--;peer.active=peer.decks[0];peer.active.binding={};
+          assert.equal(api.isolation('loop-4').logicalPeersStable,false);
         """)
 
     def test_late_strategy_installation_is_rejected(self):

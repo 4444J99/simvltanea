@@ -34,7 +34,7 @@ class FailedOutgoingHandoffTests(unittest.TestCase):
             sources:indices.map((i,j)=>({id:`source-${j+1}`,sha256:items[i].sha256})),
             tracks:indices.map((_,i)=>({id:`loop-${i+1}`,spans:[{source:`source-${i+1}`}]}))});
           window.live=new SimvltaneaLive.Session(document.querySelector('#stage'),
-            {crossfadeSec:1.2,primeTimeoutMs:2000});
+            {crossfadeSec:1.2,primeTimeoutMs:2000,nativeLoopStandbyRescue:false});
           window.setClips=indices=>live.reconcile({plan:planFor(indices),items:indices.map(i=>items[i]),playing:true});
         }''', payload)
         page.evaluate('setClips([0,1])')

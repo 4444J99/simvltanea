@@ -128,12 +128,15 @@ function traceFrames(result, url) {
     invalid, nativeFailure, ambiguous: owners.size > 1};
 }
 
-function admittedPreparation(result, error) {
+function admittedPreparation(result, error, expectedRetirements) {
   // A hidden preparation can cancel an internal read just before being parked.
   // This proves a later successful admission, never that pause caused the error.
   // Generic active-source recovery retains its separate 1,000 ms deadline.
+  // Console records are classified first. A positively proven disposal of this
+  // URL does not invalidate its earlier admission; every other console error does.
   if (result.progressSchema !== 1 || error.method !== 'GET' || error.resourceType !== 'other' ||
-      result.errors?.length || (result.consoleErrors || []).some(row => row.url === error.url) ||
+      result.errors?.length || (result.consoleErrors || []).some((row, index) => row.url === error.url &&
+        !expectedRetirements.some(record => record.kind === 'consoleErrors' && record.index === index && record.url === row.url)) ||
       (result.httpErrors || []).some(row => row.url === error.url)) return null;
   const rows = result.samples, url = error.url;
   const afterIndex = rows.findIndex(row => row.wall >= error.wall);
@@ -307,7 +310,7 @@ function classifyResourceErrors(result) {
           if (proof) { classified.recoveredReads.push({...reference, frames: proof}); continue; }
         }
       }
-      const admitted = blob && cancelled && admittedPreparation(evidence, error);
+      const admitted = blob && cancelled && admittedPreparation(evidence, error, classified.expectedRetirements);
       if (admitted) { classified.admittedPreparations.push({...reference, ...admitted}); continue; }
       classified.unexpected.push(reference);
     }
@@ -390,7 +393,7 @@ function progressCoverage(result) {
 }
 
 function analyse(result) {
-  const trackers = new Map(), restTrackers = new Map(), births = new Set(), changedSlots = new Set(), holds = [];
+  const trackers = new Map(), restTrackers = new Map(), residents = new Map(), births = new Set(), changedSlots = new Set(), holds = [];
   const coverage = progressCoverage(result); let previousWall;
   const expectedSlots = (result.samples[0]?.nodes || []).map(node => node.id).sort().join(',');
   let jointMs = 0, decodedMs = 0, wraps = 0, populated = 0, playing = 0, standbys = 0;
@@ -412,7 +415,12 @@ function analyse(result) {
     for (const node of row.nodes) {
       seen.add(node.id);
       const identity = JSON.stringify([node.id, node.sha, node.deck, node.birth]);
-      births.add(identity);
+      // A cached-source decoder repair preserves the resident's lifetime.
+      // Keep physical frame ownership separate from logical succession.
+      const resident = JSON.stringify([node.id, node.item, node.sha, node.birth]);
+      births.add(resident);
+      if (residents.has(node.id) && residents.get(node.id) !== resident) changedSlots.add(node.id);
+      residents.set(node.id, resident);
       if (node.resting && row.running) {
         restingSamples++;
         if (node.paused) restingPaused++;
@@ -431,7 +439,6 @@ function analyse(result) {
       if (!Number.isFinite(node.current) || !Number.isFinite(node.decoded)) invalidMedia++;
       if (row.running && !node.resting && node.paused) unexpectedPaused++;
       const old = trackers.get(node.id);
-      if (old && old.identity !== identity) changedSlots.add(node.id);
       const eligible = row.running && !row.hidden && !node.paused;
       if (!old || old.identity !== identity || !eligible || !old.eligible || (unobserved && !native)) {
         trackers.set(node.id, {identity, eligible, current: node.current, decoded: node.decoded,
@@ -901,7 +908,8 @@ async function main() {
         subsetSha256: manifestSha256, durationPerArmMs: DURATION_MS, maximumHoldMs: MAX_HOLD_MS,
         control: {path: 'seek-cohort-control.json', pauseBeforeSeek: false, required: false},
         candidate: {path: 'seek-cohort-candidate.json', pauseBeforeSeek: true, required: true},
-        scope: 'Identical pinned source setup in Hold; only nativeLoopSeekPauseBeforeSeek differs. '
+        scope: 'Identical pinned source setup in Hold with the same production standby rescue enabled in both arms; '
+          + 'only nativeLoopSeekPauseBeforeSeek differs within that composed recovery path. '
           + 'Control is diagnostic; candidate controlled verdict and all original phase verdicts are required. '
           + 'Raw analyse verdicts remain visible; only natural succession is N/A for the separate controlled verdict.'};
       save(out, 'seek-cohort-origin.json', receipt.seekCohort);

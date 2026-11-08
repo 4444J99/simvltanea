@@ -154,6 +154,23 @@ result.requestFailures = [{wall: parkedCase.error, url: parkedUrl, method: 'GET'
 '''
 
 
+PARKED_THEN_RETIRED_BLOB = r'''
+// Native run 42457345385 held-source timings: the later ordinary retirement
+// must not invalidate a separately proven earlier preparation/admission.
+globalThis.parkedCase = {id: 'loop-4', before: 23522, error: 23548, first: 23507,
+  parked: 23693, lastPark: 25749, frames: [25928, 25959],
+  visible: 25959, promoted: 27349};
+''' + PARKED_BLOB + r'''
+parkRows[0] = makeParkRow(parkedCase.before, 'READY', true, false, false, 1, .2);
+const retiredAt = 118092;
+result.events.push({type: 'resource-retired', role: 'deck', id: parkedCase.id,
+  url: parkedUrl, wall: retiredAt, readyState: 0, paused: true});
+result.consoleErrors.push({wall: 118161, url: parkedUrl,
+  message: 'Failed to load resource: The operation couldn’t be completed. (WebKitBlobResource error 1.)'});
+parkRows.push({wall: 118200, nodes: [], decks: []});
+'''
+
+
 def classify(mutation: str = '') -> dict:
     program = FIXTURE + mutation + '\nprocess.stdout.write(JSON.stringify(analyse(result)));'
     completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
@@ -296,6 +313,47 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
                 self.assertEqual(proof['epoch'], 1)
                 self.assertEqual([frame['wall'] for frame in proof['frames']], case['frames'])
                 self.assertEqual(proof['promotedAt'], case['promoted'])
+
+    def test_proven_later_retirement_preserves_prior_preparation_admission(self):
+        summary = classify_resources(PARKED_THEN_RETIRED_BLOB)
+        self.assertTrue(summary['pass'], summary)
+        errors = summary['resourceErrors']
+        self.assertEqual(errors['recoveredReads'], [])
+        self.assertEqual(errors['expectedRetirements'], [{
+            'kind': 'consoleErrors', 'index': 0, 'url': 'blob:http://127.0.0.1/parked-loop-4',
+            'wall': 118161, 'role': 'deck', 'id': 'loop-4', 'retiredAt': 118092, 'lagMs': 69,
+        }])
+        proof = errors['admittedPreparations'][0]
+        self.assertEqual((proof['id'], proof['deck'], proof['epoch']), ('loop-4', 1, 1))
+        self.assertEqual(proof['bracket'], [23522, 23693])
+        self.assertEqual(proof['lastParkedAt'], 25749)
+        self.assertEqual([frame['wall'] for frame in proof['frames']], [25928, 25959])
+        self.assertEqual((proof['foregroundAt'], proof['promotedAt']), (25959, 27349))
+
+    def test_unproven_retirement_console_error_still_blocks_admission(self):
+        mutations = (
+            'result.events.length = 0;',
+            "result.events[0].url = 'blob:other';",
+            'result.events[0].wall = 118162;',
+            'result.events[0].wall = null;',
+            'result.events[0].readyState = 4;',
+            'result.events[0].paused = false;',
+            "result.events[0].type = 'resident';",
+            "result.events[0].role = 'unknown';",
+            "result.consoleErrors[0].message = 'Fatal network failure';",
+            'result.consoleErrors[0].wall = parkedCase.error;',
+            "parkRows.at(-1).decks = [{populated: true, active: false, src: parkedUrl}];",
+            "parkRows.at(-1).decks = [{populated: true, active: true, src: '', currentSrc: parkedUrl}];",
+            "result.consoleErrors.push({...result.consoleErrors[0], wall: parkedCase.error});",
+            "result.consoleErrors.push({...result.consoleErrors[0], message: 'Fatal decoder failure'});",
+            "result.httpErrors.push({wall: parkedCase.error, url: parkedUrl, status: 500});",
+            "parkRows[2].decks[1].nativeError = {code: 3};",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                summary = classify_resources(PARKED_THEN_RETIRED_BLOB + mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
 
     def test_hidden_preparation_requires_every_ownership_parking_and_admission_fact(self):
         mutations = (

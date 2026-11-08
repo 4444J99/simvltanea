@@ -38,6 +38,7 @@ const RAW_CHECKS = ['completed', 'noFailure', 'fullDuration', 'enoughSamples', '
 const COVERAGE_CHECKS = ['initialSet', 'targetSet', 'targetIsolation', 'siblingSet', 'siblingIsolation',
   'siblingIncomingOverlap', 'preludeResources', 'preludeNativeProgress', 'allSourcesDecodedAndWrapped',
   'finalSourcesSustained', 'heldComposition', 'strategiesMatch'];
+const RESCUE_POLICY = Object.freeze({enabled: true, graceSimSec: .2, maximumFadeSec: .2, fadeSec: .2});
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
@@ -96,12 +97,192 @@ function cohortSet(row, selected) {
     }));
 }
 
-function cohortPeersStable(before, after, slots) {
+// Version 1 observes the production recovery chain in both arms. A physical
+// identity change requires source-owned receipts AND independent native frames;
+// neither a logical item match nor a reported commit can authorize it alone.
+function rescueAudit(result, targets) {
+  const report = {pass: false, contract: result?.cohortOptions?.recoveryChain ?? null,
+    complete: false, receipts: [], bridges: [], issues: []};
+  const rows = [...(result?.prelude?.samples || []), ...(result?.samples || [])];
+  if (report.contract === null) {
+    const partial = [result?.cohortOptions, result?.prelude?.strategyStart, result?.strategyFinal]
+      .some(value => value && ['recoveryChain', 'standbyRescue', 'rescuePolicy'].some(key => Object.hasOwn(value, key))) ||
+      rows.some(row => Object.hasOwn(row.progressSummary || {}, 'nativeLoopRescue'));
+    report.pass = report.complete = !partial;
+    if (partial) report.issues.push('partial recovery chain protocol cannot use legacy checks');
+    return report; // Archived protocols retain exact physical isolation.
+  }
+  const fail = reason => { if (!report.issues.includes(reason)) report.issues.push(reason); };
+  const timestamp = value => Number.isFinite(value) && value >= 0;
+  const counts = {queued: 'native-loop-rescue-queued', started: 'native-loop-rescue-started',
+    committed: 'native-loop-rescue-committed', cancelled: 'native-loop-rescue-cancelled',
+    deferred: 'native-loop-rescue-deferred'};
+  const events = new Map(), guards = new Map();
+  const attemptKey = event => JSON.stringify([event.id, event.url, event.sourceEpoch, event.attemptedAt]);
+  const sourceKey = (id, deck, url, epoch) => JSON.stringify([id, deck, url, epoch]);
+  const assignedAt = result?.prelude?.strategyStart?.assignedAt;
+  const strategy = result?.cohortOptions?.pauseBeforeSeek === false ? 'seek-play' : 'pause-seek-play';
+  if (report.contract !== 1 || result.cohortOptions.standbyRescue !== true ||
+      result.prelude?.strategyStart?.standbyRescue !== true || result.strategyFinal?.standbyRescue !== true ||
+      !timestamp(assignedAt)) fail('recovery chain strategy missing or disabled');
+  if (![result.cohortOptions.rescuePolicy, result.prelude?.strategyStart?.rescuePolicy, result.strategyFinal?.rescuePolicy]
+      .every(policy => policy && Object.entries(RESCUE_POLICY).every(([key, value]) => policy[key] === value)))
+    fail('recovery chain policy missing or changed');
+  let previous;
+  for (const row of rows) {
+    const summary = row.progressSummary?.nativeLoopRescue;
+    if (!summary || !Array.isArray(summary.receipts) || summary.receipts.length > 16 ||
+        ![...Object.keys(counts), 'dropped'].every(key => Number.isSafeInteger(summary[key]) && summary[key] >= 0 &&
+          (!previous || summary[key] >= previous[key]))) { fail('missing or regressed rescue counters'); continue; }
+    previous = summary;
+    for (const event of summary.receipts) {
+      if (!event) { fail('invalid rescue receipt'); continue; }
+      const key = JSON.stringify([event.type, event.id, event.url, event.sourceEpoch, event.wall]);
+      if (!Object.values(counts).includes(event.type) || ![event.wall, event.time, event.attemptedAt].every(timestamp) ||
+          event.time < event.attemptedAt ||
+          event.wall < assignedAt || event.wall > row.wall ||
+          (events.has(key) && JSON.stringify(events.get(key)) !== JSON.stringify(event))) fail('invalid rescue receipt');
+      events.set(key, event);
+    }
+    for (const event of row.progressSummary?.nativeLoopSeek?.receipts || []) {
+      if (!event) { fail('invalid seek receipt'); continue; }
+      const key = JSON.stringify([event.type, event.id, event.url, event.sourceEpoch, event.wall]);
+      if (![event.wall, event.time].every(timestamp) || event.wall > row.wall ||
+          (['native-loop-seek-recovered', 'native-loop-seek-interrupted'].includes(event.type) &&
+            (!timestamp(event.attemptedAt) || event.time < event.attemptedAt)) ||
+          (guards.has(key) && JSON.stringify(guards.get(key)) !== JSON.stringify(event))) fail('invalid seek receipt');
+      guards.set(key, event);
+    }
+  }
+  report.receipts = [...events.values()].sort((a, b) => a.wall - b.wall);
+  report.complete = Boolean(previous && Object.entries(counts).every(([counter, type]) =>
+    previous[counter] === report.receipts.filter(event => event.type === type).length));
+  if (!report.complete) fail('rescue receipt history incomplete');
+  const groups = new Map();
+  for (const event of report.receipts) {
+    const key = attemptKey(event), group = groups.get(key) || [];
+    group.push(event); groups.set(key, group);
+  }
+  const ownedNode = (event, node, successor = false) => node.id === event.id && node.item === event.item &&
+    node.sha === event.sha256 && node.birth === event.birth && node.deck === (successor ? event.successorDeck : event.deck) &&
+    node.progress?.url === (successor ? event.successorUrl : event.url) &&
+    node.progress?.epoch === (successor ? event.successorEpoch : event.sourceEpoch) && cohortIdentity(node) !== null;
+  for (const group of groups.values()) {
+    const queued = group.filter(event => event.type === counts.queued), started = group.filter(event => event.type === counts.started);
+    const terminal = group.filter(event => [counts.committed, counts.cancelled, counts.deferred].includes(event.type));
+    const first = queued[0], end = terminal[0];
+    if (queued.length !== 1 || started.length > 1 || terminal.length !== 1 || !first || !end ||
+        end.wall < first.wall || group.some((event, index) => index > 0 && event.time < group[index - 1].time) ||
+        (started.length && (started[0].wall < first.wall || started[0].wall > end.wall))) {
+      fail('rescue lifecycle incomplete or duplicated'); continue;
+    }
+    const target = targets.find(target => target.id === first.item && target.slot === first.id && target.sha256 === first.sha256);
+    const guard = [...guards.values()].find(event => event.type === 'native-loop-seek-recovery' &&
+      event.id === first.id && event.url === first.url && event.sourceEpoch === first.sourceEpoch &&
+      timestamp(event.time) && timestamp(first.attemptedAt) && event.time === first.attemptedAt &&
+      event.strategy === strategy && event.wall >= assignedAt && event.wall < first.wall);
+    const owner = rows.filter(row => row.wall <= first.wall).at(-1)?.nodes?.find(node => ownedNode(first, node));
+    if (!target || !guard || !owner || group.some(event => event.strategy !== strategy ||
+        !['id', 'url', 'sourceEpoch', 'deck', 'attemptedAt', 'item', 'sha256', 'birth']
+          .every(key => event[key] === first[key]))) { fail('rescue lacks exact predecessor guard ownership'); continue; }
+    const seekTerminals = [...guards.values()].filter(event =>
+      ['native-loop-seek-recovered', 'native-loop-seek-interrupted'].includes(event.type) &&
+      attemptKey(event) === attemptKey(first) && event.wall <= end.wall);
+    if (seekTerminals.some(event => event.wall < first.wall)) {
+      fail('rescue guard ended before queue'); continue;
+    }
+    if (end.type !== counts.committed) continue;
+    const positive = value => Number.isSafeInteger(value) && value >= 2;
+    if (started.length !== 1 || ![0, 1].includes(end.successorDeck) || end.successorDeck === first.deck ||
+        typeof end.successorUrl !== 'string' || !end.successorUrl.startsWith('blob:') || end.successorUrl === first.url ||
+        !Number.isSafeInteger(end.successorEpoch) || end.successorEpoch < 1 ||
+        ![end.freshAfterWall, end.admissionLastWall, end.promotionAfterWall, end.promotionLastWall].every(Number.isFinite) ||
+        end.freshAfterWall < started[0].wall || end.admissionLastWall <= end.freshAfterWall ||
+        end.promotionAfterWall < end.admissionLastWall || end.promotionLastWall <= end.promotionAfterWall || end.promotionLastWall > end.wall ||
+        ![end.freshAfterChanges, end.promotionAfterChanges].every(value => Number.isSafeInteger(value) && value >= 0) ||
+        !positive(end.admissionChanges) || !positive(end.promotionChanges) ||
+        end.admissionSeeking !== false || end.promotionSeeking !== false ||
+        ![end.admissionDecoded, end.promotionDecoded].every(value => Number.isFinite(value) && value >= 0)) {
+      fail('rescue admission or promotion receipt invalid'); continue;
+    }
+    const successor = rows.filter(row => row.wall >= end.wall).flatMap(row => row.nodes || []).find(node => ownedNode(end, node, true));
+    const ownRetirement = event => event.type === 'native-loop-seek-interrupted' && event.strategy === strategy &&
+      event.reason === 'retired' && event.wall >= end.promotionLastWall && event.wall <= end.wall;
+    const interrupted = seekTerminals.some(ownRetirement);
+    if (seekTerminals.some(event => !ownRetirement(event))) {
+      fail('rescue guard ended before verified promotion'); continue;
+    }
+    if (!successor || !interrupted || rows.some(row => row.wall < end.wall && (row.nodes || []).some(node =>
+      node.progress?.url === end.successorUrl))) { fail('rescue promotion lacks observed ownership or retirement'); continue; }
+    const expected = sourceKey(end.id, end.successorDeck, end.successorUrl, end.successorEpoch);
+    const points = new Map(); let invalid = false;
+    const inspect = (progress, id, deck, capturedAt, nativeError) => {
+      if (progress?.url !== end.successorUrl) return;
+      if (sourceKey(id, deck, progress.url, progress.epoch) !== expected || nativeError ||
+          progress.schema !== 1 || progress.supported !== true ||
+          !Number.isSafeInteger(progress.changes) || !Number.isSafeInteger(progress.sourceChanges) ||
+          progress.sourceChanges < 0 || progress.changes < progress.sourceChanges ||
+          (progress.foregroundSince != null && (!timestamp(progress.foregroundSince) ||
+            progress.foregroundSince < end.admissionLastWall))) { invalid = true; return; }
+      if (!Array.isArray(progress.trace)) return;
+      if (progress.trace.length > 128 || progress.trace.length > progress.sourceChanges) { invalid = true; return; }
+      let prior;
+      for (const point of progress.trace) {
+        const local = point.changes - (progress.changes - progress.sourceChanges);
+        const old = points.get(point.changes);
+        if (!Number.isFinite(point.wall) || point.wall > capturedAt || !Number.isFinite(point.mediaTime) || point.mediaTime < 0 ||
+            !Number.isSafeInteger(local) || local < 1 || local > progress.sourceChanges ||
+            (prior && (point.wall <= prior.wall || point.changes <= prior.changes || point.mediaTime === prior.mediaTime)) ||
+            (old && (old.wall !== point.wall || old.mediaTime !== point.mediaTime || old.local !== local))) invalid = true;
+        points.set(point.changes, {...point, local}); prior = point;
+      }
+    };
+    for (const row of rows) {
+      for (const deck of row.decks || []) if (deck.progress?.url === end.successorUrl) {
+        if (deck.src !== end.successorUrl || (deck.currentSrc !== '' && deck.currentSrc !== end.successorUrl)) invalid = true;
+        // Polling need not catch a short hidden phase. Any observed successor
+        // before its independently checked admission must still be invisible.
+        if (row.wall < end.admissionLastWall && (deck.active !== false || deck.weight !== 0 ||
+            deck.progress.foreground !== false || deck.progress.running !== false ||
+            deck.progress.foregroundSince !== null || deck.progress.lastForegroundChangeWall !== null ||
+            deck.progress.currentGapMs !== 0 || deck.progress.maxGapMs !== 0)) invalid = true;
+        inspect(deck.progress, deck.id, deck.deck, row.wall, deck.nativeError);
+      }
+      for (const retired of row.progressSummary?.retired || [])
+        inspect(retired, retired.id, retired.deck, Math.min(row.wall, retired.retiredAt), retired.nativeError);
+    }
+    const frames = [...points.values()].sort((a, b) => a.wall - b.wall);
+    const witness = (wall, changes, lastWall, decoded) => {
+      const fresh = frames.filter(point => point.wall > wall && point.wall <= lastWall && point.local > changes);
+      return fresh.length >= 2 && fresh.some((point, index) => index > 0 && point.wall > fresh[index - 1].wall &&
+        point.mediaTime !== fresh[index - 1].mediaTime) && fresh.at(-1).mediaTime === decoded ? fresh : null;
+    };
+    const admission = witness(end.freshAfterWall, end.freshAfterChanges, end.admissionLastWall, end.admissionDecoded);
+    const promotion = witness(end.promotionAfterWall, end.promotionAfterChanges, end.promotionLastWall, end.promotionDecoded);
+    if (invalid || !admission || !promotion) { fail('rescue lacks independent fresh native frame witnesses'); continue; }
+    report.bridges.push({id: end.id, wall: end.wall, from: cohortIdentity(owner), to: cohortIdentity(successor),
+      receipt: end, admission, promotion});
+  }
+  report.pass = report.issues.length === 0;
+  if (!report.pass) report.bridges = [];
+  return report;
+}
+
+function cohortPeersStable(before, after, slots, bridges = []) {
   return Boolean(Array.isArray(before?.nodes) && Array.isArray(after?.nodes) && slots.every(slot => {
-    const a = cohortIdentity(before.nodes.find(node => node.id === slot));
+    let a = cohortIdentity(before.nodes.find(node => node.id === slot));
     const b = cohortIdentity(after.nodes.find(node => node.id === slot));
+    for (const bridge of bridges) if (bridge.id === slot && bridge.wall > before.wall && bridge.wall <= after.wall) {
+      if (bridge.from !== a) return false;
+      a = bridge.to;
+    }
     return a !== null && a === b;
   }));
+}
+
+function claimedIsolation(observation, before, after, slots, bridges) {
+  return observation?.peersStable === true || (observation?.logicalPeersStable === true &&
+    bridges.some(bridge => slots.includes(bridge.id) && bridge.wall > before?.wall && bridge.wall <= after?.wall));
 }
 
 function cohortResources(row) {
@@ -131,7 +312,7 @@ const cohortOverlapKey = row => {
 // Preserve normal priming observations without treating metadata or a single
 // decoded frame as overlap proof. Errors and resource excess cannot be filtered
 // out of the positive-evidence subset.
-function cohortIncomingObservations(rows, qualified, afterTarget, afterSibling, targetCohort, incomingTarget) {
+function cohortIncomingObservations(rows, qualified, afterTarget, afterSibling, targetCohort, incomingTarget, bridges = []) {
   const report = {pass: false, observations: Array.isArray(rows) ? rows.length : 0};
   const promoted = afterSibling?.nodes?.find(node => node.id === incomingTarget.slot);
   if (!Array.isArray(rows) || !rows.length || !Array.isArray(qualified) || !cohortIdentity(promoted)) return report;
@@ -141,8 +322,8 @@ function cohortIncomingObservations(rows, qualified, afterTarget, afterSibling, 
     if (!Number.isFinite(row?.wall) || row.wall < afterTarget?.wall || row.wall > afterSibling.wall ||
         (previousWall !== undefined && row.wall <= previousWall) || !cohortResources(row) ||
         row.running !== true || row.hidden !== false || row.audioState !== 'running' ||
-        row.slotsStable !== true || row.peersStable !== true || !cohortSet(row, targetCohort) ||
-        !cohortPeersStable(afterTarget, row, ['loop-1', 'loop-2', 'loop-3', 'loop-4']) ||
+        row.slotsStable !== true || !claimedIsolation(row, afterTarget, row, ['loop-1', 'loop-2', 'loop-4'], bridges) || !cohortSet(row, targetCohort) ||
+        !cohortPeersStable(afterTarget, row, ['loop-1', 'loop-2', 'loop-3', 'loop-4'], bridges) ||
         row.nodes.some(node => node.nativeError || node.progress?.schema !== 1 || node.progress.supported !== true ||
           node.progress.live !== true || ![node.progress.currentGapMs, node.progress.maxGapMs]
             .every(gap => Number.isFinite(gap) && gap >= 0 && gap < 2000)) ||
@@ -169,7 +350,7 @@ function cohortIncomingObservations(rows, qualified, afterTarget, afterSibling, 
 // to the eventual active source without borrowing the outgoing media clock.
 // FrameProgress.running gates foreground-gap accounting; an unpaused standby
 // can decode while both progress.foreground and progress.running are false.
-function overlapEvidence(rows, afterTarget, afterSibling, targetCohort, incomingTarget) {
+function overlapEvidence(rows, afterTarget, afterSibling, targetCohort, incomingTarget, bridges = []) {
   const result = {pass: false, observations: 0, advances: 0, evidence: []};
   const promoted = afterSibling?.nodes?.find(node => node.id === incomingTarget.slot);
   if (!Array.isArray(rows) || rows.length < 3 || !cohortIdentity(promoted)) return result;
@@ -180,8 +361,8 @@ function overlapEvidence(rows, afterTarget, afterSibling, targetCohort, incoming
     if (!Number.isFinite(row.wall) || row.wall < afterTarget?.wall || row.wall > afterSibling.wall ||
         !cohortResources(row) || row.populated !== 5 || row.playing !== 5 || row.standbys !== 1 ||
         row.running !== true || row.hidden !== false || row.audioState !== 'running' ||
-        row.slotsStable !== true || row.peersStable !== true ||
-        !cohortSet(row, targetCohort) || !cohortPeersStable(afterTarget, row, ['loop-1', 'loop-2', 'loop-3', 'loop-4']) ||
+        row.slotsStable !== true || !claimedIsolation(row, afterTarget, row, ['loop-1', 'loop-2', 'loop-4'], bridges) ||
+        !cohortSet(row, targetCohort) || !cohortPeersStable(afterTarget, row, ['loop-1', 'loop-2', 'loop-3', 'loop-4'], bridges) ||
         incoming?.id !== incomingTarget.slot || incoming.item !== incomingTarget.id || incoming.sha !== incomingTarget.sha256 ||
         ![0, 1].includes(incoming.deck) || incoming.paused !== false ||
         !Number.isInteger(incoming.ready) || incoming.ready < 1 || incoming.ready > 4 || incoming.nativeError ||
@@ -227,33 +408,47 @@ function coverage(result, targets = TARGETS) {
   const initial = selected(['peer-1', 'peer-2', 'sibling-resident', 'predecessor']);
   const targetCohort = selected(['peer-1', 'peer-2', 'sibling-resident', 'target']);
   const finalCohort = selected(['peer-1', 'peer-2', 'sibling-incoming', 'target']);
+  const audit = rescueAudit(result, targets), bridges = audit.bridges;
   const sources = observeSources(samples, targets), sustained = observeSources(baseline, finalCohort);
   const overlap = overlapEvidence(prelude.siblingOverlap, prelude.afterTarget, prelude.afterSibling,
-    targetCohort, targets.find(target => target.role === 'sibling-incoming'));
+    targetCohort, targets.find(target => target.role === 'sibling-incoming'), bridges);
   const incomingObservations = cohortIncomingObservations(prelude.incomingObservations, prelude.siblingOverlap,
-    prelude.afterTarget, prelude.afterSibling, targetCohort, targets.find(target => target.role === 'sibling-incoming'));
+    prelude.afterTarget, prelude.afterSibling, targetCohort, targets.find(target => target.role === 'sibling-incoming'), bridges);
   const strategy = result?.cohortOptions?.pauseBeforeSeek, assignedAt = prelude.strategyStart?.assignedAt;
   Object.assign(checks, {
     initialSet: cohortSet(prelude.before, initial),
     targetSet: cohortSet(prelude.afterTarget, targetCohort),
-    targetIsolation: prelude.targetIsolation?.slotsStable === true && prelude.targetIsolation?.peersStable === true &&
-      cohortPeersStable(prelude.before, prelude.afterTarget, ['loop-1', 'loop-2', 'loop-3']),
+    targetIsolation: prelude.targetIsolation?.slotsStable === true &&
+      claimedIsolation(prelude.targetIsolation, prelude.before, prelude.afterTarget, ['loop-1', 'loop-2', 'loop-3'], bridges) &&
+      cohortPeersStable(prelude.before, prelude.afterTarget, ['loop-1', 'loop-2', 'loop-3'], bridges),
     siblingSet: cohortSet(prelude.afterSibling, finalCohort),
-    siblingIsolation: prelude.siblingIsolation?.slotsStable === true && prelude.siblingIsolation?.peersStable === true &&
-      cohortPeersStable(prelude.afterTarget, prelude.afterSibling, ['loop-1', 'loop-2', 'loop-4']),
+    siblingIsolation: prelude.siblingIsolation?.slotsStable === true &&
+      claimedIsolation(prelude.siblingIsolation, prelude.afterTarget, prelude.afterSibling, ['loop-1', 'loop-2', 'loop-4'], bridges) &&
+      cohortPeersStable(prelude.afterTarget, prelude.afterSibling, ['loop-1', 'loop-2', 'loop-4'], bridges),
     siblingIncomingOverlap: overlap.pass && incomingObservations.pass,
     preludeResources: samples.length > 0 && samples.every(cohortResources),
     preludeNativeProgress: samples.length > 0 && samples.every(cohortNativeProgress),
     allSourcesDecodedAndWrapped: sources.length === 6 && sources.every(source => source.pass),
     finalSourcesSustained: sustained.length === 4 && sustained.every(source => source.pass),
-    heldComposition: result?.initialStudio?.evolving === false && result?.initialStudio?.loopMode === 'boomerang' &&
+    heldComposition: audit.pass && result?.initialStudio?.evolving === false && result?.initialStudio?.loopMode === 'boomerang' &&
       baseline.length > 0 && baseline.every(row => cohortSet(row, finalCohort) &&
-        cohortPeersStable(prelude.afterSibling, row, ['loop-1', 'loop-2', 'loop-3', 'loop-4'])),
+        cohortPeersStable(prelude.afterSibling, row, ['loop-1', 'loop-2', 'loop-3', 'loop-4'], bridges)),
     strategiesMatch: typeof strategy === 'boolean' && prelude.strategyStart?.pauseBeforeSeek === strategy &&
       result?.strategyFinal?.pauseBeforeSeek === strategy && Number.isFinite(assignedAt) && assignedAt >= 0 &&
-      samples.length > 0 && Number.isFinite(samples[0].wall) && assignedAt <= samples[0].wall,
+      samples.length > 0 && Number.isFinite(samples[0].wall) && assignedAt <= samples[0].wall && audit.pass,
   });
-  return {pass: Object.values(checks).every(value => value === true), checks, sources, sustained, overlap, incomingObservations};
+  const physicalStability = {
+    targetIsolation: cohortPeersStable(prelude.before, prelude.afterTarget, ['loop-1', 'loop-2', 'loop-3']),
+    siblingIsolation: cohortPeersStable(prelude.afterTarget, prelude.afterSibling, ['loop-1', 'loop-2', 'loop-4']),
+    siblingIncomingOverlap: overlapEvidence(prelude.siblingOverlap, prelude.afterTarget, prelude.afterSibling,
+      targetCohort, targets.find(target => target.role === 'sibling-incoming')).pass &&
+      cohortIncomingObservations(prelude.incomingObservations, prelude.siblingOverlap, prelude.afterTarget, prelude.afterSibling,
+        targetCohort, targets.find(target => target.role === 'sibling-incoming')).pass,
+    heldComposition: baseline.length > 0 && baseline.every(row =>
+      cohortPeersStable(prelude.afterSibling, row, ['loop-1', 'loop-2', 'loop-3', 'loop-4'])),
+  };
+  return {pass: Object.values(checks).every(value => value === true), checks, sources, sustained, overlap, incomingObservations,
+    rescueAudit: audit, physicalStability};
 }
 
-module.exports = {TARGETS, ORIGIN, buildManifest, controlledVerdict, coverage};
+module.exports = {TARGETS, ORIGIN, RESCUE_POLICY, buildManifest, controlledVerdict, coverage, rescueAudit};
