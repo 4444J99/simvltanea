@@ -164,6 +164,21 @@ The two default baselines retain ordinary population and rest coverage. A passin
 diagnostic establishes that coverage for its tested revision, not a cause or
 repair of the archived failure.
 
+## Native loop-seek recovery evidence
+
+`progressSummary.nativeLoopSeek` retains attempted, recovered, rejected and
+interrupted counts plus at most sixteen receipts in traced samples. `dropped`
+reports receipt eviction; totals survive the ordinary 256-event log. Each receipt
+identifies its source URL and epoch. Attempts include the observed native seam,
+seeking state, accumulated simulation time and forward seek target. Recovery
+requires two distinct nonseeking frames with uninterrupted source ownership.
+
+These records do not reset or exclude any frame-progress gap. A causal assessment
+must inspect the original native samples, attempt and recovery records, and the
+unchanged continuity gates. Zero attempts means the mechanism was not exercised,
+even if the run passed. Missing or evicted evidence cannot establish an otherwise
+unobserved successful recovery. Historical failures remain retained separately.
+
 ## Running on a Mac
 
 From a clean checkout, install the pinned browser in a temporary directory:

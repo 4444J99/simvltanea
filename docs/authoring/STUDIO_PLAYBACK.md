@@ -114,6 +114,29 @@ visible decks to the same existing audio context.
 If recording is unavailable and Studio uses its live canvas preview, the Filters
 control is disabled; that fallback keeps its existing image and sound behavior.
 
+## Recovery attempts for native loop seeks
+
+An observed native WebKit failure can leave a previously moving boomerang seeking
+at time zero after a loop boundary. The runtime watches the active deck from the
+simulation tick. After an observed end position and 600 milliseconds of continuous
+foreground simulation time without decoded progress, it attempts one forward seek
+to the next frame and calls play on that same element. Its source, audio routing
+and sibling decks retain their identities.
+
+The guard requires known asset frame timing, prior decoded movement, a ready and
+error-free element, and a running visible session. Current library boomerangs
+provide that timing; forward and personal clips do not participate. Pause,
+backgrounding, resting, replacement and source changes invalidate the evidence.
+A delayed host callback contributes at most 100 milliseconds. Another attempt
+requires decoded recovery and a newly observed loop boundary.
+
+Proof output retains bounded attempt, recovery, rejection and interruption
+receipts. Recovery requires two distinct decoded frames after seeking ends; a
+fulfilled play promise is insufficient. The original frame-progress history and
+two-second verification gate remain unchanged. This is a bounded recovery attempt,
+not a guarantee that the browser's native seek will complete. Native evidence must
+distinguish an exercised recovery from a passing run that never triggers it.
+
 ## Audio and asset evidence
 
 The persistent master chain includes compression, a compensated soft clipper and
