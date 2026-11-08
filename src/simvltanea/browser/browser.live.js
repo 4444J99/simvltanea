@@ -1304,10 +1304,10 @@ function applySlice(node) {
       const node = this.nodes.get(id);
       if (!node || node.resting === Boolean(resting)) return;
       node.resting = Boolean(resting); node.phase = node.resting ? 'RESTING' : 'ACTIVE';
-      if (node.resting) {
-        this.cancelNativeRescue(node, 'resting');
-        if (node.active) this.interruptLoopSeek(node.active, 'resting');
-      } else if (node.active?.loopSeek?.attempt?.interrupted) node.active.loopSeek.wakeFailedSeek = true;
+      const reason = node.resting ? 'resting' : 'waking';
+      this.cancelNativeRescue(node, reason);
+      if (node.active) this.interruptLoopSeek(node.active, reason);
+      if (!node.resting && node.active?.loopSeek?.attempt?.interrupted) node.active.loopSeek.wakeFailedSeek = true;
       node.box.style.transition = 'opacity 400ms linear'; node.box.style.opacity = node.resting ? '.35' : '1';
       // Ecological rest changes prominence, not the native playback lifecycle.
       // Keeping this foreground loop running avoids a WebKit pause/wake edge.
@@ -1383,12 +1383,12 @@ function applySlice(node) {
           !deck.item?.file || !node.item || node.nativeRescue) return;
       attempt.rescueRequested = true;
       const controller = new AbortController(), item = node.item, source = node.source;
-      const url = deck.url, epoch = deck.sourceEpoch, generation = this.generation;
+      const url = deck.url, epoch = deck.sourceEpoch, generation = this.generation, resting = Boolean(node.resting);
       const owned = () => !controller.signal.aborted && !this.disposed && this.running && !root.document?.hidden &&
         this.generation === generation && this.nodes.get(node.id) === node && node.active === deck &&
         node.item === item && node.source === source && deck.url === url && deck.sourceEpoch === epoch &&
         deck.media.currentSrc === url && deck.loopSeek === state && state.attempt === attempt &&
-        !attempt.interrupted && !node.resting && node.nativeRescue === rescue;
+        !attempt.interrupted && Boolean(node.resting) === resting && node.nativeRescue === rescue;
       const rescue = node.nativeRescue = {controller, outgoing: deck, incoming: null,
         detail: {url, sourceEpoch: epoch, deck: node.decks.indexOf(deck), attemptedAt: attempt.time,
           strategy: attempt.strategy, item: item.clip?.id || item.name || item.sha256,
@@ -1412,22 +1412,31 @@ function applySlice(node) {
         this.interruptLoopSeek(deck, 'source-changed');
         state = deck.loopSeek = {id: node.id, url: deck.url, epoch: deck.sourceEpoch, generation: this.generation,
           decoded: deck.decoded?.mediaTime, changes: 0, endSeen: false, seamCurrent: null,
+          previousCurrent: null, wrapDecoded: null, resting: Boolean(node.resting),
           stalled: 0, attempt: null, recoveryFrames: 0};
       }
       const current = media.currentTime, duration = media.duration, fps = Number(deck.item?.asset?.fps);
       const foreground = this.nodes.get(node.id) === node && node.media === media;
+      const previousCurrent = state.previousCurrent;
+      state.previousCurrent = current;
+      const presenceChanged = state.resting !== Boolean(node.resting);
+      // A native seek transiently drops to HAVE_METADATA/HAVE_CURRENT_DATA.
+      // That cannot cancel the operation we just issued. This continuation
+      // exception never admits a new repair or revives an interrupted one.
+      const bufferingSeek = state.attempt && !state.attempt.interrupted &&
+        state.attempt.generation === this.generation && media.seeking && media.readyState >= 1;
       // A sibling's awaited replacement keeps drain() open. Only this slot's
       // transition may suspend recovery of its otherwise unchanged resident.
       const eligible = this.running && !this.disposed && !root.document?.hidden &&
-        foreground && (!node.busy || node.nativeRescue?.outgoing === deck) && !node.resting && media.loop && !media.paused &&
-        media.readyState >= 3 && !media.error && media.currentSrc === state.url &&
+        foreground && (!node.busy || node.nativeRescue?.outgoing === deck) && media.loop && !media.paused &&
+        (media.readyState >= 3 || bufferingSeek) && !media.error && media.currentSrc === state.url &&
         Number.isFinite(duration) && duration > .1 && Number.isFinite(fps) && fps > 0 && 1 / fps < duration;
       const changed = Number.isFinite(deck.decoded?.mediaTime) && state.decoded !== deck.decoded.mediaTime;
       state.decoded = deck.decoded?.mediaTime;
       // A retained source may advance while its ordinary successor is being
       // prepared. Such progress invalidates the old failure even while busy.
       if (changed) state.resumedFailedSeek = false;
-      if (!eligible || state.generation !== this.generation || state.wakeFailedSeek) {
+      if (!eligible || state.generation !== this.generation || state.wakeFailedSeek || presenceChanged) {
         this.cancelNativeRescue(node, 'inactive-or-suspended');
         this.interruptLoopSeek(deck, 'inactive-or-suspended');
         if (state.generation !== this.generation || state.wakeFailedSeek) {
@@ -1443,11 +1452,16 @@ function applySlice(node) {
             media.seeking && !changed && current <= 1 / fps + .001);
           state.attempt = null; state.wakeFailedSeek = false;
         }
+        // Rest still displays a playing foreground picture. A presence change
+        // invalidates old seam authority, but a new wrap observed while resting
+        // receives the same source-owned protection as an audible resident.
+        state.resting = Boolean(node.resting); state.wrapDecoded = null;
         state.generation = this.generation; state.stalled = 0; state.endSeen = false; state.changes = 0;
         state.recoveryFrames = 0; return;
       }
       if (state.attempt && media.seeking) state.recoveryFrames = 0;
       if (changed) {
+        state.wrapDecoded = null;
         state.changes++; state.stalled = 0;
         if (state.attempt && !media.seeking && current > .001) {
           state.recoveryFrames++;
@@ -1457,7 +1471,7 @@ function applySlice(node) {
               {url: state.url, sourceEpoch: state.epoch, attemptedAt: state.attempt.time,
                 strategy: state.attempt.strategy, decodedChanges: state.recoveryFrames,
                 current, decoded: state.decoded, seeking: media.seeking});
-            state.attempt = null; state.endSeen = false; state.recoveryFrames = 0;
+            state.attempt = null; state.endSeen = false; state.wrapDecoded = null; state.recoveryFrames = 0;
           }
         }
       }
@@ -1473,15 +1487,23 @@ function applySlice(node) {
       // Native currentTime reaches the seam even when the decoded texture is
       // stale mid-clip. Require that source's observed end, never a generic
       // quiet decoder or the first seek of a newly admitted source.
+      // A native wrap can resume its clock without delivering its next frame.
+      // Retain this witnessed end -> first-frame wrap until decoded progress,
+      // rather than requiring currentTime to remain exactly zero throughout.
+      if (state.endSeen && state.changes >= 2 && Number.isFinite(previousCurrent) &&
+          current < previousCurrent && !media.seeking && state.decoded >= 0 && state.decoded <= 1 / fps)
+        state.wrapDecoded = state.decoded;
       if (!media.seeking && current >= duration - 2 / fps && state.changes >= 2) {
         state.endSeen = true; state.seamCurrent = current;
       } else if (changed && !media.seeking && current > .001) state.endSeen = false;
       const provenSeam = current <= .001 && state.endSeen && state.changes >= 2;
+      const advancingWrap = state.wrapDecoded !== null && current > .001 && !media.seeking &&
+        state.decoded === state.wrapDecoded;
       const resumedSeek = state.resumedFailedSeek && current <= 1 / fps + .001;
       // WebKit can park at zero after an observed wrap while reporting
       // seeking=false. That flag cannot veto the proved seam's stall; a
       // resumed failed seek still requires its original seeking evidence.
-      if (!(provenSeam || (media.seeking && resumedSeek)) || state.attempt || changed) {
+      if (!(provenSeam || advancingWrap || (media.seeking && resumedSeek)) || state.attempt || changed) {
         state.stalled = 0; return;
       }
       // Count foreground simulation time, not a single delayed host callback.
@@ -1494,7 +1516,7 @@ function applySlice(node) {
       const detail = {url: state.url, sourceEpoch: state.epoch, current, seeking: media.seeking,
         decoded: state.decoded, priorSeamCurrent: state.seamCurrent, duration,
         stalledSimSec: state.stalled, target: 1 / fps, strategy, afterPause: null,
-        resumedFailedSeek: Boolean(resumedSeek)};
+        resumedFailedSeek: Boolean(resumedSeek), advancingWrap};
       state.resumedFailedSeek = false;
       const stillOwned = () => !this.disposed && this.nodes.get(node.id) === node && node.active === deck &&
         deck.loopSeek === state && deck.url === state.url && deck.sourceEpoch === state.epoch &&

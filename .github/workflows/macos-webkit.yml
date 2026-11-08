@@ -51,6 +51,14 @@ jobs:
           set -euo pipefail
           python3 -m tools.publishing.build_studio_site --output var/site/macos-webkit 2>&1 | tee var/proofs/macos-webkit/build.log
 
+      - name: Collect separate wrap timing diagnostic
+        timeout-minutes: 4
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p var/proofs/macos-webkit/wrap-diagnostic
+          NODE_PATH="$RUNNER_TEMP/studio-webkit/node_modules" node src/simvltanea/browser/diagnose_webkit_wrap_plateau.js var/site/macos-webkit var/proofs/macos-webkit/wrap-diagnostic 2>&1 | tee var/proofs/macos-webkit/wrap-diagnostic/run.log
+
       - name: Prove sustained playback and native audio
         timeout-minutes: 22
         run: |

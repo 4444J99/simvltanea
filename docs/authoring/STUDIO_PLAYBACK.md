@@ -187,20 +187,27 @@ control is disabled; that fallback keeps its existing image and sound behavior.
 
 ## Recovery attempts for native loop seeks
 
-An observed native WebKit failure can leave a previously moving boomerang frozen
-at time zero after a loop boundary, even when `seeking` is false. The runtime watches
-the active deck from the simulation tick. After an observed end position and 600 milliseconds of continuous
+An observed native WebKit failure can leave a previously moving boomerang's first
+frame frozen after a loop boundary, even when `seeking` is false and the media
+clock advances. The runtime watches the active deck from the simulation tick.
+An observed end-to-wrap transition remains eligible only until the next distinct
+decoded frame. After 600 milliseconds of continuous
 foreground simulation time without decoded progress, it pauses that element,
 seeks forward to the next frame and calls play in the same task. Its source,
 audio routing and sibling decks retain their identities. The explicit
 `nativeLoopSeekPauseBeforeSeek: false` diagnostic control retains the former
 seek/play operation for paired native trials.
 
-The guard requires known asset frame timing, prior decoded movement, a ready and
-error-free element, and a running visible session. Current library boomerangs
+Starting a repair requires known asset frame timing, prior decoded movement, a ready and
+error-free element, and a running visible session. An issued repair retains
+ownership while that same element buffers at `readyState` 1 or 2 during its seek;
+new repairs still require `readyState >= 3`. Current library boomerangs
 provide that timing; forward and personal clips do not participate. Pause,
-backgrounding, resting, and replacement or source changes in the watched slot
+backgrounding, rest/wake transitions, and replacement or source changes in the watched slot
 invalidate the evidence. A sibling's pending replacement does not suspend the guard.
+A resting resident still displays a dimmed, playing picture; a newly observed
+wrap while it remains resting can qualify independently. Changing its rest state
+cancels the existing repair before a successor can take ownership.
 A delayed host callback contributes at most 100 milliseconds. Another ordinary
 attempt requires decoded recovery and a newly observed loop boundary. Resuming
 after a cancelled attempt can establish a new attempt owned by the current
