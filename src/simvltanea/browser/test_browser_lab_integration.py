@@ -13,14 +13,14 @@ from tools.publishing.stage_library_site import check_studio
 class EffectsLabIntegrationTests(unittest.TestCase):
     def test_lab_is_reachable_and_all_its_dependencies_are_staged(self):
         files = studio_files()
-        self.assertIn('href="workspace.html"', INDEX_HTML)
+        self.assertIn('href="./#compose"', INDEX_HTML)
         required = set(LAB_FILES)
         self.assertTrue({'lab_compiler.js', 'lab_layouts.js'} <= required)
         self.assertTrue(required <= set(files), 'The playable lab or its dependencies are missing')
         self.assertEqual(set(files), set(STUDIO_FILES))
         self.assertEqual(files['lab.html'], files['workspace.html'])
         html = files['workspace.html'].decode()
-        self.assertIn('href="index.html"', html)
+        self.assertIn('href="./#watch"', html)
         self.assertIn('aria-current="page"', html)
         for name in required - {'lab.html', 'workspace.html'}:
             self.assertIn(f'src="{name}"', html)
