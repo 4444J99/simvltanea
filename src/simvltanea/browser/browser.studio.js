@@ -1793,10 +1793,18 @@
       canReplace: eligible && !ecologicalRequest && !pendingSelection,
       canRest: !ecologicalRequest,
     });
+    let leadingProminence = 0;
+    for (let i = 0; i < residents.length; i++) {
+      if (residents[i].hasAudio && !residents[i].resting)
+        leadingProminence = Math.max(leadingProminence, out.prominence[i]);
+    }
     for (let i = 0; i < residents.length; i++) {
       const node = live.nodes.get(residents[i].id);
+      // Solo/tied leaders stay open; quieter rivals yield spectral space.
+      const spectralPriority = !residents[i].hasAudio || residents[i].resting ? 0
+        : leadingProminence > 0 ? out.prominence[i] / leadingProminence : 1;
       live.setTargetGain(node.id, out.gains[i]);
-      live.setPresence(node.id, out.presence[i]);
+      live.setPresence(node.id, out.presence[i], spectralPriority);
     }
     if (selection.family === 'strips' && !reduced && time - lastSpaceTime >= .05 &&
         residents.length === selection.loops.length && !live.draining) {

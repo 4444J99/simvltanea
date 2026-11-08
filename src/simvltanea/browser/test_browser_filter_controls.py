@@ -173,6 +173,58 @@ class FilterControlsBrowserTests(unittest.TestCase):
         self.assertNotIn('fx_curve', page.evaluate('location.search'))
         self.assertNotIn('fx_blur', page.evaluate('location.search'))
 
+    def test_ecological_energy_changes_spectrum_without_rebinding_or_visual_changes(self):
+        # Hold retirement so both independent entry envelopes become steady;
+        # the real Studio ecology subscriber continues computing competition.
+        page, _ = self.open()
+        page.locator('#speaker').click()
+        wait_for(page, "compositionRuntime.audio.context?.state==='running' && compositionRuntime.clock.simTime>1.5")
+        page.evaluate('''() => {
+          window.competitors=[...compositionRuntime.nodes.values()];
+          window.competitionContext=compositionRuntime.audio.context;
+          window.competitionIdentity=competitors.map(n=>({media:n.media,source:n.audio.source,
+            binding:n.audio,filter:n.audio.filter,image:n.media.style.filter,frames:n.callbacks}));
+          window.competitionCalls=[];
+          for(const n of competitors)for(const method of ['play','pause','load']) {
+            const native=n.media[method].bind(n.media);
+            n.media[method]=(...args)=>{competitionCalls.push(method);return native(...args)};
+          }
+          // Controlled recorded-envelope input; sourceEnergy performs its
+          // normal normalization. Do not mock ecology or AudioParam setters.
+          window.setCompetition=(left,right)=>competitors.forEach((n,i)=>{
+            const asset={...n.item.asset,has_audio:true,envelope_hz:10,
+              rms_envelope:Array(Math.ceil(n.media.duration*10)).fill([left,right][i])};
+            n.item.asset=asset;
+          });
+          setCompetition(1,0);
+        }''')
+        wait_for(page, 'competitors[0].audio.filter.frequency.value>10000 && competitors[1].audio.filter.frequency.value<5000')
+        self.assertGreater(page.evaluate('competitors[0].audio.target'), page.evaluate('competitors[1].audio.target'))
+        page.evaluate('setCompetition(0,1)')
+        wait_for(page, 'competitors[1].audio.filter.frequency.value>10000 && competitors[0].audio.filter.frequency.value<5000')
+        self.assertTrue(page.evaluate('competitors.every((n,i)=>n.media.style.filter===competitionIdentity[i].image)'))
+
+        # The strongest audible resident is neutral when its rival rests.
+        page.evaluate('compositionRuntime.setResting(competitors[1].id,true)')
+        wait_for(page, 'competitors[0].audio.filter.frequency.value>15000 && competitors[1].audio.target===0')
+        page.evaluate('compositionRuntime.setResting(competitors[1].id,false)')
+        wait_for(page, 'competitors[0].audio.filter.frequency.value<5000')
+        page.get_by_role('button', name='Filter settings', exact=True).click()
+        page.locator('#fx-lowpass').press('Home')
+        wait_for(page, "competitors.every(n=>n.audio.filter.type==='allpass')")
+        page.locator('#fx-lowpass').press('End')
+        wait_for(page, "competitors[0].audio.filter.type==='lowpass' && competitors[0].audio.filter.frequency.value<5000")
+        page.keyboard.press('Escape')
+        page.locator('#effects').click()
+        wait_for(page, "competitors.every(n=>n.audio.filter.type==='allpass')")
+        page.locator('#effects').click()
+        wait_for(page, "competitors[0].audio.filter.type==='lowpass' && competitors[0].audio.filter.frequency.value<5000")
+        self.assertTrue(page.evaluate('''competitors.every((n,i)=>n.media===competitionIdentity[i].media &&
+          n.audio===competitionIdentity[i].binding && n.audio.source===competitionIdentity[i].source &&
+          n.audio.filter===competitionIdentity[i].filter && n.callbacks>competitionIdentity[i].frames) &&
+          compositionRuntime.audio.context===competitionContext'''))
+        self.assertEqual(page.evaluate('competitionCalls'), [])
+
     def test_tuning_during_handoff_preserves_four_plus_one_touch_budget_and_siblings(self):
         page, _ = self.open('?seed=99&mix=s0.1.2.3&evolve=0', count=4)
         page.locator('#speaker').click()

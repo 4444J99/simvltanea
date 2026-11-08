@@ -55,11 +55,30 @@ deployment of either branch.
 | Generated sound | A synthesized input attached after resident promotion | Attached separate incoming/outgoing voices during the visual handoff and preserved sibling scheduling |
 | Continuity | Draft bounded seam and decoded-frame promotion repair | Integrated its regression cases and repaired pause/resume and final-fade handoff races |
 
-The inspected code established an existing spectral filter stage; it did not
-establish a separate continuously writing spectral-ducking controller to combine
-with this envelope. This implementation uses that existing stage. Bypassing
-presence stops its per-frame filter writes, including when another caller sets
-the filter directly.
+The original branch had a spectral filter stage without an ecological ducking
+controller. The integrated implementation now normalizes each audible resident's
+smoothed ecological prominence against the strongest audible, non-resting
+resident. Solo and tied leaders have priority one. The existing low-pass stage
+uses the lower of the age-presence and competition cutoff targets; gain and image
+envelopes retain their original age input. Filters off, zero Low-pass filter
+strength and reduced motion bypass both spectral inputs. Ecological gain and
+territory competition remain independent of that filter bypass.
+
+Priority belongs to the active deck. A newly prepared deck starts neutral and
+does not inherit its predecessor's suppression; retirement clears the value.
+The internal optional priority defaults to one when omitted or undefined;
+explicit invalid/nonfinite inputs become zero and finite values clamp to [0,1].
+No audio node, media element or binding is recreated for competition updates.
+
+The November 8 spectral follow-up has genuine failing regressions from before
+the wiring: the pure helper left both cutoff targets equal, and the actual Studio
+never lowered the quieter resident's cutoff after a source-energy change. After
+the wiring, 35 pure presence/settings/ecology tests and 18 staged control/runtime
+tests passed. The staged regression reverses source energy through the real
+ecology subscriber and checks cutoff reversal, resting-leader exclusion, effect
+bypass and stable media/source/filter/AudioContext identities. Separate runtime
+cases cover fresh-deck priority, independent siblings and retirement reset. These
+local checks do not replace native WebKit or physical iPhone acceptance.
 
 ## Temporal and signal contract
 

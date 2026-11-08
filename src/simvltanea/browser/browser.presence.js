@@ -45,14 +45,16 @@
     return 1 - (1 - tail) * shape((age - attack) / (duration - attack), settings);
   }
 
-  function filterTargets(presence, sampleRate = 48000, settings = DEFAULT_SETTINGS) {
+  function filterTargets(presence, sampleRate = 48000, settings = DEFAULT_SETTINGS, spectralPriority = 1) {
     settings = normalizeSettings(settings);
     const p = unit(presence);
     const rate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : 48000;
     const high = Math.min(16000, rate * .45), low = Math.min(420, high);
     const absent = 1 - p;
+    // Competition narrows only the spectrum; age still owns gain and image.
+    const spectralAbsent = 1 - Math.min(p, unit(spectralPriority));
     return {gain: 1 - settings.gainDepth * absent,
-      cutoffHz: high === low ? high : high * Math.pow(low / high, settings.lowpassDepth * absent),
+      cutoffHz: high === low ? high : high * Math.pow(low / high, settings.lowpassDepth * spectralAbsent),
       brightness: 1 - .45 * settings.brightnessDepth * absent,
       saturation: 1 - .7 * settings.saturationDepth * absent, blurPx: settings.blurPx * absent};
   }

@@ -47,9 +47,16 @@ uploads remain forward loops and never leave the device. Reduced-motion settings
 start paused and disable automatic evolution and territorial motion.
 
 Sound unlocks on a gesture. Source energy, age, neighboring prominence and fatigue
-control audible priority. Generative strips trade bounded territory; authored and
-custom geometry remains as authored. Geometry writes are throttled to 20 Hz.
+control audible priority. Sustained acoustic leaders also keep their spectrum
+open while quieter rivals receive more low-pass filtering. This spectral effect
+respects the Filters switch, Low-pass filter strength and reduced-motion bypass;
+it does not add another image or volume envelope. Generative strips trade bounded
+territory; authored and custom geometry remains as authored. Geometry writes are
+throttled to 20 Hz.
 The simulation clock pauses with playback and hidden tabs, independently of audio.
+Competition follows recorded clip energy and resident age/fatigue; synthesized
+accents inherit their resident's gain and spectral filtering. Individual synth
+note amplitudes do not feed the clip-energy model.
 
 ## Clip presence filters
 

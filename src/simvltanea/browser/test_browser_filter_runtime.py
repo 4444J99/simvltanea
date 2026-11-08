@@ -18,7 +18,7 @@ const parameter = value => ({value, calls:[],
   setTargetAtTime(v,t,tau){this.value=v;this.calls.push({v,t,tau});},
   cancelScheduledValues(){}, setValueAtTime(v){this.value=v;}});
 function deck(p, enteredAt=0, target=p) {
-  return {media:{muted:false,style:{filter:'',opacity:'1'}},weight:1,presence:p,
+  return {media:{muted:false,dataset:{},style:{filter:'',opacity:'1'}},weight:1,presence:p,spectralPriority:1,
     enteredAt,presenceTarget:target,binding:{target:0,cutoff:null,
       gain:{gain:parameter(0)},filter:{type:'lowpass',frequency:parameter(20000)}}};
 }
@@ -41,6 +41,61 @@ def execute(body):
 
 
 class FilterRuntimeModelTests(unittest.TestCase):
+    def test_ecological_priority_filters_sound_without_changing_presence_gain_or_image(self):
+        result = execute(r"""
+const s=host(), n=s.nodes.get('one'), d=n.active, sibling=s.nodes.get('two').active;
+s.setPresence('one',.7,1);
+const before={gain:d.binding.target,style:d.media.style.filter,cutoff:d.binding.cutoff};
+const other={priority:sibling.spectralPriority,cutoff:sibling.binding.cutoff,style:sibling.media.style.filter};
+s.setPresence('one',.7,.1);
+console.log(JSON.stringify({before,after:{gain:d.binding.target,style:d.media.style.filter,
+  cutoff:d.binding.cutoff,priority:d.spectralPriority},other,
+  sibling:{priority:sibling.spectralPriority,cutoff:sibling.binding.cutoff,style:sibling.media.style.filter}}));
+""")
+        self.assertEqual(result['after']['priority'], .1)
+        self.assertLess(result['after']['cutoff'], result['before']['cutoff'])
+        self.assertEqual(result['after']['gain'], result['before']['gain'])
+        self.assertEqual(result['after']['style'], result['before']['style'])
+        self.assertEqual(result['sibling'], result['other'])
+
+    def test_spectral_priority_stays_with_outgoing_deck_and_resets_on_retirement(self):
+        result = execute(r"""
+const s=host(), n=s.nodes.get('one'), outgoing=n.active, incoming=deck(0,10,null);
+n.decks.push(incoming);s.fade={node:n,incoming,outgoing,began:10,duration:2,finish(){}};
+s.setPresence('one',.4,.15);s.tick(10.6);
+const during={outgoing:outgoing.spectralPriority,incoming:incoming.spectralPriority,
+  outCutoff:outgoing.binding.cutoff,inCutoff:incoming.binding.cutoff,p:incoming.presence};
+s.unload(outgoing);
+console.log(JSON.stringify({during,retired:outgoing.spectralPriority,
+  expected:SimvltaneaPresence.filterTargets(incoming.presence,48000,s.effectSettings,1).cutoffHz}));
+""")
+        self.assertEqual(result['during']['outgoing'], .15)
+        self.assertEqual(result['during']['incoming'], 1)
+        self.assertAlmostEqual(result['during']['p'], .5)
+        self.assertAlmostEqual(result['during']['inCutoff'], result['expected'])
+        self.assertLess(result['during']['outCutoff'], result['during']['inCutoff'])
+        self.assertEqual(result['retired'], 1)
+
+    def test_spectral_priority_bounds_default_and_effect_bypass(self):
+        result = execute(r"""
+const s=host(), d=s.nodes.get('one').active, priorities=[];
+for(const value of [.3,-2,2,NaN,Infinity,undefined]){
+  s.setPresence('one',.6,value);priorities.push(d.spectralPriority);
+}
+s.setEffects(false);s.setPresence('one',.6,.2);
+const bypass={priority:d.spectralPriority,type:d.binding.filter.type,gain:d.binding.target,style:d.media.style.filter};
+s.setEffects(true);const enabled=d.binding.cutoff;
+s.setEffectSettings({lowpassDepth:0});const neutral=d.binding.filter.type;
+s.setEffectSettings({lowpassDepth:1});
+console.log(JSON.stringify({priorities,bypass,enabled,neutral,restored:d.binding.cutoff,
+  expected:SimvltaneaPresence.filterTargets(.6,48000,s.effectSettings,.2).cutoffHz}));
+""")
+        self.assertEqual(result['priorities'], [.3, 0, 1, 0, 0, 1])
+        self.assertEqual(result['bypass'], dict(priority=.2,type='allpass',gain=.8,style=''))
+        self.assertEqual(result['neutral'], 'allpass')
+        self.assertAlmostEqual(result['enabled'], result['expected'])
+        self.assertAlmostEqual(result['restored'], result['expected'])
+
     def test_effects_can_be_adjusted_independently_on_existing_decks(self):
         result = execute(r"""
 const s=host(), node=s.nodes.get('one'), active=node.active, binding=active.binding;
@@ -156,7 +211,8 @@ class FilterRuntimeBrowserTests(unittest.TestCase):
         page = self.open()
         self.unlock(page)
         page.evaluate(r"""() => {
-          live.setPresence('loop-1',.2);live.setPresence('loop-2',.8);
+          live.setPresence('loop-1',.2,.15);live.setPresence('loop-2',.8,.7);
+          live.nodes.get('loop-1').decks.find(d=>d!==live.nodes.get('loop-1').active).spectralPriority=.01;
           live.crossfadeSec=.8;window.sibling=live.nodes.get('loop-2');window.siblingMedia=sibling.media;
           window.siblingAudio=sibling.audio;window.siblingCalls=[];
           for(const name of ['play','pause','load']) {const native=siblingMedia[name].bind(siblingMedia);
@@ -166,8 +222,10 @@ class FilterRuntimeBrowserTests(unittest.TestCase):
         page.wait_for_function('Boolean(live.fade)')
         state = page.evaluate(r"""() => {
           const fade=live.fade;live.clock.pause();live.tick(fade.began+.4);
-          live.setPresence('loop-2',.6);
+          live.setPresence('loop-2',.6,.4);
           return {incoming:fade.incoming.presence,outgoing:fade.outgoing.presence,sibling:sibling.active.presence,
+            priorities:{incoming:fade.incoming.spectralPriority,outgoing:fade.outgoing.spectralPriority,
+              sibling:sibling.active.spectralPriority},
             same:sibling.media===siblingMedia && sibling.audio===siblingAudio,calls:siblingCalls,
             siblingFrames:sibling.callbacks,permit:live.snapshot().activeStandbys,
             populated:[...document.querySelectorAll('video')].filter(v=>v.getAttribute('src')).length};
@@ -175,6 +233,7 @@ class FilterRuntimeBrowserTests(unittest.TestCase):
         self.assertAlmostEqual(state['incoming'], 1 / 3)
         self.assertEqual(state['outgoing'], .2)
         self.assertEqual(state['sibling'], .6)
+        self.assertEqual(state['priorities'], dict(incoming=1,outgoing=.15,sibling=.4))
         self.assertTrue(state['same'])
         self.assertEqual(state['calls'], [])
         self.assertEqual(state['permit'], 1)
@@ -184,14 +243,15 @@ class FilterRuntimeBrowserTests(unittest.TestCase):
         self.assertEqual(page.evaluate('[...live.nodes.values()].map(n=>n.item.name)'), ['clip-2', 'clip-3'])
         self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
         self.assertEqual(page.evaluate('live.snapshot().maxConcurrentStandbys'), 1)
+        self.assertTrue(page.evaluate('[...live.nodes.values()].every(n=>n.decks.every(d=>d.spectralPriority===1))'))
 
     def test_frozen_successor_restores_outgoing_envelope_and_releases_permit(self):
         page = self.open()
         self.unlock(page)
         page.evaluate(r"""() => {
-          const node=live.nodes.get('loop-1');live.setPresence(node.id,.12);
+          const node=live.nodes.get('loop-1');live.setPresence(node.id,.12,.03);
           window.old={media:node.media,item:node.item,born:node.birthTime,entered:node.active.enteredAt,
-            binding:node.audio,filter:node.media.style.filter};
+            binding:node.audio,filter:node.media.style.filter,priority:node.active.spectralPriority,cutoff:node.audio.cutoff};
           const next=node.decks.find(d=>d!==node.active).media,play=next.play.bind(next);
           next.play=()=>{if(next.dataset.deck!=='active')return play();next.pause();return Promise.resolve()};
         }""")
@@ -200,11 +260,15 @@ class FilterRuntimeBrowserTests(unittest.TestCase):
           same:n.media===old.media && n.item===old.item && n.birthTime===old.born &&
             n.active.enteredAt===old.entered && n.audio===old.binding,
           presence:n.active.presence,filter:n.media.style.filter,previousFilter:old.filter,
+          priority:n.active.spectralPriority,previousPriority:old.priority,cutoff:n.audio.cutoff,previousCutoff:old.cutoff,
           moving:!n.media.paused,muted:n.media.muted,permit:live.snapshot().activeStandbys,
-          gain:n.audio.target,standbyEmpty:n.decks.filter(d=>d!==n.active).every(d=>!d.url && !d.media.style.filter)};}""")
+          gain:n.audio.target,standbyEmpty:n.decks.filter(d=>d!==n.active).every(d=>!d.url && !d.media.style.filter && d.spectralPriority===1)};}""")
         self.assertTrue(state['same'])
         self.assertEqual(state['presence'], .12)
         self.assertEqual(state['filter'], state['previousFilter'])
+        self.assertEqual(state['priority'], .03)
+        self.assertEqual(state['priority'], state['previousPriority'])
+        self.assertEqual(state['cutoff'], state['previousCutoff'])
         self.assertTrue(state['moving'])
         self.assertFalse(state['muted'])
         self.assertGreater(state['gain'], 0)

@@ -23,6 +23,27 @@ def execute(body: str):
 
 
 class PresenceTests(unittest.TestCase):
+    def test_competitive_priority_changes_only_spectrum_and_respects_depth(self):
+        result = execute("""
+const settings=api.DEFAULT_SETTINGS;
+console.log(JSON.stringify({neutral:filterTargets(.8),
+  weak:filterTargets(.8,48000,settings,.2),
+  winner:filterTargets(.8,48000,settings,1),
+  noLowpass:filterTargets(.8,48000,{...settings,lowpassDepth:0},.2),
+  halfLowpass:filterTargets(.8,48000,{...settings,lowpassDepth:.5},.2),
+  lowerPresence:filterTargets(.1,48000,settings,.8),
+  bounded:[-1,2,NaN,null].map(value=>filterTargets(1,48000,settings,value).cutoffHz)}));
+""")
+        self.assertEqual(result['winner'], result['neutral'])
+        self.assertLess(result['weak']['cutoffHz'], result['neutral']['cutoffHz'])
+        for field in ('gain', 'brightness', 'saturation', 'blurPx'):
+            self.assertEqual(result['weak'][field], result['neutral'][field])
+        self.assertAlmostEqual(result['weak']['cutoffHz'], 16000 * (420 / 16000) ** .8)
+        self.assertAlmostEqual(result['halfLowpass']['cutoffHz'], 16000 * (420 / 16000) ** .4)
+        self.assertEqual(result['noLowpass']['cutoffHz'], 16000)
+        self.assertAlmostEqual(result['lowerPresence']['cutoffHz'], 16000 * (420 / 16000) ** .9)
+        self.assertEqual(result['bounded'], [420, 16000, 420, 420])
+
     def test_attack_peak_release_and_waiting_tail(self):
         result = execute("console.log(JSON.stringify({attack:ATTACK_SECONDS, values:[-1,0,.3,.6,1.2,5.6,10,100].map(age=>presenceEnvelope(age,10))}));")
         self.assertEqual(result['attack'], 1.2)

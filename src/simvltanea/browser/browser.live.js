@@ -570,7 +570,7 @@ function applySlice(node) {
         Object.assign(media.style, {position: 'absolute', inset: '0', width: '100%', height: '100%',
           objectFit: 'cover', opacity: '0', pointerEvents: 'none', transition: 'none'});
         const deck = {media, url: null, item: null, binding: null, weight: 0, frameId: null, callbacks: 0, decoded: null,
-          presence: 1, presenceTarget: null, enteredAt: null, sourceEpoch: 0, loopSeek: null};
+          presence: 1, presenceTarget: null, spectralPriority: 1, enteredAt: null, sourceEpoch: 0, loopSeek: null};
         if (this.proof) {
           deck.progress = new FrameProgress(typeof media.requestVideoFrameCallback === 'function');
           deck.proofDeck = i;
@@ -775,7 +775,7 @@ function applySlice(node) {
         node.busy = true; node.phase = 'LOADING';
         incoming.item = item; incoming.media.muted = true;
         incoming.presence = this.effectsEnabled ? 0 : 1;
-        incoming.presenceTarget = null; incoming.enteredAt = null;
+        incoming.presenceTarget = null; incoming.spectralPriority = 1; incoming.enteredAt = null;
         this.applyDeckEffects(incoming, true);
         incoming.url = URL.createObjectURL(item.file);
         incoming.sourceEpoch++; incoming.loopSeek = null;
@@ -872,7 +872,8 @@ function applySlice(node) {
         deck.binding.target = 0; deck.binding.cutoff = null;
       }
       deck.media.style.opacity = '0'; deck.media.dataset.deck = 'standby'; deck.media.muted = true;
-      deck.media.style.filter = ''; deck.presence = 1; deck.presenceTarget = null; deck.enteredAt = null;
+      deck.media.style.filter = ''; deck.presence = 1; deck.presenceTarget = null;
+      deck.spectralPriority = 1; deck.enteredAt = null;
       if (deck.url) {
         if (deck.progress) {
           const wall = performance.now(), nativeError = deck.media.error;
@@ -971,18 +972,19 @@ function applySlice(node) {
       }
       return this.effectSettings;
     }
-    setPresence(id, value) {
+    setPresence(id, value, spectralPriority = 1) {
       const node = this.nodes.get(id);
       if (!node?.active) return;
       const presence = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
       node.active.presence = node.active.presenceTarget = presence;
+      node.active.spectralPriority = Number.isFinite(spectralPriority) ? Math.max(0, Math.min(1, spectralPriority)) : 0;
       if (this.effectsEnabled) this.applyDeckEffects(node.active);
       this.updateNodeAudio(node);
     }
     applyDeckEffects(deck, immediate = false) {
       const settings = this.effectSettings || root.SimvltaneaPresence?.DEFAULT_SETTINGS;
       const targets = this.effectsEnabled && root.SimvltaneaPresence
-        ? root.SimvltaneaPresence.filterTargets(deck.presence, this.audio.context?.sampleRate, settings) : null;
+        ? root.SimvltaneaPresence.filterTargets(deck.presence, this.audio.context?.sampleRate, settings, deck.spectralPriority) : null;
       const decimal = value => Number(value.toFixed(3));
       const filters = [];
       if (targets) {
