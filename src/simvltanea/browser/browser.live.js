@@ -756,6 +756,8 @@ function applySlice(node) {
       deck.media.style.filter = ''; deck.presence = 1; deck.presenceTarget = null; deck.enteredAt = null;
       if (deck.url) {
         deck.media.pause(); deck.media.removeAttribute('src'); deck.media.load();
+        if (this.proof) this.record('resource-retired', deck.media.dataset.loopId, {role: 'deck', url: deck.url,
+          currentSrc: deck.media.currentSrc, readyState: deck.media.readyState, paused: deck.media.paused});
         URL.revokeObjectURL(deck.url); deck.url = null;
       }
       deck.item = null;

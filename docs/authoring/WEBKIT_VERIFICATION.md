@@ -16,9 +16,13 @@ the staged files. Generated media and receipts remain below `var/`.
 Two separate browser sessions run for 180 seconds each: seed `528316659` and a
 fresh composition whose resulting seed/URL is retained. Both enable sound by
 clicking the speaker. They read native current time and decoded media time every
-137 ms, with application snapshots each second. No init script, prototype
+137 ms, with application snapshots each second. Samples also retain the audio
+clock, gain values and targets, each existing deck's source URL and native
+duration, and explicit numeric playback-quality counters. No init script, prototype
 patch, analyser, canvas read, or retained-video registry is installed during
-these baselines. A screenshot is captured only after each baseline ends.
+these baselines. Screenshots are omitted: Playwright's WebKit screenshot helper
+injects a stylesheet even with caret hiding and animation changes disabled,
+which produces an unrelated CSP error under the application's strict policy.
 
 The gate checks joint clock/frame holds and decoded-frame holds independently;
 either reaching two seconds fails. Increasing callback counts alone do not
@@ -29,7 +33,39 @@ suspension fail separately. Outgoing residents remain measured during
 transitions rather than hiding holds behind the pending state.
 
 Receipts also require four persistent foreground slots, native wraps, a successor
-in every initial slot, and no native media, runtime, page, console, or HTTP errors.
+in every initial slot, and no native media, runtime, page, HTTP, or unexplained
+resource errors. Console errors retain their message and source location;
+failed requests retain the URL and native failure details. Error timestamps
+record when the runner received the event, with both epoch and monotonic clocks.
+The document's `performance.timeOrigin` aligns those receipt times with media
+samples and the application's proof-only resource-retirement events. They are
+not exact browser emission timestamps. Navigation, sustained playback, controls
+and browser-closing phases remain distinguishable. Every raw error is retained.
+
+Three narrowly evidenced resource outcomes are reported separately:
+
+- A Blob error-1 message or cancelled Blob request follows verified retirement
+  of that exact URL. The retirement must record a paused element at readyState
+  0. Every subsequent sample through the end of capture is checked for reuse:
+  the URL must never be a populated source or the current source of an active,
+  populated deck. A stale `currentSrc` on a cleared inactive deck is permitted.
+  Asynchronous delivery can lag disposal by seconds; the receipt records that
+  delay without imposing an unrelated timing limit on confirmed disposal.
+- A plain cancelled Blob request is followed within 1,000 ms by two distinct
+  decoded times and increasing callbacks on the same deck and native source
+  URL, with no native media error. This proves that the cancelled read did not
+  terminate that source; callback counts alone are insufficient.
+- A plain cancelled HTTP fetch follows an explicit application abort of that
+  exact outstanding asset request by at most 1,000 ms.
+
+Each classification retains its raw-record reference and timing or frame
+evidence. Unknown URLs, future retirements/aborts, other error types, and
+unproven recovery fail. Independent two-second playback gates still reject
+freezes, even when a resource cancellation has been explained.
+Only the exact request-failure dialects `cancelled` and `net::ERR_ABORTED` qualify
+as cancellations; each requires the same positive disposal, recovery, or explicit
+fetch-abort evidence. The recovery and fetch-abort windows remain 1,000 ms.
+
 All three pacing regimes must appear across the two runs combined; each run
 reports its own coverage. A missing regime is a coverage failure, not proof of
 a playback defect. They enforce at
@@ -40,9 +76,12 @@ every moment between samples.
 ## Separate interaction and audio checks
 
 After both baselines, a new browser checks isolated tapping, shuffle,
-forward/boomerang selection, portrait/landscape layout, global pause/resume,
-the mobile population limit, and sound mute/unmute. Only this interaction
-session attaches a post-master meter, requiring nonzero digital output and
+forward/boomerang selection, portrait/landscape layout, Filters bypass/restoration
+with its URL state and persistent media identities, global pause/resume,
+the mobile population limit, and sound mute/unmute. All three sessions retain
+the proof-only resource-retirement log. The interaction session reads existing
+decks at the same 137 ms cadence and attaches a post-master meter, requiring
+nonzero digital output and
 silence when muted. These intentional actions never enter the continuity
 measurements.
 

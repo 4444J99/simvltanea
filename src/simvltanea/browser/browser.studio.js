@@ -1435,6 +1435,8 @@
         video.pause();
         video.removeAttribute('src');
         video.load();
+        if (live.proof) live.record('resource-retired', null, {role: 'metadata', url,
+          currentSrc: video.currentSrc, readyState: video.readyState, paused: video.paused});
         URL.revokeObjectURL(url);
         resolve(result);
       };
@@ -1636,9 +1638,17 @@
   async function fetchAsset(item, asset, controller) {
     if (controller.signal.aborted) return false;
     library.requested += 1;
-    const response = await fetch(`library/${asset.file}`, {signal: controller.signal, redirect: 'error'});
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const buffer = await response.arrayBuffer();
+    const requestUrl = new URL(`library/${asset.file}`, document.baseURI).href;
+    const recordAbort = () => live.record('asset-request-aborted', null, {url: requestUrl});
+    if (live.proof) controller.signal.addEventListener('abort', recordAbort, {once: true});
+    let buffer;
+    try {
+      const response = await fetch(requestUrl, {signal: controller.signal, redirect: 'error'});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      buffer = await response.arrayBuffer();
+    } finally {
+      if (live.proof) controller.signal.removeEventListener('abort', recordAbort);
+    }
     if (buffer.byteLength !== asset.bytes) throw new Error('size differs from the manifest');
     const sha256 = hex(await crypto.subtle.digest('SHA-256', buffer));
     if (!sha256.startsWith(asset.id)) throw new Error('digest differs from the manifest');

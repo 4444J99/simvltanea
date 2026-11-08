@@ -20,20 +20,106 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 // media references or prototype patches are installed in the sustained runs.
 function sample() {
   const runtime = globalThis.compositionRuntime;
-  return {wall: performance.now(), simTime: runtime.clock.simTime,
+  const decks = [...runtime.slots.values()].flatMap(node => node.decks.map((deck, index) => {
+    const media = deck.media, quality = media.getVideoPlaybackQuality?.();
+    return {id: node.id, deck: index, active: node.active === deck,
+      populated: media.hasAttribute('src'), src: media.src, currentSrc: media.currentSrc,
+      duration: media.duration, current: media.currentTime, decoded: deck.decoded?.mediaTime,
+      callbacks: deck.callbacks, paused: media.paused, seeking: media.seeking, ready: media.readyState,
+      muted: media.muted, weight: deck.weight, audio: deck.binding ? {
+        target: deck.binding.target, gain: deck.binding.gain.gain.value,
+        filterHz: deck.binding.filter.frequency.value, pan: deck.binding.pan.pan.value} : null,
+      width: media.videoWidth, height: media.videoHeight,
+      quality: quality ? {creationTime: Number(quality.creationTime),
+        totalVideoFrames: Number(quality.totalVideoFrames), droppedVideoFrames: Number(quality.droppedVideoFrames),
+        corruptedVideoFrames: Number(quality.corruptedVideoFrames)} : null,
+      nativeError: media.error ? {code: media.error.code, message: media.error.message} : null};
+  }));
+  return {wall: performance.now(), epochMs: Date.now(), timeOrigin: performance.timeOrigin, simTime: runtime.clock.simTime,
     running: runtime.running, hidden: document.hidden, draining: runtime.draining,
     lastFailure: runtime.lastFailure,
     foregroundLimit: runtime.maxForeground, standbys: runtime.activeStandbys,
     maxStandbys: runtime.maxConcurrentStandbys, audioState: runtime.audio.context?.state,
-    populated: [...runtime.slots.values()].reduce((sum, node) => sum + node.decks.filter(deck => deck.media.hasAttribute('src')).length, 0),
-    playing: [...runtime.slots.values()].reduce((sum, node) => sum + node.decks.filter(deck => deck.media.hasAttribute('src') && !deck.media.paused).length, 0),
+    audioCurrentTime: runtime.audio.context?.currentTime,
+    audioSampleRate: runtime.audio.context?.sampleRate, masterGain: runtime.master?.volume?.gain.value,
+    sound: {...runtime.sound}, audioEnabled: runtime.audio.enabled,
+    populated: decks.filter(deck => deck.populated).length,
+    playing: decks.filter(deck => deck.populated && !deck.paused).length, decks,
     nodes: [...runtime.nodes.values()].map(node => ({id: node.id, item: node.item?.name,
       sha: node.item?.sha256, birth: node.birthTime, deck: node.decks.indexOf(node.active),
-      phase: node.phase, busy: node.busy, resting: node.resting,
+      phase: node.phase, busy: node.busy, resting: node.resting, targetGain: node.targetGain,
+      geometry: node.geometry, rect: node.cell?.rect,
       current: node.media?.currentTime, decoded: node.decoded?.mediaTime,
       callbacks: node.callbacks, paused: node.media?.paused, seeking: node.media?.seeking,
       ready: node.media?.readyState, nativeError: node.media?.error ?
         {code: node.media.error.code, message: node.media.error.message} : null}))};
+}
+
+function classifyResourceErrors(result) {
+  const classified = {expectedRetirements: [], expectedAborts: [], recoveredReads: [], unexpected: []};
+  const nativeBlobError = /^The operation couldn[’']t be completed\. \(WebKitBlobResource error 1\.\)$/;
+  for (const kind of ['consoleErrors', 'requestFailures']) {
+    for (const [index, error] of (result[kind] || []).entries()) {
+      const reference = {kind, index, url: error?.url, wall: error?.wall};
+      const url = error?.url, wall = error?.wall;
+      const blob = typeof url === 'string' && url.startsWith('blob:') && Number.isFinite(wall);
+      const cancelled = kind === 'requestFailures' && ['cancelled', 'net::ERR_ABORTED'].includes(error.failure?.errorText);
+      const aborted = cancelled && error.resourceType === 'fetch' && typeof url === 'string' && /^https?:\/\//.test(url) &&
+        Number.isFinite(wall) && (result.events || []).find(event => event.type === 'asset-request-aborted' &&
+          event.url === url && Number.isFinite(event.wall) && wall >= event.wall && wall - event.wall <= 1000);
+      if (aborted) {
+        classified.expectedAborts.push({...reference, abortedAt: aborted.wall, lagMs: wall - aborted.wall});
+        continue;
+      }
+      const expectedType = kind === 'consoleErrors'
+        ? typeof error.message === 'string' && error.message.startsWith('Failed to load resource: ') &&
+          nativeBlobError.test(error.message.slice('Failed to load resource: '.length))
+        : cancelled || nativeBlobError.test(error.failure?.errorText || '');
+      const retired = blob && expectedType && (result.events || []).find(event => {
+        const lag = wall - event.wall;
+        if (event.type !== 'resource-retired' || !['deck', 'metadata'].includes(event.role) || event.url !== url ||
+            event.readyState !== 0 || event.paused !== true || !Number.isFinite(event.wall) || lag < 0) return false;
+        // Cancellation delivery is asynchronous. Identity and confirmed disposal,
+        // not runner receipt latency, determine whether this is the retired read.
+        // Reject re-admission anywhere after disposal, including after the error.
+        // A cleared inactive deck may retain a stale native currentSrc value.
+        return !(result.samples || []).some(row => row.wall >= event.wall &&
+          (row.decks || []).some(deck => deck.populated && (deck.src === url || (deck.active && deck.currentSrc === url))));
+      });
+      if (retired) {
+        classified.expectedRetirements.push({...reference, role: retired.role, id: retired.id,
+          retiredAt: retired.wall, lagMs: wall - retired.wall});
+        continue;
+      }
+      // A cancelled internal read can coexist with successful decoding. Require
+      // positive same-deck, same-native-source evidence; callback counts alone
+      // or a future retirement are insufficient. Console failures never qualify.
+      if (blob && cancelled) {
+        const frames = [], previous = new Map();
+        for (const row of result.samples || []) if (row.wall >= wall && row.wall <= wall + 1000) {
+          for (const deck of row.decks || []) if (deck.src === url && deck.currentSrc === url) {
+            frames.push({wall: row.wall, id: deck.id, deck: deck.deck,
+              decoded: deck.decoded, callbacks: deck.callbacks, nativeError: deck.nativeError});
+          }
+        }
+        if (frames.length && frames.every(frame => !frame.nativeError)) {
+          let proof;
+          for (const frame of frames) {
+            if (typeof frame.id !== 'string' || !Number.isFinite(frame.deck) ||
+                !Number.isFinite(frame.decoded) || !Number.isFinite(frame.callbacks)) continue;
+            const identity = JSON.stringify([frame.id, frame.deck]), old = previous.get(identity);
+            if (old && frame.wall > old.wall && frame.decoded !== old.decoded && frame.callbacks > old.callbacks) {
+              proof = [old, frame]; break;
+            }
+            previous.set(identity, frame);
+          }
+          if (proof) { classified.recoveredReads.push({...reference, frames: proof}); continue; }
+        }
+      }
+      classified.unexpected.push(reference);
+    }
+  }
+  return classified;
 }
 
 function analyse(result) {
@@ -98,6 +184,7 @@ function analyse(result) {
   }
   const regimes = [...new Set(result.coarse.map(row => row.studio.ecosystem.regime))];
   const initialCount = result.samples[0]?.nodes.length || 0;
+  const resourceErrors = classifyResourceErrors(result);
   const checks = {
     completed: result.completed === true,
     noFailure: !result.failure,
@@ -111,7 +198,7 @@ function analyse(result) {
     noUnexpectedPause: unexpectedPaused === 0 && globalSuspensions === 0,
     succession: initialCount === 4 && births.size >= initialCount * 2 && changedSlots.size === initialCount,
     nativeWraps: wraps > 0,
-    noErrors: result.errors.length === 0 && result.consoleErrors.length === 0 && result.httpErrors.length === 0 &&
+    noErrors: result.errors.length === 0 && result.httpErrors.length === 0 && resourceErrors.unexpected.length === 0 &&
       runtimeFailures.size === 0 && !(result.events || []).some(event => ['media-failure', 'observer-failure'].includes(event.type)),
   };
   return {pass: Object.values(checks).every(Boolean), checks, samples: result.samples.length,
@@ -120,7 +207,7 @@ function analyse(result) {
     maxPopulatedDecks: populated, maxPlayingDecks: playing, maxPreparationLeases: standbys,
     restingSamples, maxResting, restingPaused, longestRestingJointHoldMs: restingJointMs,
     longestRestingDecodedHoldMs: restingDecodedMs, runtimeFailures: [...runtimeFailures],
-    unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors};
+    unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors, resourceErrors};
 }
 
 function staticServer(site) {
@@ -157,24 +244,62 @@ async function click(page, selector) {
 }
 
 function observeErrors(page, result) {
+  // These are runner receipt times, not precise browser emission times. Keep
+  // both clocks so they can be aligned without evaluating the page per error.
+  const stamp = () => {
+    const epochMs = Date.now();
+    return {epochMs, runnerTimeMs: performance.now(), phase: result.phase,
+      wall: result.documentTimeOrigin == null ? null : epochMs - result.documentTimeOrigin};
+  };
   page.on('pageerror', error => result.errors.push(String(error)));
-  page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
-  page.on('response', response => { if (response.status() >= 400) result.httpErrors.push({url: response.url(), status: response.status()}); });
+  page.on('console', message => {
+    if (message.type() === 'error') {
+      const location = message.location();
+      result.consoleErrors.push({...stamp(), message: message.text(), location, url: location.url});
+    }
+  });
+  page.on('response', response => {
+    if (response.status() >= 400) result.httpErrors.push({...stamp(), url: response.url(), status: response.status()});
+  });
+  page.on('requestfailed', request => result.requestFailures.push({...stamp(), url: request.url(),
+    method: request.method(), resourceType: request.resourceType(), failure: request.failure()}));
+}
+
+async function documentClock(page, result) {
+  result.documentTimeOrigin = await page.evaluate(() => performance.timeOrigin);
+  result.errorTiming = 'Runner receipt time; wall = epochMs - documentTimeOrigin, not exact browser emission time';
+  for (const error of [...result.consoleErrors, ...result.httpErrors, ...result.requestFailures]) {
+    if (error.wall === null) error.wall = error.epochMs - result.documentTimeOrigin;
+  }
+}
+
+function sampleControls(page, result) {
+  let running = true;
+  const task = (async () => {
+    while (running) {
+      try { result.samples.push(await page.evaluate(sample)); }
+      catch (error) { result.errors.push('Control metadata sampling failed: ' + error); break; }
+      await pause(SAMPLE_MS);
+    }
+  })();
+  return async () => { running = false; await task; };
 }
 
 async function sustained(webkit, device, base, out, name, query) {
-  const result = {name, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: []};
+  const result = {name, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
   let browser;
   try {
     browser = await webkit.launch({headless: true}); result.browserVersion = browser.version();
     const context = await browser.newContext(device), page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
     const initialAt = performance.now();
-    await page.goto(result.requestedUrl, {waitUntil: 'domcontentloaded'}); await ready(page);
+    result.phase = 'navigation';
+    await page.goto(result.requestedUrl, {waitUntil: 'domcontentloaded'}); await documentClock(page, result); await ready(page);
     result.initialSeconds = (performance.now() - initialAt) / 1000;
-    await click(page, '#speaker');
+    result.phase = 'sound-unlock'; await click(page, '#speaker');
     await page.waitForFunction(() => compositionRuntime.audio.context?.state === 'running' && SimvltaneaStudio.snapshot().sound === 'on');
     result.actualUrl = page.url(); result.initialStudio = await page.evaluate(() => SimvltaneaStudio.snapshot());
+    result.phase = 'sustained';
     const began = performance.now(); let nextCoarse = 0, nextSave = 20000;
     while (performance.now() - began < DURATION_MS) {
       const row = await page.evaluate(sample); result.samples.push(row);
@@ -194,12 +319,10 @@ async function sustained(webkit, device, base, out, name, query) {
     result.samples.push(await page.evaluate(sample));
     result.events = await page.evaluate(() => compositionRuntime.events);
     result.completed = true;
-    await page.screenshot({path: path.join(out, name + '-final.png')});
   } catch (error) { result.failure = String(error.stack || error); }
-  finally { if (browser) await browser.close(); }
+  finally { result.phase = 'closing'; if (browser) await browser.close(); }
   result.summary = analyse(result); save(out, name + '.json', result);
-  console.log(JSON.stringify({name, ...result.summary, errors: result.errors,
-    consoleErrors: result.consoleErrors, httpErrors: result.httpErrors})); return result.summary;
+  console.log(JSON.stringify({name, ...result.summary})); return result.summary;
 }
 
 async function audioProof(webkit, out) {
@@ -231,13 +354,16 @@ async function audioProof(webkit, out) {
 
 // Intentional interactions and the post-master meter are isolated from both baselines.
 async function controls(webkit, device, base, out) {
-  const result = {errors: [], consoleErrors: [], httpErrors: [], checks: {}};
-  let browser;
+  const result = {errors: [], consoleErrors: [], httpErrors: [], requestFailures: [], samples: [], checks: {}};
+  let browser, page, stopSampling = async () => {};
   try {
     browser = await webkit.launch({headless: true});
-    const context = await browser.newContext(device), page = await context.newPage();
+    const context = await browser.newContext(device); page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
-    await page.goto(base + '?seed=528316659&mix=s0.1.2.3&evolve=0'); await ready(page);
+    result.phase = 'navigation';
+    await page.goto(base + '?seed=528316659&mix=s0.1.2.3&evolve=0&proof=1');
+    await documentClock(page, result); await ready(page); result.phase = 'controls';
+    stopSampling = sampleControls(page, result);
     await click(page, '#speaker');
     await page.waitForFunction(() => SimvltaneaStudio.snapshot().sound === 'on');
     await page.evaluate(() => { globalThis.smokeMedia = [...compositionRuntime.nodes.values()].map(node => node.media); });
@@ -263,6 +389,14 @@ async function controls(webkit, device, base, out) {
       await page.setViewportSize({width, height});
       await page.waitForFunction(expected => compositionRuntime.orientation === expected, orientation);
       result.checks[orientation] = await page.evaluate(() => [...compositionRuntime.nodes.values()].every((node, i) => node.media === smokeMedia[i]));
+    }
+    for (const enabled of [false, true]) {
+      if (await page.evaluate(() => SimvltaneaStudio.snapshot().filters) !== enabled) await click(page, '#effects');
+      await page.waitForFunction(value => SimvltaneaStudio.snapshot().filters === value &&
+        new URL(location.href).searchParams.get('fx') === (value ? '1' : '0') &&
+        [...compositionRuntime.nodes.values()].every((node, i) => node.media === smokeMedia[i] &&
+          (value ? node.media.style.filter !== '' : node.media.style.filter === '')), enabled);
+      result.checks[enabled ? 'filtersOn' : 'filtersOff'] = true;
     }
     await click(page, '#play');
     await page.waitForFunction(() => !compositionRuntime.running);
@@ -293,11 +427,21 @@ async function controls(webkit, device, base, out) {
     await page.waitForFunction(() => SimvltaneaStudio.snapshot().sound === 'on' && smokeLevel() > .00001);
     result.unmutedPeak = await page.evaluate(() => smokeLevel()); result.checks.sound = true;
     result.final = await page.evaluate(sample);
-    result.checks.noErrors = !result.errors.length && !result.consoleErrors.length && !result.httpErrors.length &&
-      !result.final.lastFailure && result.final.nodes.every(node => !node.nativeError);
-    result.pass = Object.values(result.checks).every(Boolean);
   } catch (error) { result.pass = false; result.failure = String(error.stack || error); }
-  finally { if (browser) await browser.close(); }
+  finally {
+    await stopSampling();
+    if (page && !page.isClosed()) {
+      try { result.events = await page.evaluate(() => compositionRuntime.events); }
+      catch (error) { result.errors.push('Control event collection failed: ' + error); }
+    }
+    result.phase = 'closing'; if (browser) await browser.close();
+  }
+  result.resourceErrors = classifyResourceErrors(result);
+  result.checks.noErrors = !result.errors.length && !result.httpErrors.length && !result.resourceErrors.unexpected.length &&
+    !result.final?.lastFailure && result.final?.nodes.every(node => !node.nativeError) &&
+    result.samples.every(row => !row.lastFailure && row.decks.every(deck => !deck.nativeError)) &&
+    !(result.events || []).some(event => ['media-failure', 'observer-failure'].includes(event.type));
+  result.pass = !result.failure && Object.values(result.checks).every(Boolean);
   save(out, 'controls.json', result); return result;
 }
 
@@ -342,8 +486,7 @@ async function main() {
   finally {
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
     receipt.finishedAtUtc = new Date().toISOString(); save(out, 'receipt.json', receipt);
-    console.log(JSON.stringify({pass: receipt.pass, head: receipt.head, receipt: path.join(out, 'receipt.json'),
-      failure: receipt.failure, controls: receipt.controls, audio: receipt.audio}));
+    console.log(JSON.stringify({pass: receipt.pass, head: receipt.head, receipt: path.join(out, 'receipt.json')}));
     if (!receipt.pass) process.exitCode = 1;
   }
 }
