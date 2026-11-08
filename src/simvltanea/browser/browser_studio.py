@@ -35,7 +35,7 @@ from simvltanea.browser.browser_lab import LAB_FILES, lab_files
 
 HERE = Path(__file__).resolve().parent
 STUDIO_TITLE = 'SIMVLTANEA studio: loops on their own clocks'
-STUDIO_FILES = ('index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json', *LAB_FILES)
+STUDIO_FILES = ('shell.js', 'watch.html', 'iterations.json', 'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json', *LAB_FILES)
 
 STYLE = '''
 :root{color-scheme:dark;--bg:#0a0a0b;--fg:rgba(255,255,255,.88);--dim:rgba(255,255,255,.55);
@@ -207,7 +207,7 @@ INDEX_HTML = '''<!doctype html>
 accept="video/*,.mov,.mp4,.m4v,.webm,.json,application/json">
 </div>
 <div id="corner" role="toolbar" aria-label="Page">
-<a class="lab-link" href="workspace.html" aria-label="Open Composition Workspace">Compose</a>
+<a class="lab-link" href="./#compose" target="_top" aria-label="Open Composition Workspace">Compose</a>
 <button id="activity" type="button" aria-label="Hold changes" aria-pressed="false" title="Hold changes">∞</button>
 <button id="effects" type="button" aria-label="Filters" aria-pressed="true" title="Filters on">ƒx</button>
 <button id="filter-tune" type="button" aria-label="Filter settings" aria-haspopup="dialog"
@@ -259,6 +259,9 @@ aria-controls="filter-settings" aria-expanded="false" title="Filter settings">�
 '''
 
 
+from simvltanea.browser.browser_shell import SHELL_HTML, SHELL_JS, ITERATIONS_JSON
+
+
 class StudioStagingError(ValueError):
     """The output directory cannot safely receive the studio."""
 
@@ -267,7 +270,10 @@ def studio_files() -> dict[str, bytes]:
     """Return the exact bytes of every staged file, keyed by its flat name."""
     layouts = json.dumps(layout_bundle_v2(), indent=2, ensure_ascii=False) + '\n'
     return {
-        'index.html': INDEX_HTML.encode(),
+        'index.html': SHELL_HTML.encode(),
+        'watch.html': INDEX_HTML.encode(),
+        'shell.js': SHELL_JS.encode(),
+        'iterations.json': ITERATIONS_JSON.encode(),
         'runtime.js': b'\n'.join((HERE / name).read_bytes() for name in
                                 ('browser.audio.js', 'browser.presence.js', 'browser.ecosystem.js', 'browser.live.js')),
         'compiler.js': (HERE / 'browser.compiler.js').read_bytes(),

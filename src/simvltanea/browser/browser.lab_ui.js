@@ -374,6 +374,10 @@
       engine = new root.SimvltaneaLabEngine.Engine($('lab-stage'), {onChange: render, onError: message => status(String(message), 'error')});
       api.engine = engine;
     }
+    window.addEventListener('message', event => {
+      if (event.source !== window.parent || event.origin !== location.origin || event.data?.type !== 'simvltanea:pause') return;
+      if (engine) engine.pause();
+    });
     function setBusy(value) {
       busy = value; app.classList.toggle('busy', value);
       document.querySelectorAll('[data-async], .settings-actions button').forEach(button => { button.disabled = value; });

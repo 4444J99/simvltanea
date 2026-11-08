@@ -1,3 +1,12 @@
+// Keep the application address in sync with the embedded Watch session.
+{
+  const originalReplace = history.replaceState.bind(history);
+  history.replaceState = function(...args) {
+    const result = originalReplace(...args);
+    if (window.parent !== window) window.parent.postMessage({type:'simvltanea:watch-url',search:location.search},location.origin);
+    return result;
+  };
+}
 /* SIMVLTANEA studio: loops on their own clocks, colliding by accident.
  *
  * A classic script without dependencies, staged as studio.js beside compiler.js,
@@ -2131,6 +2140,10 @@
     else { paused = false; r.play().catch(() => {}); }
     sync();
   }
+  window.addEventListener('message', event => {
+    if (event.source !== window.parent || event.origin !== location.origin || event.data?.type !== 'simvltanea:pause') return;
+    paused = true; const r = runtime(); if (r) r.pause(); sync();
+  });
   ui.play.addEventListener('click', togglePlay);
   ui.start.addEventListener('click', togglePlay);
 
