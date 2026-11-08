@@ -1144,7 +1144,7 @@
   async function launch({atLoopBoundary = false} = {}) {
     const bounded = boundedSelection(selection);
     if (bounded !== selection) { selection = bounded; renderControls(); }
-    const token = ++launches, r = runtime(), items = selectedItems();
+    const token = ++launches, r = runtime(), items = selectedItems(), sourcePool = pool();
     pendingSelection = true;
     if (pendingCompilation) pendingCompilation.cancel();
     renderPreview();
@@ -1153,6 +1153,9 @@
       if (usingLibrary() && items.length) {
         const ok = await loadClips(items);
         if (token !== launches) return false;
+        // A local import can change pools while this library fetch is pending.
+        // Its completed batch owns the next launch, never the partial pool.
+        if (pool() !== sourcePool) { pendingSelection = false; return false; }
         if (ok) return launch({atLoopBoundary});
         repairSelection();
       }
@@ -1764,12 +1767,15 @@
 
   function ecologyTick(time, dt) {
     if (!live.ready || !selection) return;
+    const published = usingLibrary(), automaticSources = published || own.length > 0;
     residents.length = 0; currentLogicalIds.clear();
     for (const node of live.nodes.values()) {
       if (!node.item || !node.media) continue;
       let model = residentModels.get(node);
       if (!model) { model = {}; residentModels.set(node, model); }
-      const logicalId = node.item.clip?.id || node.item.sha256;
+      // Equal uploaded bytes may reuse a library resident and its metadata.
+      // Personal cooldowns still follow the admitted content digest.
+      const logicalId = published ? node.item.clip?.id || node.item.sha256 : node.item.sha256;
       currentLogicalIds.add(logicalId); model.logicalId = logicalId;
       model.id = node.id; model.index = node.ordinal - 1; model.clipKey = node.item.sha256;
       model.duration = node.media.duration || node.item.duration || node.item.quantized.seconds;
@@ -1785,13 +1791,14 @@
     }
     for (const id of previousLogicalIds) if (!currentLogicalIds.has(id)) succession.depart(id, time);
     const spareIds = previousLogicalIds; previousLogicalIds = currentLogicalIds; currentLogicalIds = spareIds;
-    const eligible = usingLibrary() && library.items.some(item => !selection.loops.includes(item.index) &&
-      !library.broken.has(item.index) && succession.eligible(item.clip.id, time));
+    const eligible = automaticSources && pool().some((item, index) => !selection.loops.includes(index) &&
+      (!published || !library.broken.has(index)) && succession.eligible(item.clip?.id || item.sha256, time));
     const out = ecosystem.step(time, dt, residents, {
-      enabled: evolving && !hold && !reduced && usingLibrary(), manualCount: manualPopulation,
+      enabled: evolving && !hold && !reduced && automaticSources, manualCount: manualPopulation,
       effects: filtersEnabled, effectSettings,
-      canReplace: eligible && !ecologicalRequest && !pendingSelection,
-      canRest: !ecologicalRequest,
+      // Admission grows the local pool before its final selection is ready.
+      canReplace: eligible && !ecologicalRequest && !pendingSelection && busy === 0,
+      canRest: !ecologicalRequest && busy === 0,
     });
     let leadingProminence = 0;
     for (let i = 0; i < residents.length; i++) {
@@ -1817,7 +1824,10 @@
       if (request.type === 'replace') {
         const index = request.index, previous = selection;
         const others = previous.loops.filter((_, at) => at !== index);
-        const cooling = library.items.filter(item => !succession.eligible(item.clip.id, time)).map(item => item.index);
+        const cooling = [];
+        pool().forEach((item, index) => {
+          if (!succession.eligible(item.clip?.id || item.sha256, time)) cooling.push(index);
+        });
         const [fresh] = moreLoops(others, 1, previous.family, [previous.loops[index], ...cooling], succession.random);
         if (fresh === undefined) {
           ecosystem.settle(request, false, time); ecologicalRequest = null; return;

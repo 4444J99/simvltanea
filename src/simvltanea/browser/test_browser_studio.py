@@ -625,6 +625,19 @@ class StudioBrowserTests(unittest.TestCase):
         staged = {f'{self.origin}/{SUBPATH}/{name}' for name in ('', *STUDIO_FILES, 'library/manifest.json')}
         return [url for url in page.requests if not (url.split('?')[0] in staged or url.startswith(('blob:', 'data:')))]
 
+    def observe_ecology(self, page):
+        """Observe real scheduler decisions without changing its clock or policy."""
+        page.evaluate('''() => {
+          window.automaticRequests=[];
+          const step=SimvltaneaEcosystem.Engine.prototype.step;
+          SimvltaneaEcosystem.Engine.prototype.step=function(time,dt,residents,options) {
+            const out=step.call(this,time,dt,residents,options);
+            window.ecologyOptions={enabled:options.enabled,canReplace:options.canReplace,canRest:options.canRest};
+            for(const request of out.requests) automaticRequests.push({time,...request});
+            return out;
+          };
+        }''')
+
     # ---- tests -------------------------------------------------------------
 
     def test_plays_at_once_without_any_interaction(self):
@@ -836,6 +849,127 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertEqual([loop['audio'] for loop in snapshot['loops']], [{'codec': 'aac', 'channels': 1}] * 3)
         self.unlock(page)
         self.assertEqual(page.evaluate('compositionRuntime.plan.sources.map(s => s.audio_stream.codec)'), ['aac'] * 3)
+        self.assertEqual(self.allowed(page), [])
+
+    def test_personal_spares_evolve_locally_with_hold_and_stable_siblings(self):
+        page = self.open('?seed=99&evolve=0')
+        methods = []
+        page.on('request', lambda request: methods.append(request.method))
+        admitted = self.add(page, self.loops[:3])
+        self.playing(page, 3)
+        self.tap(page, '#fewer')
+        self.playing(page, 2)
+        page.wait_for_function('() => compositionRuntime.audio.context?.state===\'running\' && '
+                               '[...compositionRuntime.nodes.values()].every(n=>n.audio)')
+        self.observe_ecology(page)
+        page.evaluate('''() => {
+          window.localBefore=[...compositionRuntime.nodes.values()].map(n=>({id:n.id,media:n.media,
+            binding:n.audio,sha:n.item.sha256,frames:n.callbacks,calls:[]}));
+          for(const entry of localBefore) for(const name of ['play','pause','load']) {
+            const original=entry.media[name].bind(entry.media);
+            entry.media[name]=(...args)=>{entry.calls.push(name);return original(...args)};
+          }
+          window.localContext=compositionRuntime.audio.context;
+        }''')
+        self.tap(page, '#activity')
+        page.wait_for_function('() => window.ecologyOptions?.enabled===true', timeout=1500)
+        page.wait_for_function('''() => !compositionRuntime.draining &&
+          [...compositionRuntime.nodes.values()].some((n,i)=>n.item.sha256!==localBefore[i].sha)''', timeout=40000)
+        self.tap(page, '#activity')
+        page.wait_for_function('() => !compositionRuntime.draining')
+        after = page.evaluate('''() => {
+          const r=compositionRuntime, nodes=[...r.nodes.values()];
+          return {changes:nodes.map((n,i)=>n.item.sha256!==localBefore[i].sha),
+            stable:nodes.map((n,i)=>n.item.sha256===localBefore[i].sha ?
+              n.media===localBefore[i].media && n.audio===localBefore[i].binding && localBefore[i].calls.length===0 : true),
+            old:localBefore.map(n=>n.sha),current:nodes.map(n=>n.item.sha256),
+            context:r.audio.context===localContext,budget:r.snapshot().maxConcurrentStandbys,
+            forward:nodes.every(n=>n.media.loop && n.media.playbackRate===1 && !n.item.clip && n.media.src.startsWith('blob:'))};
+        }''')
+        self.assertEqual(sum(after['changes']), 1)
+        self.assertTrue(all(after['stable']))
+        self.assertTrue(after['context'])
+        self.assertTrue(after['forward'])
+        self.assertEqual(after['budget'], 1)
+        self.assertTrue(set(after['current']).issubset({item['sha256'] for item in admitted['loops']}))
+        self.assertEqual(self.snapshot(page)['panels'], 2)
+        self.assertTrue(page.is_hidden('#loop-mode'))
+        page.wait_for_function('() => window.ecologyOptions?.enabled===false && ecologyOptions.canReplace===false', timeout=1500)
+        # The sole spare has just departed, so its SHA is still cooling down.
+        held_at = page.evaluate('compositionRuntime.clock.simTime')
+        page.wait_for_function('at=>compositionRuntime.clock.simTime>at+2', arg=held_at)
+        self.assertFalse(page.evaluate('ecologyOptions.canReplace'))
+        held = after['current']
+        frames = page.evaluate('[...compositionRuntime.nodes.values()].map(n=>n.callbacks)')
+        page.wait_for_function('''() => SimvltaneaStudio.snapshot().ecosystem.residents.every(
+          resident=>resident.age>resident.deadlineAge+.2)''', timeout=35000)
+        self.assertEqual(page.evaluate('[...compositionRuntime.nodes.values()].map(n=>n.item.sha256)'), held)
+        self.assertTrue(page.evaluate('before=>[...compositionRuntime.nodes.values()].every((n,i)=>n.callbacks>before[i])', frames))
+        self.tap(page, '#activity')
+        page.wait_for_function('''before => !compositionRuntime.draining &&
+          [...compositionRuntime.nodes.values()].some((n,i)=>n.item.sha256!==before[i])''', arg=held, timeout=10000)
+        departed = next(sha for sha in after['old'] if sha not in held)
+        self.assertIn(departed, page.evaluate('[...compositionRuntime.nodes.values()].map(n=>n.item.sha256)'))
+        self.assertEqual(self.allowed(page), [])
+        self.assertTrue(all(method == 'GET' for method in methods))
+        self.assertNotIn('mix=', page.evaluate('location.search'))
+        for path in self.loops[:3]:
+            self.assertNotIn(path.name, page.evaluate('location.href'))
+
+    def test_personal_pool_without_spares_extends_full_loops_in_place(self):
+        page = self.open('?seed=99&mix=s0.1')
+        self.add(page, self.loops[:2])
+        self.playing(page, 2)
+        self.observe_ecology(page)
+        page.wait_for_function('() => window.ecologyOptions?.enabled===true', timeout=1500)
+        before = self.snapshot(page)['ecosystem']['residents']
+        page.evaluate('window.localResidents=[...compositionRuntime.nodes.values()].map(n=>({media:n.media,sha:n.item.sha256,frames:n.callbacks}))')
+        page.wait_for_function('''before=>SimvltaneaStudio.snapshot().ecosystem.residents.some(
+          (resident,i)=>resident.deadlineAge>before[i].deadlineAge)''', arg=before, timeout=35000)
+        after = self.snapshot(page)['ecosystem']['residents']
+        extended = [(now, old) for now, old in zip(after, before) if now['deadlineAge'] > old['deadlineAge']]
+        self.assertTrue(extended)
+        for now, old in extended:
+            multiple = (now['deadlineAge'] - old['deadlineAge']) / now['duration']
+            self.assertAlmostEqual(multiple, round(multiple))
+        state = page.evaluate('''() => ({same:[...compositionRuntime.nodes.values()].every((n,i)=>
+          n.media===localResidents[i].media && n.item.sha256===localResidents[i].sha &&
+          n.callbacks>localResidents[i].frames && !n.resting && !n.media.paused),
+          requests:automaticRequests,eligible:ecologyOptions.canReplace})''')
+        self.assertTrue(state['same'])
+        self.assertFalse(state['eligible'])
+        self.assertEqual(state['requests'], [])
+        self.assertEqual(self.allowed(page), [])
+
+    def test_personal_admission_blocks_automatic_selection_of_partial_pool(self):
+        page = self.open('?seed=99&mix=s0.1&evolve=0')
+        self.add(page, self.loops[:2])
+        self.playing(page, 2)
+        self.observe_ecology(page)
+        page.evaluate('''() => {
+          const read=File.prototype.arrayBuffer;
+          File.prototype.arrayBuffer=function() {
+            if(this.name==='pending-fourth.mp4')return new Promise(resolve=>{
+              window.releaseLocalAdmission=()=>resolve(read.call(this));
+            });
+            return read.call(this);
+          };
+          window.admissionBefore=[...compositionRuntime.nodes.values()].map(n=>n.media);
+        }''')
+        page.set_input_files('#files', [dict(name=self.loops[2].name,mimeType='video/mp4',buffer=self.loops[2].read_bytes()),
+                                      dict(name='pending-fourth.mp4',mimeType='video/mp4',buffer=self.loops[3].read_bytes())])
+        page.wait_for_function('() => SimvltaneaStudio.snapshot().busy && SimvltaneaStudio.snapshot().loops.length===3 && Boolean(window.releaseLocalAdmission)')
+        self.tap(page, '#activity')
+        page.wait_for_function('() => window.ecologyOptions?.enabled===true', timeout=1500)
+        self.assertEqual(page.evaluate('ecologyOptions'), dict(enabled=True,canReplace=False,canRest=False))
+        page.wait_for_function('''() => SimvltaneaStudio.snapshot().ecosystem.residents.some(
+          resident=>resident.age>resident.presenceDeadlineAge+.2)''', timeout=35000)
+        self.assertEqual(page.evaluate('automaticRequests'), [])
+        self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every((n,i)=>n.media===admissionBefore[i])'))
+        page.evaluate('releaseLocalAdmission()')
+        page.wait_for_function('() => !SimvltaneaStudio.snapshot().busy')
+        self.playing(page, 4)
+        self.assertEqual(len(self.snapshot(page)['loops']), 4)
         self.assertEqual(self.allowed(page), [])
 
     def test_drop_anywhere_replaces_the_loops(self):
@@ -1527,6 +1661,74 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertEqual(self.snapshot(page)['selection'], expected)
         page.evaluate('releaseCompilation()')
         self.showing(page, expected)
+
+    def test_library_fetch_continuation_respects_personal_pool_change(self):
+        for added in (True, False):
+            with self.subTest(personal_file_admitted=added):
+                page = self.open(query='?seed=99&mix=s0.1&evolve=0')
+                held, block = [], [True]
+
+                def route(request):
+                    clip_id = request.request.url.rsplit('/', 1)[-1][:-4]
+                    if block[0] and clip_id not in self.ids[:2]:
+                        held.append(request)
+                    else:
+                        request.continue_()
+
+                page.route('**/library/clips/*.mp4', route)
+                page.reload()
+                self.showing(page, self.ids[:2])
+                self.tap(page, '#speaker')
+                page.wait_for_function("() => SimvltaneaStudio.snapshot().sound==='on'")
+                page.evaluate('''() => {
+                  const r=compositionRuntime, reconcile=r.reconcile.bind(r);
+                  window.admissionReconciles=[];
+                  r.reconcile=request=>{admissionReconciles.push({busy:SimvltaneaStudio.snapshot().busy,
+                    shas:request.items.map(item=>item.sha256)});return reconcile(request)};
+                  window.originalLocalHandoff=[...r.nodes.values()].map(n=>n.media);
+                  const read=File.prototype.arrayBuffer;
+                  File.prototype.arrayBuffer=function(){return this.name==='second.mp4' ?
+                    new Promise(resolve=>{window.releaseSecondLocal=()=>resolve(read.call(this))}) : read.call(this)};
+                  const step=SimvltaneaEcosystem.Engine.prototype.step;
+                  SimvltaneaEcosystem.Engine.prototype.step=function(time,dt,residents,options){
+                    window.observedLogicalIds=residents.map(item=>({logicalId:item.logicalId,sha:item.clipKey}));
+                    return step.call(this,time,dt,residents,options);
+                  };
+                }''')
+                page.locator('.loop[data-loop-id="loop-2"]').click()
+                page.wait_for_function('before=>SimvltaneaStudio.snapshot().selection.join()!==before.join()', arg=self.ids[:2])
+                wanted = self.snapshot(page)['selection'][1]
+                payloads = [dict(name=name,mimeType='video/mp4',buffer=(LIBRARY / self.by_id[clip_id]['file']).read_bytes() if added else b'invalid')
+                            for name, clip_id in zip(('first.mp4', 'second.mp4'), self.ids[:2])]
+                page.set_input_files('#files', payloads)
+                page.wait_for_function('count=>Boolean(window.releaseSecondLocal) && SimvltaneaStudio.snapshot().busy && '
+                                       'SimvltaneaStudio.snapshot().loops.length===count', arg=int(added))
+                self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every((n,i)=>n.media===originalLocalHandoff[i])'))
+                block[0] = False
+                for request in held:
+                    request.continue_()
+                page.wait_for_function('id=>SimvltaneaStudio.snapshot().library.cached.includes(id)', arg=wanted)
+                if added:
+                    # Let fulfilled fetch and compile microtasks run while the
+                    # second file is still blocked at its normal local read.
+                    page.wait_for_timeout(200)
+                    self.assertEqual(page.evaluate('admissionReconciles'), [])
+                    self.assertEqual(page.evaluate('compositionRuntime.nodes.size'), 2)
+                    self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every((n,i)=>n.media===originalLocalHandoff[i])'))
+                else:
+                    # An entirely refused batch never changes the pool. The
+                    # original library request must still complete normally.
+                    self.showing(page, self.snapshot(page)['selection'])
+                    self.assertTrue(page.evaluate('admissionReconciles.length>0'))
+                    self.assertEqual(self.snapshot(page)['source'], 'library')
+                page.evaluate('releaseSecondLocal()')
+                page.wait_for_function('() => !SimvltaneaStudio.snapshot().busy')
+                self.playing(page, 2)
+                self.assertEqual(self.snapshot(page)['source'], 'own' if added else 'library')
+                if added:
+                    page.wait_for_function('() => !compositionRuntime.draining && observedLogicalIds.length===2 && '
+                                           'observedLogicalIds.every(item=>SimvltaneaStudio.snapshot().loops.some(loop=>loop.sha256===item.sha))')
+                    self.assertTrue(page.evaluate('observedLogicalIds.every(item=>item.logicalId===item.sha)'))
 
     def test_library_mode_fetches_only_the_rolls_clips(self):
         page = self.open(query='?seed=424242')

@@ -32,6 +32,11 @@ continues with its prepared successor. This releases the shared preparation perm
 instead of letting one frozen native loop block the whole stage. A `seam-fallback`
 event records the reason. Normal advancing loops retain boundary alignment.
 Departed logical clips have a ten-second return cooldown, shared by both variants.
+Personal files use their content digest for that cooldown and draw replacements
+from the admitted local pool. When every file is already on screen or cooling
+down, the resident continues for another whole loop. Automatic changes wait until
+an import batch finishes. Personal replacements read the admitted files locally,
+without network requests.
 
 Steady, sparse and burst regimes vary arrival spacing. Sparse periods target a
 time-averaged population near 65 percent for four panels, with at least two active
