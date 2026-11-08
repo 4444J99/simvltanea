@@ -517,7 +517,18 @@ export class Scheduler {
     this.now = now;
     this._updateRegime(now);
     const changes = [];
-    if (this.pool.length === 0) return changes;
+    if (this.pool.length === 0) {
+      this.panels.forEach((pn, panel) => {
+        const prev = pn.clip;
+        if (prev < 0) return;
+        this.lastEnd[prev] = now;
+        pn.clip = -1;
+        pn.due = -Infinity;
+        pn.stopped = false;
+        changes.push({ panel, clip: -1, prev });
+      });
+      return changes;
+    }
     const P = this.P;
     const sync = P['timing.synchronized'];
     const swapI = P['timing.swap_interval'];

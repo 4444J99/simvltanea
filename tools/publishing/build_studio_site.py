@@ -67,7 +67,7 @@ def assemble_release(output: Path, library: Path) -> int:
             destination.write_bytes(body)
         if output.is_symlink() or (output.exists() and (not output.is_dir() or any(output.iterdir()))):
             raise LibrarySiteError('output must still be absent or an empty directory')
-        release.rename(output)
+        release.replace(output)
     return count
 
 
