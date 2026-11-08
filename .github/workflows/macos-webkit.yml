@@ -52,10 +52,10 @@ jobs:
           python3 -m tools.publishing.build_studio_site --output var/site/macos-webkit 2>&1 | tee var/proofs/macos-webkit/build.log
 
       - name: Prove sustained playback and native audio
-        timeout-minutes: 15
+        timeout-minutes: 22
         run: |
           set -euo pipefail
-          NODE_PATH="$RUNNER_TEMP/studio-webkit/node_modules" node src/simvltanea/browser/verify_webkit_sustained.js var/site/macos-webkit var/proofs/macos-webkit --held-source-diagnostic 2>&1 | tee var/proofs/macos-webkit/run.log
+          NODE_PATH="$RUNNER_TEMP/studio-webkit/node_modules" node src/simvltanea/browser/verify_webkit_sustained.js var/site/macos-webkit var/proofs/macos-webkit --held-source-diagnostic --seek-cohort-diagnostic 2>&1 | tee var/proofs/macos-webkit/run.log
 
       - name: Preserve success or failure evidence
         if: always()

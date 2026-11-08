@@ -458,8 +458,10 @@ class PersistentSessionTests(unittest.TestCase):
             }''')
             page.wait_for_function("live.nodes.get('loop-1').phase==='READY'")
             if action == 'pause':
+                page.evaluate("window.pausedResident=live.nodes.get('loop-1').media")
                 page.evaluate('live.pause()')
-                self.assertTrue(page.evaluate('change'))
+                self.assertFalse(page.evaluate('change'))
+                self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===pausedResident"))
                 self.assertTrue(page.evaluate("live.nodes.get('loop-1').media.paused"))
                 page.evaluate('setClips([0,1])')
             else:
@@ -467,6 +469,77 @@ class PersistentSessionTests(unittest.TestCase):
                 self.assertFalse(page.evaluate('change'))
             self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
         self.assertEqual(page.evaluate("live.events.filter(event=>event.type==='seam-fallback').length"), 0)
+
+    def test_stale_primed_successor_is_deferred_before_any_reveal(self):
+        page = self.open()
+        page.evaluate('''() => {
+          live.progressTimeoutMs=180;
+          const n=live.nodes.get('loop-1');window.previous={media:n.media,item:n.item,birth:n.birthTime};
+          const next=n.decks.find(d=>d!==n.active);window.incoming=next.media;window.revealed=false;
+          const prime=live.prime.bind(live);
+          live.prime=async(...args)=>{await prime(...args);args[0].media.pause();
+            args[0].media.play=()=>Promise.resolve();};
+          new MutationObserver(()=>{if(Number(incoming.style.opacity)>0)revealed=true;})
+            .observe(incoming,{attributes:true,attributeFilter:['style']});
+        }''')
+        self.assertFalse(page.evaluate('setClips([2,1])'))
+        result = page.evaluate('''() => {const n=live.nodes.get('loop-1');return {
+          revealed,identity:n.media===previous.media&&n.item===previous.item&&n.birthTime===previous.birth,
+          moving:!n.media.paused,empty:!incoming.hasAttribute('src'),permits:live.activeStandbys,
+          failures:live.lastFailure,deferred:live.events.filter(e=>e.type==='handoff-deferred').length};}''')
+        self.assertEqual(result, dict(revealed=False, identity=True, moving=True, empty=True,
+                                      permits=0, failures=None, deferred=1))
+
+    def test_fade_and_promotion_share_one_incoming_progress_deadline(self):
+        page = self.open()
+        page.evaluate('''() => {
+          live.progressTimeoutMs=500;live.crossfadeSec=.45;
+          const n=live.nodes.get('loop-1');window.previous={media:n.media,item:n.item,birth:n.birthTime};
+          const next=n.decks.find(d=>d!==n.active);window.incoming=next.media;
+          const play=incoming.play.bind(incoming);
+          incoming.play=()=>incoming.dataset.deck==='active'?Promise.resolve():play();
+          const stop=live.clock.subscribe(time=>{if(!live.fade||time-live.fade.began<.08)return;
+            stop();incoming.pause();window.frozenAt=performance.now();});
+          window.change=setClips([2,1]).then(ok=>{window.finishedAt=performance.now();return ok;});
+        }''')
+        self.assertFalse(page.evaluate('change'))
+        result = page.evaluate('''() => {const n=live.nodes.get('loop-1');return {
+          held:finishedAt-frozenAt,identity:n.media===previous.media&&n.item===previous.item&&n.birthTime===previous.birth,
+          moving:!n.media.paused,empty:!incoming.hasAttribute('src'),permits:live.activeStandbys,
+          waiters:!!(live.fade||live.promotion||live.handoff),failures:live.lastFailure,
+          deferred:live.events.filter(e=>e.type==='handoff-deferred').length};}''')
+        self.assertLess(result.pop('held'), 700, 'promotion reset the incoming progress deadline after the fade')
+        self.assertEqual(result, dict(identity=True, moving=True, empty=True, permits=0,
+                                      waiters=False, failures=None, deferred=1))
+
+    def test_edit_started_while_paused_admits_the_selected_paused_still(self):
+        page = self.open()
+        page.evaluate('live.pause()')
+        self.assertTrue(page.evaluate('live.reconcile({plan:planFor([2,1]),items:[items[2],items[1]],playing:false})'))
+        self.assertTrue(page.evaluate('''() => {const n=live.nodes.get('loop-1');return n.item===items[2]&&
+          n.active.item===items[2]&&n.media===n.active.media&&n.media.paused&&!live.running&&
+          !live.playingIntent&&live.activeStandbys===0;}'''))
+
+    def test_edit_started_paused_but_resumed_during_prime_requires_fresh_frames(self):
+        page = self.open()
+        page.evaluate('''() => {
+          live.pause();live.progressTimeoutMs=180;
+          window.previous=live.nodes.get('loop-1').media;window.revealed=false;
+          const prime=live.prime.bind(live);
+          live.prime=async(...args)=>{await prime(...args);window.incoming=args[0].media;
+            incoming.pause();incoming.play=()=>Promise.resolve();
+            new MutationObserver(()=>{if(Number(incoming.style.opacity)>0)revealed=true;})
+              .observe(incoming,{attributes:true,attributeFilter:['style']});
+            await new Promise(resolve=>{window.releasePrime=resolve});};
+          window.change=live.reconcile({plan:planFor([2,1]),items:[items[2],items[1]],playing:false});
+        }''')
+        page.wait_for_function('Boolean(window.releasePrime)')
+        page.evaluate('live.play();releasePrime()')
+        self.assertFalse(page.evaluate('change'))
+        self.assertFalse(page.evaluate('revealed'))
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===previous && !previous.paused && live.running"))
+        self.assertEqual(page.evaluate('live.activeStandbys'), 0)
+        self.assertIsNone(page.evaluate('live.lastFailure'))
 
     def test_territory_changes_framing_without_restarting_residents(self):
         page = self.open()
@@ -501,7 +574,7 @@ class PersistentSessionTests(unittest.TestCase):
         }''')
         page.evaluate('setClips([2,1])')
         self.assertFalse(page.evaluate("live.nodes.get('loop-1').media.paused"), 'primed frame never resumed after promotion')
-        self.assertEqual(page.evaluate('promotionCalls'), ['standby', 'active'])
+        self.assertEqual(page.evaluate('promotionCalls'), ['standby', 'standby', 'active'])
         self.assertEqual(page.evaluate('siblingCalls'), [])
         page.evaluate("window.presented=live.nodes.get('loop-1').callbacks")
         page.wait_for_function("live.nodes.get('loop-1').callbacks>presented+5")

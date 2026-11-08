@@ -77,6 +77,20 @@ for (const [index, decoded, callbacks] of [[87, .6, 101], [88, .7, 102]]) {
 Object.freeze(result.requestFailures);
 '''
 
+PRELUDE_TRACE_RECOVERY = TRACE_RECOVERY + r'''
+result.progressSchema = 1;
+result.prelude = {samples: [{...result.samples[100]}]};
+delete result.samples[100].decks;
+// The controlled prelude ends before the sustained observation window begins.
+for (const row of result.samples) row.wall += 20000;
+'''
+
+PRELUDE_SAMPLED_RECOVERY = RECOVERED_BLOB + r'''
+result.prelude = {samples: [87, 88].map(index => ({...result.samples[index]}))};
+delete result.samples[87].decks; delete result.samples[88].decks;
+for (const row of result.samples) row.wall += 20000;
+'''
+
 ABORTED_FETCH = r'''
 const fetchUrl = 'http://127.0.0.1/library/clip.mp4';
 result.events.push({type: 'asset-request-aborted', url: fetchUrl, wall: 12000});
@@ -328,6 +342,58 @@ result.samples.slice(800).forEach(row => {row.progressSummary.suspensionCount = 
         frames = summary['resourceErrors']['recoveredReads'][0]['frames']
         self.assertEqual([frame['wall'] for frame in frames], [12200, 12400])
         self.assertEqual([frame['origin'] for frame in frames], ['callback-trace'] * 2)
+
+    def test_recorded_prelude_trace_proves_same_source_read_recovery(self):
+        summary = classify_resources(PRELUDE_TRACE_RECOVERY)
+        self.assertTrue(summary['pass'], summary)
+        frames = summary['resourceErrors']['recoveredReads'][0]['frames']
+        self.assertEqual([frame['wall'] for frame in frames], [12200, 12400])
+        self.assertEqual([frame['origin'] for frame in frames], ['callback-trace'] * 2)
+
+    def test_prelude_recovery_rejects_wrong_late_or_invalid_source_evidence(self):
+        for mutation in (
+            "result.prelude.samples[0].decks[0].currentSrc = 'blob:other';",
+            'callbackProof.trace[1].wall = 13200; callbackProof.lastChangeWall = 13200;',
+            'callbackProof.trace[1].mediaTime = .6; callbackProof.mediaTime = .6;',
+            'callbackProof.epoch = 0;',
+            'callbackProof.supported = false;',
+            'result.prelude.samples[0].decks[0].nativeError = {code: 3};',
+            '''result.samples[0].decks = [{...result.prelude.samples[0].decks[0],
+              progress: {...callbackProof, epoch: 2}}];''',
+        ):
+            with self.subTest(mutation=mutation):
+                summary = classify_resources(PRELUDE_TRACE_RECOVERY + mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['recoveredReads'], [])
+
+    def test_prelude_resource_samples_do_not_mutate_or_extend_sustained_analysis(self):
+        program = FIXTURE + PRELUDE_SAMPLED_RECOVERY + r'''
+const assert = require('node:assert/strict');
+const samples = result.samples, before = JSON.stringify(result);
+const summary = analyse(result);
+assert.equal(result.samples, samples);
+assert.equal(JSON.stringify(result), before);
+process.stdout.write(JSON.stringify(summary));
+'''
+        completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+                                   capture_output=True, text=True, timeout=15)
+        summary = json.loads(completed.stdout)
+        self.assertTrue(summary['pass'], summary)
+        self.assertEqual(summary['samples'], 1300)
+        frames = summary['resourceErrors']['recoveredReads'][0]['frames']
+        self.assertEqual([frame['wall'] for frame in frames], [12180, 12320])
+        self.assert_refused(PRELUDE_SAMPLED_RECOVERY + '''
+result.samples.slice(800, 840).forEach(row => {row.nodes[0].decoded = .5;});
+''', 'decodedProgress')
+        self.assert_refused(PRELUDE_SAMPLED_RECOVERY + 'result.elapsedMs = 1000;', 'fullDuration')
+
+    def test_prelude_readmission_cannot_be_hidden_by_retirement_classification(self):
+        summary = classify_resources(RETIRED_BLOB + '''
+result.prelude = {samples: [{wall: 12050, decks: [{active: true, populated: true,
+  src: retiredUrl, currentSrc: retiredUrl}]}]};
+''')
+        self.assertFalse(summary['pass'], summary)
+        self.assertEqual(summary['resourceErrors']['expectedRetirements'], [])
 
     def test_retired_bounded_trace_can_prove_same_source_recovery(self):
         summary = classify_resources(TRACE_RECOVERY + '''

@@ -16,9 +16,22 @@ Tapping a panel replaces its clip. Untouched residents keep their elements,
 playback positions and audio bindings. Shuffle queues replacements and compresses
 queued crossfades to 0.2 seconds. The old clip keeps looping if its successor fails.
 Failed boomerang derivatives fall back to their admitted forward source.
-Promotion requires fulfilled playback and two distinct decoded media times before
-retiring the old deck. A visible successor that cannot demonstrate progress within
-two seconds rolls back to the retained outgoing clip.
+Running replacements revalidate two fresh, nonseeking decoded frames after any
+seam wait and before revealing the successor. A source-bound progress monitor then
+spans the fade and promotion without restarting its deadline. Its normal budget
+is 800 milliseconds, capped by the configured progress timeout. A stale successor
+rolls back to the retained outgoing clip; promotion still requires fulfilled
+playback and two distinct decoded media times before retiring the old deck.
+Browsers without video-frame callbacks use ready media-time progress as a fallback.
+
+With an outgoing resident available, transient readiness timeouts record
+`handoff-deferred` and return an unsuccessful handoff. Automatic scheduling retains
+the old resident and extends its deadline
+by a whole loop. Decode errors and rejected playback remain errors. Deliberate
+pause suspends monitoring of a verified visible successor; pausing before fresh
+reveal defers the handoff. A manual edit that stays paused can still admit a
+decoded still image. These safeguards preserve the original frame-progress
+history and the separate two-second verification gate.
 
 ## Rhythm and controls
 
@@ -131,9 +144,11 @@ control is disabled; that fallback keeps its existing image and sound behavior.
 An observed native WebKit failure can leave a previously moving boomerang seeking
 at time zero after a loop boundary. The runtime watches the active deck from the
 simulation tick. After an observed end position and 600 milliseconds of continuous
-foreground simulation time without decoded progress, it attempts one forward seek
-to the next frame and calls play on that same element. Its source, audio routing
-and sibling decks retain their identities.
+foreground simulation time without decoded progress, it pauses that element,
+seeks forward to the next frame and calls play in the same task. Its source,
+audio routing and sibling decks retain their identities. The explicit
+`nativeLoopSeekPauseBeforeSeek: false` diagnostic control retains the former
+seek/play operation for paired native trials.
 
 The guard requires known asset frame timing, prior decoded movement, a ready and
 error-free element, and a running visible session. Current library boomerangs
@@ -144,7 +159,8 @@ A delayed host callback contributes at most 100 milliseconds. Another attempt
 requires decoded recovery and a newly observed loop boundary.
 
 Proof output retains bounded attempt, recovery, rejection and interruption
-receipts. Recovery requires two distinct decoded frames after seeking ends; a
+receipts, including the operation strategy and immediate native state. Recovery
+requires two distinct decoded frames after seeking ends; a
 fulfilled play promise is insufficient. The original frame-progress history and
 two-second verification gate remain unchanged. This is a bounded recovery attempt,
 not a guarantee that the browser's native seek will complete. Native evidence must
@@ -187,4 +203,4 @@ See [the current integration status](CLIP_FILTER_VERIFICATION.md#integration-sta
 for the exact revisions and runs. Physical iPhone acceptance remains pending.
 
 Tracking: [issue #89](https://github.com/4444J99/tool-video-loop-compositor/issues/89)
-and [PR #88](https://github.com/4444J99/tool-video-loop-compositor/pull/88).
+and [PR #95](https://github.com/4444J99/tool-video-loop-compositor/pull/95).

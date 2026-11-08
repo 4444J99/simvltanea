@@ -1,6 +1,6 @@
 /* Standalone macOS verification. Never loaded by Studio or substituted for its runtime.
  * NODE_PATH must point to an isolated playwright@1.65.0 installation.
- * Usage: node src/simvltanea/browser/verify_webkit_sustained.js SITE OUTPUT [--held-source-diagnostic]
+ * Usage: node src/simvltanea/browser/verify_webkit_sustained.js SITE OUTPUT [--held-source-diagnostic] [--seek-cohort-diagnostic]
  */
 'use strict';
 
@@ -17,8 +17,9 @@ const sha256 = file => crypto.createHash('sha256').update(fs.readFileSync(file))
 const save = (out, name, value) => fs.writeFileSync(path.join(out, name), JSON.stringify(value, null, 2) + '\n');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-// Read-only observations: no init scripts, graph probes, pixel reads, retained
-// media references or prototype patches are installed in the sustained runs.
+// Read-only observations. The three original phases install no init scripts,
+// graph probes, pixel reads, retained media references or prototype patches.
+// The separately named seek-cohort experiment declares its setup adapter.
 function sample(includeTrace = false) {
   const runtime = globalThis.compositionRuntime, wall = performance.now();
   const decks = [...runtime.slots.values()].flatMap(node => node.decks.map((deck, index) => {
@@ -128,6 +129,10 @@ function traceFrames(result, url) {
 }
 
 function classifyResourceErrors(result) {
+  // Prelude reads belong to the same document and native source lifetimes.
+  // Include them only in resource evidence, never in sustained timing/progress.
+  const observations = [...(result.prelude?.samples || []), ...(result.samples || [])];
+  const evidence = {...result, samples: observations};
   const classified = {expectedRetirements: [], expectedAborts: [], recoveredReads: [], unexpected: []};
   const nativeBlobError = /^The operation couldn[’']t be completed\. \(WebKitBlobResource error 1\.\)$/;
   for (const kind of ['consoleErrors', 'requestFailures']) {
@@ -155,7 +160,7 @@ function classifyResourceErrors(result) {
         // not runner receipt latency, determine whether this is the retired read.
         // Reject re-admission anywhere after disposal, including after the error.
         // A cleared inactive deck may retain a stale native currentSrc value.
-        return !(result.samples || []).some(row => row.wall >= event.wall &&
+        return !observations.some(row => row.wall >= event.wall &&
           (row.decks || []).some(deck => deck.populated && (deck.src === url || (deck.active && deck.currentSrc === url))));
       });
       if (retired) {
@@ -168,14 +173,14 @@ function classifyResourceErrors(result) {
       // or a future retirement are insufficient. Console failures never qualify.
       if (blob && cancelled) {
         const frames = [], previous = new Map();
-        for (const row of result.samples || []) if (row.wall >= wall && row.wall <= wall + 1000) {
+        for (const row of observations) if (row.wall >= wall && row.wall <= wall + 1000) {
           for (const deck of row.decks || []) if (deck.src === url && deck.currentSrc === url) {
             if (result.progressSchema === 1 && (!validProgress(deck.progress, row.wall) || deck.progress.url !== url)) continue;
             frames.push({wall: row.wall, id: deck.id, deck: deck.deck, epoch: deck.progress?.epoch,
               decoded: deck.decoded, callbacks: deck.callbacks, nativeError: deck.nativeError});
           }
         }
-        const trace = traceFrames(result, url);
+        const trace = traceFrames(evidence, url);
         frames.push(...trace.frames.filter(frame => frame.wall >= wall && frame.wall <= wall + 1000));
         frames.sort((a, b) => a.wall - b.wall);
         if (!trace.invalid && !trace.nativeFailure && !trace.ambiguous && frames.length && frames.every(frame => !frame.nativeError)) {
@@ -483,7 +488,7 @@ function proofJournal(out, name, createStream = fs.createWriteStream) {
 
 async function sustained(webkit, device, base, out, name, query, diagnostic = null) {
   const result = {name, progressSchema: 1, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
-  let browser; const journal = proofJournal(out, name), errorOffsets = {};
+  let browser, page; const journal = proofJournal(out, name), errorOffsets = {};
   const journalErrors = async () => {
     for (const kind of ['errors', 'consoleErrors', 'httpErrors', 'requestFailures']) {
       for (let index = errorOffsets[kind] || 0; index < result[kind].length; index++)
@@ -494,8 +499,9 @@ async function sustained(webkit, device, base, out, name, query, diagnostic = nu
   try {
     await journal.append('run', {name, progressSchema: result.progressSchema, requestedUrl: result.requestedUrl});
     browser = await webkit.launch({headless: true}); result.browserVersion = browser.version();
-    const context = await browser.newContext(device), page = await context.newPage();
+    const context = await browser.newContext(device); page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
+    if (diagnostic?.initialize) await diagnostic.initialize(page, result, diagnostic.options);
     const initialAt = performance.now();
     result.phase = 'navigation';
     await page.goto(result.requestedUrl, {waitUntil: 'domcontentloaded'}); await documentClock(page, result); await ready(page);
@@ -504,7 +510,7 @@ async function sustained(webkit, device, base, out, name, query, diagnostic = nu
     await page.waitForFunction(() => compositionRuntime.audio.context?.state === 'running' && SimvltaneaStudio.snapshot().sound === 'on');
     if (diagnostic) {
       result.phase = 'controlled-diagnostic-prelude'; result.prelude = {};
-      await diagnostic.prepare(page, {sample, click, ready, pause, journal}, diagnostic.targets, result.prelude);
+      await diagnostic.prepare(page, {sample, click, ready, pause, journal}, diagnostic.targets, result.prelude, diagnostic.options);
       const {samples: preludeSamples, ...preludeMetadata} = result.prelude;
       await journal.append('diagnostic-prelude', {...preludeMetadata, samples: preludeSamples.length});
     }
@@ -535,18 +541,32 @@ async function sustained(webkit, device, base, out, name, query, diagnostic = nu
     result.completed = true;
   } catch (error) { result.failure = String(error.stack || error); }
   finally {
+    if (diagnostic?.finalize && page) {
+      try {
+        await diagnostic.finalize(page, result);
+        result.events = await page.evaluate(() => compositionRuntime.events);
+        await journal.append('diagnostic-final', {strategyFinal: result.strategyFinal, events: result.events});
+      } catch (error) { result.finalizeFailure = String(error.stack || error); }
+    }
     result.phase = 'closing';
     try { if (browser) await browser.close(); } catch (error) { result.failure = String(error.stack || error); }
     try { await journalErrors(); } catch (error) { result.failure = String(error.stack || error); }
     try { await journal.close(); } catch (error) { result.failure = String(error.stack || error); }
   }
   result.summary = analyse(result);
-  if (diagnostic) {
+  if (diagnostic?.controlledVerdict) {
+    const coverage = diagnostic.coverage(result, diagnostic.targets);
+    coverage.interventions = diagnostic.interventions(result, diagnostic.targets);
+    coverage.checks.strategiesMatch = coverage.checks.strategiesMatch && coverage.interventions.pass && !result.finalizeFailure;
+    coverage.pass = Object.values(coverage.checks).every(value => value === true);
+    result.controlledCohort = diagnostic.controlledVerdict(result.summary, coverage);
+  } else if (diagnostic) {
     result.summary.sourceCoverage = diagnostic.coverage(result, diagnostic.targets);
     if (!result.summary.sourceCoverage.pass) { result.summary.pass = false; result.summary.verdict = 'FAIL'; }
   }
   save(out, name + '.json', result);
-  console.log(JSON.stringify({name, ...result.summary})); return result.summary;
+  const reported = {...result.summary, ...(result.controlledCohort ? {controlledCohort: result.controlledCohort} : {})};
+  console.log(JSON.stringify({name, ...reported})); return reported;
 }
 
 async function audioProof(webkit, out) {
@@ -674,16 +694,18 @@ async function main() {
   const site = path.resolve(process.argv[2] || 'var/site/macos-webkit');
   const out = path.resolve(process.argv[3] || 'var/proofs/macos-webkit');
   const extra = process.argv.slice(4), heldDiagnostic = extra.includes('--held-source-diagnostic');
+  const seekDiagnostic = extra.includes('--seek-cohort-diagnostic');
   fs.mkdirSync(out, {recursive: true});
   const receipt = {startedAtUtc: new Date().toISOString(), platform: process.platform, arch: process.arch,
     scope: 'macOS WebKit with iPhone viewport; Apple desktop media backend, not a physical iPhone or true-peak proof',
     durationPerBaselineMs: DURATION_MS, sampleIntervalMs: SAMPLE_MS, maximumHoldMs: MAX_HOLD_MS,
     observation: 'Sustained phases only read native/app metadata. Controls and audio probes run afterward in separate browsers.',
     budgetScope: 'Sampled session decks and application preparation leases, not measured hardware decoder pipelines'};
-  let server, diagnosticServer;
+  let server, diagnosticServer, seekServer;
   try {
     assert(process.platform === 'darwin', 'This verification requires macOS; no alternative backend is allowed');
-    assert(extra.every(arg => arg === '--held-source-diagnostic'), 'Unknown verification argument');
+    assert(extra.every(arg => ['--held-source-diagnostic', '--seek-cohort-diagnostic'].includes(arg)), 'Unknown verification argument');
+    assert(!seekDiagnostic || heldDiagnostic, 'The paired experiment requires all three original phases');
     receipt.head = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
     receipt.gitStatus = execFileSync('git', ['status', '--short'], {encoding: 'utf8'});
     assert(!receipt.gitStatus, 'Checked-out source is dirty');
@@ -727,8 +749,37 @@ async function main() {
         {...diagnostic, targets: fixture.targets});
       receipt.pass = receipt.pass && receipt.heldSources.pass;
     }
+    if (seekDiagnostic) {
+      const diagnostic = require('./verify_webkit_seek_cohort.js'), adapter = require('./verify_webkit_seek_adapter.js');
+      assert(receipt.sha256['library/manifest.json'] === diagnostic.ORIGIN.sourceManifestSha256,
+        'Seek cohort source manifest differs from the archived failing run');
+      const fixture = diagnostic.buildManifest(JSON.parse(fs.readFileSync(path.join(site, 'library/manifest.json'), 'utf8')),
+        file => fs.readFileSync(path.join(site, 'library', file)));
+      save(out, 'seek-cohort-manifest.json', fixture.manifest);
+      const manifestSha256 = sha256(path.join(out, 'seek-cohort-manifest.json'));
+      receipt.seekCohort = {origin: diagnostic.ORIGIN, targets: fixture.targets, query: fixture.query,
+        helperSha256: sha256(path.join(__dirname, 'verify_webkit_seek_cohort.js')),
+        adapterSha256: sha256(path.join(__dirname, 'verify_webkit_seek_adapter.js')),
+        subsetSha256: manifestSha256, durationPerArmMs: DURATION_MS, maximumHoldMs: MAX_HOLD_MS,
+        control: {path: 'seek-cohort-control.json', pauseBeforeSeek: false, required: false},
+        candidate: {path: 'seek-cohort-candidate.json', pauseBeforeSeek: true, required: true},
+        scope: 'Identical pinned source setup in Hold; only nativeLoopSeekPauseBeforeSeek differs. '
+          + 'Control is diagnostic; candidate controlled verdict and all original phase verdicts are required. '
+          + 'Raw analyse verdicts remain visible; only natural succession is N/A for the separate controlled verdict.'};
+      save(out, 'seek-cohort-origin.json', receipt.seekCohort);
+      seekServer = staticServer(site, fs.readFileSync(path.join(out, 'seek-cohort-manifest.json')));
+      await new Promise(resolve => seekServer.listen(0, '127.0.0.1', resolve));
+      const seekBase = `http://127.0.0.1:${seekServer.address().port}/`;
+      for (const arm of ['control', 'candidate']) {
+        const options = {manifestSha256, pauseBeforeSeek: arm === 'candidate'};
+        receipt.seekCohort[arm].result = await sustained(webkit, device, seekBase, out, 'seek-cohort-' + arm, fixture.query,
+          {...diagnostic, ...adapter, targets: fixture.targets, options});
+      }
+      receipt.pass = receipt.pass && receipt.seekCohort.candidate.result.controlledCohort.pass;
+    }
   } catch (error) { receipt.pass = false; receipt.failure = String(error.stack || error); }
   finally {
+    if (seekServer) { seekServer.closeAllConnections(); await new Promise(resolve => seekServer.close(resolve)); }
     if (diagnosticServer) { diagnosticServer.closeAllConnections(); await new Promise(resolve => diagnosticServer.close(resolve)); }
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
     receipt.finishedAtUtc = new Date().toISOString(); save(out, 'receipt.json', receipt);

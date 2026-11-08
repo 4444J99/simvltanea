@@ -420,6 +420,16 @@ function applySlice(node) {
   }
 
   const cancelled = () => new DOMException('Selection superseded', 'AbortError');
+  class DeferredHandoffError extends Error {
+    constructor(reason, detail = {}) {
+      super(reason); this.name = 'DeferredHandoffError'; this.detail = detail;
+    }
+  }
+  const nativePlayFailure = error => {
+    if (error?.name !== 'AbortError') return error;
+    const failure = new Error(`Native playback rejected (AbortError): ${String(error.message || error)}`);
+    failure.cause = error; return failure;
+  };
 
   // Conservative interaction profile, not a claim about hardware decoder
   // capacity: touch laptops and tablets share the mobile four-foreground cap.
@@ -478,7 +488,7 @@ function applySlice(node) {
       this.frame = 0; this.generation = 0; this.orientation = null; this.orientationOverride = null;
       this.starting = false; this.initializing = false; this.restarting = false;
       this.playingIntent = false; this.revision = 0; this.pending = null; this.draining = false;
-      this.controller = null; this.fade = null; this.seam = null; this.promotion = null;
+      this.controller = null; this.fade = null; this.seam = null; this.promotion = null; this.handoff = null;
       this.territory = null; this.bindings = new WeakMap();
       this.audio = {context: null, mode: 'none', enabled: false, blocked: null, input: null};
       this.sound = {enabled: false, volume: .7}; this.master = null;
@@ -575,14 +585,17 @@ function applySlice(node) {
           deck.progress = new FrameProgress(typeof media.requestVideoFrameCallback === 'function');
           deck.proofDeck = i;
         }
-        let frameEpoch = deck.progress?.epoch;
+        let frameEpoch = deck.progress?.epoch, frameSourceEpoch = deck.sourceEpoch;
         const watch = (wall, metadata) => {
           deck.callbacks++; deck.decoded = {mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames, wall};
           // A callback registered before src changed cannot certify the new
           // source. The next registration belongs to its current epoch.
           if (deck.progress && deck.progress.epoch === frameEpoch && media.currentSrc === deck.url)
             deck.progress?.observe(wall, metadata.mediaTime);
+          if (deck.handoff && deck.sourceEpoch === frameSourceEpoch && media.currentSrc === deck.url)
+            deck.handoff.observe(wall, metadata.mediaTime);
           frameEpoch = deck.progress?.epoch;
+          frameSourceEpoch = deck.sourceEpoch;
           if (node.active === deck) { node.callbacks++; node.decoded = deck.decoded; }
           if (!this.disposed) deck.frameId = media.requestVideoFrameCallback(watch);
         };
@@ -643,7 +656,10 @@ function applySlice(node) {
                     more ? Math.min(.2, this.crossfadeSec) : this.crossfadeSec, request.atLoopBoundary);
                 } catch (error) {
                   if (error.name === 'AbortError') throw error;
-                  success = false; this.report(error, node);
+                  success = false;
+                  if (error instanceof DeferredHandoffError)
+                    this.record('handoff-deferred', node.id, {reason: error.message, ...error.detail});
+                  else this.report(error, node);
                 }
               } else {
                 node.source = source.id;
@@ -730,40 +746,169 @@ function applySlice(node) {
         if (signal.aborted) abort();
       });
     }
-    playPromoted(deck, signal) {
+    watchHandoff(node, incoming, outgoing, signal) {
+      const media = incoming.media, url = incoming.url, epoch = incoming.sourceEpoch;
+      const budget = Math.max(1, Math.min(800, this.progressTimeoutMs));
+      let timer = null, playTask = null, done = false, previous = incoming.decoded?.mediaTime;
+      const began = performance.now(), playGeneration = this.generation;
+      let lastAt = began, frames = 0, pausedAt = null, played = false, fresh = false, resolveReady, rejectReady;
+      const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+      // A later fade/promotion failure also rejects its own waiter. The initial
+      // freshness promise may already have resolved by then.
+      ready.catch(() => {});
+      const owned = () => !this.disposed && this.nodes.get(node.id) === node && node.active === outgoing &&
+        incoming.url === url && incoming.sourceEpoch === epoch && incoming.handoff === state;
+      const stop = () => {
+        if (done) return; done = true; clearTimeout(timer); clearTimeout(playTask);
+        signal.removeEventListener('abort', abort); media.removeEventListener('error', decodeError);
+        media.removeEventListener('timeupdate', fallback);
+        if (incoming.handoff === state) incoming.handoff = null;
+        if (this.handoff === state) this.handoff = null;
+      };
+      const fail = error => {
+        if (done) return;
+        state.error = error; stop(); rejectReady(error);
+        if (this.fade?.incoming === incoming && this.fade.handoff === state) this.fade.finish(error);
+        if (this.promotion?.deck === incoming && this.promotion.handoff === state) this.promotion.finish(error);
+      };
+      const defer = reason => {
+        if (media.error) { fail(new Error('Incoming clip could not be decoded')); return; }
+        fail(new DeferredHandoffError(reason,
+          {url, sourceEpoch: epoch, phase: state.phase, visible: state.visible,
+            noProgressMs: performance.now() - lastAt, waitedMs: performance.now() - began, budgetMs: budget}));
+      };
+      const abort = () => fail(cancelled());
+      const decodeError = () => { if (media.error) fail(new Error('Incoming clip could not be decoded')); };
+      const arm = () => {
+        clearTimeout(timer);
+        if (!done && pausedAt === null) timer = setTimeout(check,
+          Math.max(1, Math.min(lastAt + budget, fresh ? Infinity : began + budget) - performance.now()));
+      };
+      const check = () => {
+        if (done) return;
+        if (!owned() || signal.aborted) { abort(); return; }
+        if (media.error) { decodeError(); return; }
+        if (!this.running || root.document?.hidden) { state.pause(); return; }
+        if (!fresh && performance.now() - began >= budget) {
+          defer(played ? 'Incoming frames did not become ready' : 'Incoming play did not settle'); return;
+        }
+        if (performance.now() - lastAt >= budget) { defer('Incoming frames did not keep advancing'); return; }
+        arm();
+      };
+      const finishFresh = () => {
+        if (done || fresh) return;
+        if (!owned() || signal.aborted) { abort(); return; }
+        if (media.error) { decodeError(); return; }
+        if (!this.running || root.document?.hidden) { state.pause(); return; }
+        if (performance.now() - began >= budget) {
+          defer(played ? 'Incoming frames did not become ready' : 'Incoming play did not settle'); return;
+        }
+        if (played && frames >= 2 && !media.seeking && !media.paused) { fresh = true; resolveReady(); }
+      };
+      const state = {ready, visible: false, phase: 'freshness', error: null, stop,
+        assert: () => { if (state.error) throw state.error; if (!owned()) throw cancelled(); },
+        timeout: reason => {
+          if (!owned()) { fail(cancelled()); return state.error || cancelled(); }
+          defer(reason); return state.error;
+        },
+        observe: (wall, decoded) => {
+          if (done || pausedAt !== null || !owned() || !Number.isFinite(decoded)) return;
+          if (media.error) { decodeError(); return; }
+          if (media.seeking || media.paused) frames = 0;
+          if (decoded === previous) return;
+          // Do not let a late callback erase an already-exceeded progress bound.
+          if (wall - lastAt >= budget) { defer('Incoming frames did not keep advancing'); return; }
+          previous = decoded; lastAt = Math.max(lastAt, wall);
+          if (!media.seeking && !media.paused) frames++;
+          finishFresh();
+        },
+        pause: () => {
+          if (done || pausedAt !== null) return;
+          if (!state.visible) { defer('Playback paused before fresh incoming frames'); return; }
+          pausedAt = performance.now(); clearTimeout(timer);
+        },
+        resume: () => {
+          if (done || pausedAt === null) return;
+          lastAt += performance.now() - pausedAt; pausedAt = null; arm();
+        }};
+      const fallback = () => {
+        if (media.currentSrc === url && media.readyState >= 2) state.observe(performance.now(), media.currentTime);
+      };
+      incoming.handoff = state; this.handoff = state;
+      signal.addEventListener('abort', abort, {once: true});
+      media.addEventListener('error', decodeError);
+      if (!media.requestVideoFrameCallback) media.addEventListener('timeupdate', fallback);
+      check();
+      // Let the first frame's native callbacks settle, then reassert playback
+      // once while hidden. This owns no new deadline and cannot revive a paused
+      // or superseded request. Visible promotion still plays on its own stack.
+      if (!done) playTask = setTimeout(() => {
+        playTask = null;
+        if (done || !owned() || state.visible || this.generation !== playGeneration ||
+            !this.running || root.document?.hidden) return;
+        try { Promise.resolve(media.play()).then(() => {
+          if (done || !owned()) return;
+          played = true; finishFresh();
+        }, error => { if (owned()) fail(nativePlayFailure(error)); }); }
+        catch (error) { fail(nativePlayFailure(error)); }
+      }, 0);
+      return state;
+    }
+    playPromoted(deck, signal, handoff = null) {
       // Some WebKit media pipelines present their primed frame but do not
       // advance after becoming visible until play() is requested again. Keep
       // this request on the promotion stack, with no intervening RAF.
       return new Promise((resolve, reject) => {
         const media = deck.media;
+        const url = deck.url, epoch = deck.sourceEpoch, generation = this.generation;
         let done = false, fulfilled = false, frames = 0, frame = null, previous = deck.decoded?.mediaTime;
         const finish = (error, verified = false) => {
           if (done) return; done = true; clearTimeout(timer);
           signal.removeEventListener('abort', abort);
           media.removeEventListener('timeupdate', fallback);
           if (frame !== null) media.cancelVideoFrameCallback?.(frame);
-          if (this.promotion?.deck === deck) this.promotion = null;
+          if (this.promotion === promotion) this.promotion = null;
           error ? reject(error) : resolve(verified);
         };
         const abort = () => finish(cancelled());
-        const progress = current => {
-          if (current !== previous) { frames++; previous = current; }
+        const owned = () => !signal.aborted && !this.disposed && this.generation === generation &&
+          deck.url === url && deck.sourceEpoch === epoch && media.currentSrc === url;
+        const verify = () => {
+          if (done) return;
+          if (!owned()) { abort(); return; }
+          if (media.error) { finish(new Error('Promoted clip could not be decoded')); return; }
+          if (media.seeking || media.paused) { frames = 0; return; }
           if (fulfilled && frames >= 2) finish(null, true);
+        };
+        const progress = current => {
+          if (done) return;
+          if (!owned()) { abort(); return; }
+          if (!Number.isFinite(current) || media.seeking || media.paused) {
+            frames = 0;
+            if (Number.isFinite(current)) previous = current;
+            verify(); return;
+          }
+          if (current !== previous) { frames++; previous = current; }
+          verify();
         };
         const decoded = (_, metadata) => {
           frame = null; progress(metadata.mediaTime);
           if (!done) frame = media.requestVideoFrameCallback(decoded);
         };
         const fallback = () => { if (media.readyState >= 2) progress(media.currentTime); };
-        const timer = setTimeout(() => finish(new Error('Promoted clip did not present new frames in time')),
+        const timer = setTimeout(() => finish(handoff
+          ? handoff.timeout('Promoted clip did not present new frames in time')
+          : new Error('Promoted clip did not present new frames in time')),
           Math.min(this.primeTimeoutMs, this.progressTimeoutMs));
-        this.promotion = {deck, finish};
+        const promotion = this.promotion = {deck, finish, handoff};
         signal.addEventListener('abort', abort, {once: true});
         if (signal.aborted) { abort(); return; }
         if (media.requestVideoFrameCallback) frame = media.requestVideoFrameCallback(decoded);
         else { previous = media.currentTime; media.addEventListener('timeupdate', fallback); }
-        try { media.play().then(() => { fulfilled = true; if (frames >= 2) finish(null, true); }, finish); }
-        catch (error) { finish(error); }
+        const rejected = error => finish(signal.aborted || this.disposed || this.generation !== generation ||
+          deck.url !== url || deck.sourceEpoch !== epoch ? cancelled() : nativePlayFailure(error));
+        try { media.play().then(() => { fulfilled = true; verify(); }, rejected); }
+        catch (error) { rejected(error); }
       });
     }
     async replace(node, item, source, signal, duration, atLoopBoundary = false) {
@@ -772,6 +917,8 @@ function applySlice(node) {
         const outgoing = node.active, incoming = node.decks.find(deck => deck !== outgoing);
         const previous = {active: node.active, media: node.media, item: node.item, source: node.source,
           audio: node.audio, birthTime: node.birthTime, callbacks: node.callbacks, decoded: node.decoded};
+        const beganRunning = this.running;
+        let handoff = null;
         node.busy = true; node.phase = 'LOADING';
         incoming.item = item; incoming.media.muted = true;
         incoming.presence = this.effectsEnabled ? 0 : 1;
@@ -790,6 +937,14 @@ function applySlice(node) {
           this.bind(incoming);
           if (atLoopBoundary && outgoing) await this.waitForSeam(node, signal);
           if (signal.aborted) throw cancelled();
+          if (incoming.media.error) throw new Error('Incoming clip could not be decoded');
+          if (outgoing && (beganRunning || this.running)) {
+            if (!this.running) throw new DeferredHandoffError('Playback paused before fresh incoming frames',
+              {url: incoming.url, sourceEpoch: incoming.sourceEpoch, phase: 'freshness', visible: false});
+            handoff = this.watchHandoff(node, incoming, outgoing, signal);
+            await handoff.ready; handoff.assert();
+            handoff.visible = true; handoff.phase = 'fade';
+          }
           // Priming can run for several native loops. The resident's entrance
           // begins when it is revealed, independently of the media playhead.
           incoming.enteredAt = this.clock.simTime;
@@ -805,17 +960,22 @@ function applySlice(node) {
           if (outgoing && this.running && !node.resting && duration > 0) {
             node.phase = 'CROSSFADING';
             await new Promise((resolve, reject) => {
-              const abort = () => {
-                if (this.fade?.incoming === incoming) this.fade = null;
-                signal.removeEventListener('abort', abort); reject(cancelled());
+              let done = false;
+              const finish = error => {
+                if (done) return; done = true;
+                if (this.fade === fade) this.fade = null;
+                signal.removeEventListener('abort', abort);
+                error ? reject(error) : resolve();
               };
+              const abort = () => finish(cancelled());
               signal.addEventListener('abort', abort, {once: true});
-              this.fade = {node, outgoing, incoming, began: this.clock.simTime, duration,
-                finish: () => { signal.removeEventListener('abort', abort); resolve(); }};
+              const fade = this.fade = {node, outgoing, incoming, handoff, began: this.clock.simTime, duration, finish};
               incoming.media.muted = !this.sound.enabled || !this.audio.enabled;
             });
           }
           if (signal.aborted) throw cancelled();
+          handoff?.assert();
+          if (handoff) handoff.phase = 'promotion';
           // Sound can unlock during the fade after the earlier bind attempt.
           // No audible resident may bypass the persistent master graph.
           this.bind(incoming);
@@ -828,8 +988,9 @@ function applySlice(node) {
           // A pause settles the waiter without frame proof. If play resumes in
           // the same task, verify again before committing the visible deck.
           let verified = false;
-          while (this.running && !verified && !signal.aborted) verified = await this.playPromoted(incoming, signal);
+          while (this.running && !verified && !signal.aborted) verified = await this.playPromoted(incoming, signal, handoff);
           if (signal.aborted) throw cancelled();
+          handoff?.assert();
           if (!this.running) incoming.media.pause();
           // Promotion is now committed. Until this point the outgoing decoder,
           // Blob URL and ecological identity remain authoritative. Publishing
@@ -843,6 +1004,7 @@ function applySlice(node) {
           if (node.audio) this.notifyAudio(node);
           this.record('resident', node.id);
         } catch (error) {
+          handoff?.stop();
           node.promoting = null;
           Object.assign(node, previous);
           this.unload(incoming);
@@ -855,7 +1017,7 @@ function applySlice(node) {
           this.applyLayout(); this.updateAudio();
           if (node.audio) this.notifyAudio(node);
           throw error;
-        } finally { node.busy = false; }
+        } finally { handoff?.stop(); node.busy = false; }
       }, {signal});
     }
     unload(deck) {
@@ -1054,7 +1216,8 @@ function applySlice(node) {
       if (!state?.attempt || state.attempt.interrupted) return;
       state.attempt.interrupted = true;
       this.recordLoopSeek('native-loop-seek-interrupted', state.id,
-        {url: state.url, sourceEpoch: state.epoch, attemptedAt: state.attempt.time, reason});
+        {url: state.url, sourceEpoch: state.epoch, attemptedAt: state.attempt.time,
+          strategy: state.attempt.strategy, reason});
     }
     recoverNativeLoop(node, time, dt) {
       const deck = node.active, media = deck?.media;
@@ -1089,7 +1252,8 @@ function applySlice(node) {
           if (state.recoveryFrames >= 2) {
             if (!state.attempt.interrupted) this.recordLoopSeek('native-loop-seek-recovered', node.id,
               {url: state.url, sourceEpoch: state.epoch, attemptedAt: state.attempt.time,
-                decodedChanges: state.recoveryFrames, current, decoded: state.decoded, seeking: media.seeking});
+                strategy: state.attempt.strategy, decodedChanges: state.recoveryFrames,
+                current, decoded: state.decoded, seeking: media.seeking});
             state.attempt = null; state.endSeen = false; state.recoveryFrames = 0;
           }
         }
@@ -1106,22 +1270,34 @@ function applySlice(node) {
       // Count foreground simulation time, not a single delayed host callback.
       state.stalled += Math.max(0, Math.min(.1, Number(dt) || 0));
       if (state.stalled + 1e-9 < .6) return;
-      const attempt = state.attempt = {time, generation: this.generation};
+      const pauseBeforeSeek = this.options?.nativeLoopSeekPauseBeforeSeek !== false;
+      const strategy = pauseBeforeSeek ? 'pause-seek-play' : 'seek-play';
+      const attempt = state.attempt = {time, generation: this.generation, strategy};
       const detail = {url: state.url, sourceEpoch: state.epoch, current, seeking: media.seeking,
         decoded: state.decoded, priorSeamCurrent: state.seamCurrent, duration,
-        stalledSimSec: state.stalled, target: 1 / fps};
-      this.recordLoopSeek('native-loop-seek-recovery', node.id, detail);
+        stalledSimSec: state.stalled, target: 1 / fps, strategy, afterPause: null};
       const stillOwned = () => !this.disposed && this.nodes.get(node.id) === node && node.active === deck &&
         deck.loopSeek === state && deck.url === state.url && deck.sourceEpoch === state.epoch &&
         state.attempt === attempt && this.generation === attempt.generation && !attempt.interrupted;
       const failed = error => {
         if (stillOwned()) this.recordLoopSeek('native-loop-seek-play-rejected', node.id,
-          {url: state.url, sourceEpoch: state.epoch, message: String(error?.message || error)});
+          {url: state.url, sourceEpoch: state.epoch, strategy, message: String(error?.message || error)});
       };
       // Experimental target-only recovery. Keep the resident, URL, decoder and
       // audio routing intact; a fulfilled play promise alone is not recovery.
-      try { media.currentTime = 1 / fps; Promise.resolve(media.play()).catch(failed); }
-      catch (error) { failed(error); }
+      const nativeState = () => ({paused: media.paused, current: media.currentTime, seeking: media.seeking});
+      let playing, operationError;
+      try {
+        if (pauseBeforeSeek) { media.pause(); detail.afterPause = nativeState(); }
+        media.currentTime = 1 / fps; detail.afterSeek = nativeState();
+        playing = media.play(); detail.afterPlay = nativeState();
+      } catch (error) { operationError = error; }
+      this.recordLoopSeek('native-loop-seek-recovery', node.id, detail);
+      if (operationError) failed(operationError);
+      else Promise.resolve(playing).then(() => {
+        if (stillOwned()) this.record('native-loop-seek-play-fulfilled', node.id,
+          {url: state.url, sourceEpoch: state.epoch, strategy, ...nativeState()});
+      }, failed);
     }
     tick(time, dt = 0) {
       this.frame = Math.floor(time * (this.plan?.fps || 24));
@@ -1165,6 +1341,7 @@ function applySlice(node) {
     suspend() {
       if (!this.running) return;
       this.running = false; this.generation++; this.clock.pause();
+      this.handoff?.pause();
       for (const node of this.slots.values()) for (const deck of node.decks) this.interruptLoopSeek(deck, 'suspended');
       if (this.proof) {
         this.proofSuspensionCount++;
@@ -1185,6 +1362,7 @@ function applySlice(node) {
       this.playingIntent = true;
       if (this.running || document.hidden) return;
       this.running = true; this.generation++; this.clock.start();
+      this.handoff?.resume();
       if (this.proof) {
         const wall = performance.now();
         for (const node of this.slots.values()) for (const deck of node.decks) deck.progress?.setRunning(true, wall);

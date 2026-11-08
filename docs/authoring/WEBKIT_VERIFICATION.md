@@ -121,7 +121,7 @@ or human listening quality.
 
 The workflow additionally passes `--held-source-diagnostic`. This adds a separate
 180-second session; it does not replace either default baseline or change the
-two-second hold threshold. The step allows 15 minutes and the job 35 minutes so
+two-second hold threshold. The step allows 22 minutes and the job 35 minutes so
 the additional work does not consume the original baselines' time allowance.
 
 The source set comes from failed Apple run `42431559354` at PR #92 head
@@ -164,6 +164,64 @@ The two default baselines retain ordinary population and rest coverage. A passin
 diagnostic establishes that coverage for its tested revision, not a cause or
 repair of the archived failure.
 
+## Paired source-controlled seek experiment
+
+`--seek-cohort-diagnostic` adds two further 180-second sessions, while requiring
+all three original phases above. The reference arm explicitly sets
+`nativeLoopSeekPauseBeforeSeek=false`; the candidate arm sets it to `true`.
+A diagnostic-only initialization hook applies that option when Studio assigns
+its newly constructed Session, before initial media admission. Start and end
+option snapshots record that boundary. No production query or control is added.
+
+The cohort comes from original failed run `42444130199`, head
+`373e3870a82421ff99a1a3add283ddbece785697`, artifact `13602957458`
+(SHA-256 `3eae6b8870706e0f5719f829af7108512e639aa10a83c7bb3baa73d3543ae522`).
+The archived target's decoded gap was 3,221 ms despite an attempted recovery;
+that failure remains preserved. Both arms use the same six full manifest entries
+and hash-verified forward and boomerang bytes:
+
+| Role | Source | Slot |
+| --- | --- | --- |
+| Peer | `2f949d8676d1` | 1 |
+| Peer | `efe8ffd8c723` | 2 |
+| Resident sibling | `3ffa0d345ed1` | 3 |
+| Target | `8356ed30a9fe` | 4 |
+| Target predecessor | `443fbc2c885a` | 4 |
+| Incoming sibling | `99835e485b6e` | 3 |
+
+The adapter begins with the two peers, resident sibling and predecessor in Hold.
+After decoded wraps are observed, it supplies pinned Blob items to the actual
+`Session.reconcile` API: predecessor to target, then resident to incoming sibling.
+The second transition starts after observing the resident's next phrase. Native
+priming, seam waiting, crossfading, the preparation lease, persistent media
+elements and audio graph remain owned by Session. The adapter never calls a
+video's play, pause or seek methods. It verifies the manifest and incoming bytes
+again in the browser and records admission hashes and exact transition samples.
+
+Setup must prove all six sources decoded and wrapped, unchanged sibling and
+slot identities, and actual incoming-sibling decoded advances while the target
+and outgoing sibling coexist. Raw priming observations are retained separately
+from qualified overlap evidence. The final quartet stays in Hold for 180 seconds
+and must each decode and wrap again. This reproduces source identities and
+transition order, not original wall timing, deck ages or ecological history.
+
+Each arm preserves its unmodified `analyse()` verdict, including the expected
+natural-succession failure for a fixed composition. A separate named controlled
+verdict marks only succession as not applicable. Every other original check,
+including the two-second decoded hold, observation coverage, errors, native
+wraps and resource limits, remains required, together with the cohort coverage.
+The candidate controlled verdict is required; the reference arm is diagnostic.
+Neither can replace any original phase's full natural-evolution verdict.
+
+Attempt attribution uses authoritative `nativeLoopSeek` proof receipts, joined
+to exact cohort slot, source hash, URL and epoch after option assignment. The
+ordinary event ring is retained but not double-counted: its wall timestamp is
+recorded separately from the proof receipt. Missing receipts or a mismatched
+strategy fail attribution. Zero attempts is `NOT_EXERCISED`; observed recovery
+does not alone establish a causal improvement over the reference arm. The
+original failures, all raw JSON/NDJSON, both verdicts, source hashes and strategy
+substep receipts remain in the uploaded artifact without trimming.
+
 ## Native loop-seek recovery evidence
 
 `progressSummary.nativeLoopSeek` retains attempted, recovered, rejected and
@@ -188,7 +246,7 @@ export NODE_PATH="$(mktemp -d)/node_modules"
 npm install --prefix "${NODE_PATH%/node_modules}" --no-save --package-lock=false --ignore-scripts playwright@1.65.0
 node "$NODE_PATH/playwright/cli.js" install webkit
 python3 -m tools.publishing.build_studio_site --output var/site/macos-webkit
-node src/simvltanea/browser/verify_webkit_sustained.js var/site/macos-webkit var/proofs/macos-webkit --held-source-diagnostic
+node src/simvltanea/browser/verify_webkit_sustained.js var/site/macos-webkit var/proofs/macos-webkit --held-source-diagnostic --seek-cohort-diagnostic
 ```
 
 The workflow uploads `var/proofs/macos-webkit/` on success or failure, including
@@ -205,7 +263,7 @@ skip the other run.
 Analyzer and journal regressions run without a browser:
 
 ```bash
-python3 -m unittest src.simvltanea.browser.test_webkit_verifier src.simvltanea.browser.test_webkit_held_sources
+python3 -m unittest src.simvltanea.browser.test_webkit_verifier src.simvltanea.browser.test_webkit_held_sources src.simvltanea.browser.test_webkit_seek_cohort src.simvltanea.browser.test_webkit_seek_adapter
 ```
 
 Reanalysis writes a separate derived receipt and retains the original artifact

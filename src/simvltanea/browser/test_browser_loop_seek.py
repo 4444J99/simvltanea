@@ -8,19 +8,20 @@ FIXTURE = r'''
 const assert=require('node:assert/strict');
 const {Session}=require(process.argv[1]);
 global.document={hidden:false};
-let seeks=[],plays=[],events=[],wall=0;
+let seeks=[],plays=[],pauses=[],operations=[],events=[],wall=0;
 const make=(id='one')=>{
  let current=0;
  const media={duration:4.8,loop:true,paused:false,seeking:false,readyState:4,error:null,currentSrc:'blob:'+id,
-  get currentTime(){return current},set currentTime(v){current=v;seeks.push({id,value:v})},
-  play(){plays.push(id);return Promise.resolve()},pause(){throw Error('unexpected pause')},load(){throw Error('unexpected load')}};
+  get currentTime(){return current},set currentTime(v){current=v;seeks.push({id,value:v});operations.push({id,op:'seek',value:v})},
+  play(){plays.push(id);operations.push({id,op:'play'});this.paused=false;return Promise.resolve()},
+  pause(){pauses.push(id);operations.push({id,op:'pause'});this.paused=true},load(){throw Error('unexpected load')}};
  const deck={url:'blob:'+id,sourceEpoch:1,media,item:{asset:{fps:30}},decoded:{mediaTime:0,wall:0},binding:{id}};
  return {id,active:deck,media,decks:[deck],audio:deck.binding,resting:false,busy:false,phase:'ACTIVE'};
 };
 const n=make(),sibling=make('sibling');
 const session=Object.create(Session.prototype);
 Object.assign(session,{nodes:new Map([['one',n],['sibling',sibling]]),running:true,draining:false,disposed:false,generation:1,record(type,id,detail){events.push({type,id,...detail})}});
-const current=(node,v,decoded,dt=.1)=>{node.media.currentTime=v;seeks.pop();if(decoded!==undefined)node.active.decoded={mediaTime:decoded,wall:wall};wall+=dt;session.recoverNativeLoop(node,wall,dt)};
+const current=(node,v,decoded,dt=.1)=>{node.media.currentTime=v;seeks.pop();operations.pop();if(decoded!==undefined)node.active.decoded={mediaTime:decoded,wall:wall};wall+=dt;session.recoverNativeLoop(node,wall,dt)};
 const progress=()=>{current(n,.1,.1);current(n,.2,.2);current(n,.3,.3);current(n,4.78,4.7666667);};
 const seek=(dt=.1)=>{n.media.seeking=true;current(n,0,undefined,dt)};
 '''
@@ -30,6 +31,34 @@ class NativeLoopSeekTests(unittest.TestCase):
         result=subprocess.run(['node','-e',FIXTURE+body,str(LIVE)],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
         return result
+
+    def test_candidate_pauses_only_target_before_seek_and_play_with_operation_receipt(self):
+        self.run_js('''session.proof={};progress();for(let i=0;i<7;i++)seek();
+assert.deepEqual(operations,[{id:'one',op:'pause'},{id:'one',op:'seek',value:1/30},{id:'one',op:'play'}]);
+assert.deepEqual(pauses,['one']);assert.equal(n.media.paused,false);assert.equal(sibling.media.paused,false);
+assert.equal(session.running,true);assert.equal(session.generation,1);
+const receipt=session.loopSeekProof.receipts.find(e=>e.type==='native-loop-seek-recovery');
+assert.equal(receipt.strategy,'pause-seek-play');assert.equal(receipt.afterPause.paused,true);
+assert.equal(receipt.afterSeek.current,1/30);assert.equal(receipt.afterPlay.paused,false);
+for(let i=0;i<20;i++)seek();assert.equal(pauses.length,1);
+Promise.resolve().then(()=>{assert.equal(session.loopSeekProof.recovered,0);
+assert.equal(events.filter(e=>e.type==='native-loop-seek-play-fulfilled').length,1)});
+''')
+
+    def test_diagnostic_control_keeps_original_seek_play_strategy(self):
+        self.run_js('''session.options={nativeLoopSeekPauseBeforeSeek:false};progress();for(let i=0;i<7;i++)seek();
+assert.deepEqual(pauses,[]);assert.deepEqual(operations,[{id:'one',op:'seek',value:1/30},{id:'one',op:'play'}]);
+const receipt=events.find(e=>e.type==='native-loop-seek-recovery');
+assert.equal(receipt.strategy,'seek-play');assert.equal(receipt.afterPause,null);''')
+
+    def test_rejected_candidate_play_stays_paused_and_cannot_claim_recovery(self):
+        self.run_js('''session.proof={};n.media.play=()=>{plays.push('one');return Promise.reject(Error('blocked'))};
+progress();for(let i=0;i<6;i++)seek();
+Promise.resolve().then(()=>{assert.equal(n.media.paused,true);assert.equal(session.running,true);
+assert.equal(session.loopSeekProof.rejected,1);assert.equal(session.loopSeekProof.recovered,0);
+for(let i=0;i<20;i++)seek();assert.equal(plays.length,1);assert.equal(pauses.length,1);
+assert.equal(session.loopSeekProof.interrupted,1);assert.equal(n.active.url,'blob:one');
+assert.equal(sibling.media.paused,false)});''')
 
     def test_true_stall_reseeks_once_without_touching_sibling_or_graph(self):
         self.run_js('''progress();const before={node:sibling,media:sibling.media,deck:sibling.active,audio:sibling.audio};
@@ -110,12 +139,12 @@ assert.equal(events.filter(e=>e.type==='native-loop-seek-recovered').length,1);f
 n.media.seeking=false;progress();for(let i=0;i<7;i++)seek();assert.equal(plays.length,2);''')
 
     def test_late_play_rejection_from_retired_source_has_no_effect(self):
-        self.run_js('''let reject;n.media.play=()=>{plays.push('one');return new Promise((_,r)=>{reject=r})};
+        self.run_js('''let reject;n.media.play=()=>{n.media.paused=false;plays.push('one');return new Promise((_,r)=>{reject=r})};
 progress();for(let i=0;i<7;i++)seek();n.active.sourceEpoch++;n.active.url='blob:next';n.media.currentSrc='blob:next';
 reject(Error('old source'));Promise.resolve().then(()=>assert.equal(events.filter(e=>e.type==='native-loop-seek-play-rejected').length,0));''')
 
     def test_deliberate_resume_cannot_be_misattributed_as_recovery(self):
-        self.run_js('''let reject;n.media.play=()=>{plays.push('one');return new Promise((_,r)=>{reject=r})};
+        self.run_js('''let reject;n.media.play=()=>{n.media.paused=false;plays.push('one');return new Promise((_,r)=>{reject=r})};
 progress();for(let i=0;i<7;i++)seek();session.running=false;session.generation++;seek();
 session.running=true;session.generation++;n.media.seeking=false;current(n,.1,.1);current(n,.2,.2);current(n,.3,.3);
 assert.equal(events.filter(e=>e.type==='native-loop-seek-recovered').length,0);
