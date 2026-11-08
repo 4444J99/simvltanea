@@ -267,7 +267,7 @@ class StageStudioTests(unittest.TestCase):
         self.assertEqual((output / 'studio.js').read_bytes(), STUDIO_JS.read_bytes())
         self.assertEqual(json.loads((output / 'layouts.json').read_text()), layout_bundle_v2())
         html = (output / 'index.html').read_text()
-        self.assertEqual(html, INDEX_HTML)
+        self.assertEqual((output / 'watch.html').read_text(), INDEX_HTML)
         self.assertIn('<html lang="en">', html)
         self.assertIn('<title>SIMVLTANEA studio: loops on their own clocks</title>', html)
         for name in ('compiler.js', 'studio.js', 'runtime.js'):

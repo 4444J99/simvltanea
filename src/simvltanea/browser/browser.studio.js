@@ -2131,6 +2131,10 @@
     else { paused = false; r.play().catch(() => {}); }
     sync();
   }
+  window.addEventListener('message', event => {
+    if (event.source !== window.parent || event.origin !== location.origin || event.data?.type !== 'simvltanea:pause') return;
+    paused = true; const r = runtime(); if (r) r.pause(); sync();
+  });
   ui.play.addEventListener('click', togglePlay);
   ui.start.addEventListener('click', togglePlay);
 
