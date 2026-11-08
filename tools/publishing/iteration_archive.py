@@ -166,6 +166,11 @@ async function examples(){
    const state=frame.contentWindow.SimvltaneaStudio.snapshot();
    return !state.busy && state.loops.length>=chosen.length;
   });
+  const panels=doc.getElementById('panels');
+  if(panels && Array.from(panels.options).some(option=>option.value===String(chosen.length))){
+   panels.value=String(chosen.length);
+   panels.dispatchEvent(new frame.contentWindow.Event('change',{bubbles:true}));
+  }
   frame.style.visibility='visible';
   if(document.hidden)pauseOriginal();
   status.textContent='Public clips loaded. Use the original controls below.';
