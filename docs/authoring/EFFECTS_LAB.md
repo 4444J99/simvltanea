@@ -1,12 +1,21 @@
-# Effects Lab editing workspace
+# Composition Workspace
 
-Effects Lab is a browser editing workspace for **Independent Loop Compositor**.
+Composition Workspace is a parallel authoring environment within **SIMVLTANEA**,
+using **Independent Loop Compositor**.
 It combines a media bin, spatial panel preview, arrangement timeline, clip
-inspector, and a separate performance view. Open it from the **Effects Lab** link
-in Studio, or directly at `lab.html` in a staged compositor site. The page opens
+inspector, and a separate performance view. Open it from **Compose** in Studio,
+or directly at `workspace.html` in a staged compositor site. Its **Play** link
+returns to Studio. The former `lab.html` address remains a compatibility alias
+with the same project and media storage. The page opens
 on an empty timeline with three visible panels, ready for your footage and found sounds. No clips are
 inserted automatically. An optional **Public media** picker offers recorded
 footage and found sounds with their source and rights records.
+
+Effects remain controls inside the playback and composition environments. The
+workspace is not housed in the filter dialog. Switching environments navigates
+between pages; it does not automatically transfer Studio playback into an
+arrangement. Use the workspace's Save/Open saved or JSON export/import controls
+for authored arrangements.
 
 The earlier [dataset Lab](LAB.md) still explores strip layout, framing, pool
 selection, and source metadata. This workspace places overlapping picture

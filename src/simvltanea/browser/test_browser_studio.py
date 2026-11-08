@@ -257,7 +257,7 @@ class StageStudioTests(unittest.TestCase):
         stage_studio(output)
         self.assertEqual(sorted(path.name for path in output.iterdir()), sorted(STUDIO_FILES))
         self.assertEqual(set(STUDIO_FILES), {'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json',
-                                           'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js',
+                                           'workspace.html', 'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js',
                                            'lab_compiler.js', 'lab_layouts.js'})
         self.assertTrue(all(path.is_file() and not path.is_symlink() for path in output.iterdir()))
         runtime_bytes = (output / 'runtime.js').read_bytes()
@@ -319,6 +319,7 @@ class StageStudioTests(unittest.TestCase):
         # Keep exact URLs, rather than permitting arbitrary paths on these hosts.
         lab_https_urls = {
             'lab.html': {'https://upload.wikimedia.org'},
+            'workspace.html': {'https://upload.wikimedia.org'},
             'lab_ui.js': {
                 'https://upload.wikimedia.org',
                 'https://creativecommons.org/publicdomain/zero/1.0/deed.en',
