@@ -1,19 +1,19 @@
 /* Pure settings and modulation for the Effects Lab. No browser or audio clock. */
 (function (root) {
   'use strict';
-  const MAX_CLIPS = 4;
+  const MAX_CLIPS = 8;
   const BLENDS = Object.freeze(['normal', 'screen', 'multiply', 'overlay', 'soft-light',
     'difference', 'exclusion', 'color-dodge', 'lighten', 'darken']);
   const FILTER_MODES = Object.freeze(['presence', 'presence-reverse', 'lowpass', 'highpass', 'bandpass', 'off']);
   const DEFAULTS = Object.freeze({blend: 'screen', opacity: .85, brightness: 1, contrast: 1.15,
-    saturation: 1.1, hue: 0, blur: 0, invert: 0, attack: 2, videoLife: 24, audioLife: 36,
+    saturation: 1.1, hue: 0, blur: 0, invert: 0, timelineStart: 0, attack: 2, videoLife: 24, audioLife: 36,
     audioGain: .65, filterMode: 'presence', cutoff: 1800, resonance: .8, combMix: .45,
     combFeedback: .35, combLow: 100, combHigh: 2400, combPeriod: 8,
     videoRate: 1, audioRate: 1, videoWander: .12, audioWander: .2,
     preservePitch: false, hold: false, videoEnabled: true, audioEnabled: true});
   const RANGES = Object.freeze({opacity: [0, 1], brightness: [0, 2], contrast: [0, 3],
     saturation: [0, 3], hue: [-180, 180], blur: [0, 12], invert: [0, 1],
-    attack: [.1, 10], videoLife: [4, 120], audioLife: [4, 180], audioGain: [0, 1],
+    timelineStart: [0, 3600], attack: [.01, 60], videoLife: [.25, 600], audioLife: [.25, 900], audioGain: [0, 1],
     cutoff: [40, 16000], resonance: [.1, 8], combMix: [0, 1], combFeedback: [0, .75],
     combLow: [40, 2000], combHigh: [100, 8000], combPeriod: [.5, 30],
     videoRate: [.25, 3], audioRate: [.25, 3], videoWander: [0, .5], audioWander: [0, .5]});
@@ -102,6 +102,38 @@
     return clamp(rate * (1 + (2 * r - 1) * amount), .25, 3);
   }
 
+  // Repeat-indexed draws make an arrangement seek recover its existing rate
+  // history. The first repeat is index 1; audio and picture use different seeds.
+  function repeatUnit(seed, loopIndex) {
+    let value = (Number.isFinite(seed) ? seed : 1) >>> 0;
+    const index = Number.isFinite(loopIndex) ? Math.max(0, Math.floor(loopIndex)) : 0;
+    value ^= Math.imul(index >>> 0, 0x9e3779b9);
+    value = Math.imul(value ^ (value >>> 16), 0x7feb352d);
+    value = Math.imul(value ^ (value >>> 15), 0x846ca68b);
+    return ((value ^ (value >>> 16)) >>> 0) / 4294967296;
+  }
+
+  function positionAt(age, duration, initialRate = 1, wander = 0, seed = 1) {
+    let rate = Number.isFinite(initialRate) ? clamp(initialRate, .25, 3) : 1;
+    const empty = {position: 0, loops: 0, rate};
+    if (!Number.isFinite(age) || age <= 0 || !Number.isFinite(duration) || duration <= 0) return empty;
+    const amount = Number.isFinite(wander) ? clamp(wander, 0, .5) : 0;
+    if (!amount) {
+      const elapsed = age * rate;
+      const loops = Math.floor((elapsed + 1e-10) / duration);
+      if (!Number.isSafeInteger(loops)) throw new RangeError('This region exceeds the supported repeat count.');
+      return {position: Math.max(0, Math.min(duration, elapsed - loops * duration)), loops, rate};
+    }
+    let remaining = age, loops = 0;
+    while (remaining + 1e-10 >= duration / rate) {
+      remaining = Math.max(0, remaining - duration / rate);
+      loops++;
+      if (loops > 1000000) throw new RangeError('This region exceeds the supported repeat count.');
+      rate = nextRate(rate, amount, () => repeatUnit(seed, loops));
+    }
+    return {position: Math.max(0, Math.min(duration, remaining * rate)), loops, rate};
+  }
+
   const preset = (label, description, settings) => Object.freeze({label, description,
     settings: Object.freeze(normalizeSettings(settings))});
   const PRESETS = Object.freeze({
@@ -118,7 +150,8 @@
   });
 
   const api = {MAX_CLIPS, BLENDS, FILTER_MODES, DEFAULTS, RANGES, PRESETS,
-    normalizeSettings, envelope, phase, combFrequency, filterTargets, nextRate};
+    normalizeSettings, envelope, phase, combFrequency, filterTargets, nextRate,
+    repeatUnit, positionAt};
   root.SimvltaneaLabModel = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis === 'object' ? globalThis : this);

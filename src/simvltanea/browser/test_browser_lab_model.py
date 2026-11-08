@@ -91,6 +91,49 @@ class EffectsLabModelTests(unittest.TestCase):
         self.assertEqual(value['changed']['audioRate'], 1.4)
         self.assertEqual(value['changed']['videoRate'], .8)
 
+    def test_workspace_supports_eight_pairs_and_fractional_regions(self):
+        value = self.evaluate("({max:m.MAX_CLIPS,s:m.normalizeSettings({timelineStart:12.75,videoLife:.5,audioLife:1.25,attack:.04})})")
+        self.assertEqual(value['max'], 8)
+        self.assertEqual(value['s']['timelineStart'], 12.75)
+        self.assertEqual(value['s']['videoLife'], .5)
+        self.assertEqual(value['s']['audioLife'], 1.25)
+        self.assertEqual(value['s']['attack'], .04)
+
+    def test_scrubbing_recovers_independent_constant_rate_positions(self):
+        values = self.evaluate('[m.positionAt(5,2,.5,0,1),m.positionAt(5,2,2,0,2)]')
+        self.assertEqual(values[0], {'position': .5, 'loops': 1, 'rate': .5})
+        self.assertEqual(values[1], {'position': 0, 'loops': 5, 'rate': 2})
+
+    def test_seek_matches_the_repeat_history_instead_of_redrawing_rates(self):
+        value = self.evaluate('''(()=>{
+          const duration=2.5,seed=374,initial=.8,wander=.3;
+          let rate=initial,time=0;
+          for(let repeat=1;repeat<=12;repeat++){
+            time+=duration/rate;
+            rate=m.nextRate(rate,wander,()=>m.repeatUnit(seed,repeat));
+          }
+          return {expectedRate:rate,a:m.positionAt(time+.3,duration,initial,wander,seed),
+            b:m.positionAt(time+.3,duration,initial,wander,seed),
+            other:m.positionAt(time+.3,duration,initial,wander,seed+1)};
+        })()''')
+        self.assertEqual(value['a'], value['b'])
+        self.assertEqual(value['a']['loops'], 12)
+        self.assertAlmostEqual(value['a']['rate'], value['expectedRate'])
+        self.assertAlmostEqual(value['a']['position'], .3 * value['expectedRate'])
+        self.assertNotEqual(value['a'], value['other'])
+
+    def test_exact_loop_boundary_seeks_to_the_new_repeat(self):
+        value = self.evaluate('({at:m.positionAt(6,6,1,.25,99),before:m.positionAt(6-1e-7,6,1,.25,99),expected:m.nextRate(1,.25,()=>m.repeatUnit(99,1))})')
+        self.assertEqual(value['at']['loops'], 1)
+        self.assertAlmostEqual(value['at']['position'], 0)
+        self.assertAlmostEqual(value['at']['rate'], value['expected'])
+        self.assertEqual(value['before']['loops'], 0)
+
+    def test_invalid_seek_input_never_creates_nan_or_an_infinite_loop(self):
+        values = self.evaluate('[m.positionAt(-3,2,1,.2,1),m.positionAt(Infinity,2,1,.2,1),m.positionAt(3,0,1,.2,1),m.positionAt(3,NaN,1,.2,1)]')
+        for value in values:
+            self.assertEqual(value, {'position': 0, 'loops': 0, 'rate': 1})
+
 
 if __name__ == '__main__':
     unittest.main()

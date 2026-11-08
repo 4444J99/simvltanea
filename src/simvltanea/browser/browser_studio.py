@@ -202,7 +202,6 @@ accept="video/*,.mov,.mp4,.m4v,.webm,.json,application/json">
 <div id="about" role="dialog" aria-label="About" tabindex="-1" hidden>
 <p>Loops on their own clocks, rising and receding in sound and image. ƒx toggles filters; ∞ holds changes; ↔ switches loop direction.</p>
 <p>Your videos never leave this device. Nothing is uploaded.</p>
-<p>Open Effects Lab to stack pictures, sweep comb filters and let sound and image drift independently.</p>
 <p>Space play · R shuffle · M sound · F full screen · ← → panels</p>
 </div>
 <div id="toast" role="status" aria-live="polite"></div>

@@ -74,6 +74,12 @@
   function track() { return { age: 0, position: 0, rate: 1, loops: 0, presence: 0, active: false }; }
   function safePause(media) { if (media) { try { media.pause(); } catch (_) {} } }
   function seek(media, position) { if (media) { try { media.currentTime = Math.max(0, position); } catch (_) {} } }
+  function demoDuration(flavor) { return flavor === 'grain' ? 4 : flavor === 'prism' ? 5 : 6; }
+  function seedFor(id, trackName) {
+    let value = 2166136261;
+    for (const character of `${id}:${trackName}`) value = Math.imul(value ^ character.charCodeAt(0), 16777619) >>> 0;
+    return value;
+  }
   function filterCSS(s) {
     return `brightness(${s.brightness}) contrast(${s.contrast}) saturate(${s.saturation}) hue-rotate(${s.hue}deg) blur(${s.blur}px) invert(${s.invert})`;
   }
@@ -87,7 +93,7 @@
     } catch (_) { return false; }
   }
   function demoBuffer(context, flavor) {
-    const duration = flavor === 'grain' ? 4 : flavor === 'prism' ? 5 : 6;
+    const duration = demoDuration(flavor);
     const buffer = context.createBuffer(2, Math.round(context.sampleRate * duration), context.sampleRate);
     const notes = flavor === 'prism' ? [146.832, 220, 293.665, 369.994] : flavor === 'grain' ? [82.407, 123.471, 164.814] : [110, 164.814, 220, 277.183];
     let seed = 20261107;
@@ -124,7 +130,8 @@
       this.canvas = canvas; this.ctx = canvas && canvas.getContext ? canvas.getContext('2d') : null;
       this.options = options || {}; this.clips = []; this.playing = false; this.time = 0; this.volume = .45; this.muted = false;
       this.sequence = { enabled: false, interval: 8 }; this.context = null; this.master = null;
-      this.disposed = false; this._pending = 0; this._serial = 0; this._phaseSerial = 0; this._sequenceAfter = null; this._nextSequence = 8; this._frame = null; this._last = 0; this._notifyAt = -Infinity;
+      this.transport = { mode: 'perform', looping: false, loopStart: 0, loopEnd: 60 };
+      this.disposed = false; this._pending = 0; this._pendingIds = new Set(); this._serial = 0; this._sequenceAfter = null; this._nextSequence = 8; this._frame = null; this._last = 0; this._notifyAt = -Infinity;
       this._canvasFilters = supportsCanvasFilter(); this._cssLayers = !this._canvasFilters && !!(canvas && canvas.parentElement && root.document);
       this._visibility = () => { if (root.document.hidden && this.playing) this.pause(); };
       if (root.document) root.document.addEventListener('visibilitychange', this._visibility);
@@ -144,19 +151,24 @@
     }
     async addClip(source, partial) {
       if (this.disposed) throw new Error('Effects Lab is closed.');
-      if (this.clips.length + this._pending >= Model.MAX_CLIPS) throw new Error('Effects Lab supports at most four clips.');
+      if (this.clips.length + this._pending >= Model.MAX_CLIPS) throw new Error(`Effects Lab supports at most ${Model.MAX_CLIPS} clips.`);
       if (!source || !['demo', 'video', 'audio'].includes(source.kind)) throw new Error('Choose a demo, video, or audio clip.');
       if (source.kind !== 'demo' && !source.url) throw new Error('This clip has no media URL.');
-      const id = source.id || `lab-${++this._serial}`;
-      if (this.clips.some(c => c.id === id)) throw new Error('A clip with this ID already exists.');
-      this._pending++;
+      let id = source.id;
+      if (!id) { do { id = `lab-${++this._serial}`; } while (this._pendingIds.has(id) || this.clips.some(c => c.id === id)); }
+      if (typeof id !== 'string') throw new Error('A clip ID must be a string.');
+      if (this._pendingIds.has(id) || this.clips.some(c => c.id === id)) throw new Error('A clip with this ID already exists.');
+      this._pending++; this._pendingIds.add(id);
       const c = { id, name: source.name || 'Untitled clip', kind: source.kind, source: { ...source }, settings: Model.normalizeSettings(partial), age: 0, active: false, error: null,
         video: track(), audio: track(), videoElement: null, audioElement: null, buffer: null, bufferSource: null, graph: null, headroom: null,
-        mediaSource: null, generation: 0, audioGeneration: 0, primed: false, launched: false, layer: null, duration: 0, removed: false,
+        mediaSource: null, generation: 0, audioGeneration: 0, primed: false, launched: false, layer: null, duration: 0, removed: false, blocked: { video: false, audio: false },
         capabilities: { preservePitch: source.kind !== 'demo', canvasFilters: this._canvasFilters, pictureEffects: this._canvasFilters || this._cssLayers, combType: 'finite-feed-forward' } };
-      Object.defineProperty(c, 'combPhase', { value: (this._phaseSerial++ * .38196601125) % 1, enumerable: true });
+      Object.defineProperty(c, 'combPhase', { value: ((seedFor(id, 'comb') - seedFor('lab-1', 'comb')) >>> 0) / 4294967296, enumerable: true });
+      Object.defineProperty(c, 'videoSeed', { value: seedFor(id, 'video'), enumerable: true });
+      Object.defineProperty(c, 'audioSeed', { value: seedFor(id, 'audio'), enumerable: true });
       try {
         if (source.kind !== 'demo') await this._loadNative(c);
+        else c.duration = c.videoDuration = c.audioDuration = demoDuration(source.demo);
         if (this.disposed) throw new Error('Effects Lab was closed while loading.');
         if (this.clips.some(x => x.id === id)) throw new Error('A clip with this ID already exists.');
         if (root.document && c.kind !== 'audio') {
@@ -166,9 +178,11 @@
             c.layer.setAttribute('aria-hidden', 'true'); this.canvas.parentElement.insertBefore(c.layer, this.canvas.nextSibling);
           }
         }
-        this.clips.push(c); this._sortLayers(); this._draw(); this._emit(true); return id;
+        this.clips.push(c); this._sortLayers();
+        if (this.transport.mode === 'arrange') this._syncArrangement(true, c);
+        this._draw(); this._emit(true); return id;
       } catch (error) { this._release(c); throw error; }
-      finally { this._pending--; }
+      finally { this._pending--; this._pendingIds.delete(id); }
     }
     _loadNative(c) {
       if (!root.document) return Promise.reject(new Error('Native media needs a browser.'));
@@ -192,11 +206,26 @@
       return Promise.all([metadata(c.audioElement), c.videoElement ? metadata(c.videoElement) : Promise.resolve(0)]).then(([audioDuration, videoDuration]) => {
         c.duration = audioDuration; c.audioDuration = audioDuration; c.videoDuration = videoDuration;
         c.capabilities.preservePitch = 'preservesPitch' in c.audioElement || 'webkitPreservesPitch' in c.audioElement;
-        c._audioEnded = () => { if (this.playing && c.audio.active) { c.audio.position = 0; this._repeat(c, 'audio'); this._playNativeTrack(c, 'audio'); } };
-        c._videoEnded = () => { if (this.playing && c.video.active) { c.video.position = 0; this._repeat(c, 'video'); this._playNativeTrack(c, 'video'); } };
+        c._audioEnded = () => this._nativeEnded(c, 'audio');
+        c._videoEnded = () => this._nativeEnded(c, 'video');
+        c._pictureReady = () => { if (!c.removed) this._draw(); };
         c.audioElement.addEventListener('ended', c._audioEnded);
-        if (c.videoElement) c.videoElement.addEventListener('ended', c._videoEnded);
+        if (c.videoElement) {
+          c.videoElement.addEventListener('ended', c._videoEnded);
+          c.videoElement.addEventListener('seeked', c._pictureReady);
+          c.videoElement.addEventListener('loadeddata', c._pictureReady);
+        }
       });
+    }
+    _nativeEnded(c, key) {
+      if (!this.playing || !c[key].active || c.removed) return;
+      if (this.transport.mode === 'arrange') { this._refreshArrangementClock(); return; }
+      c[key].position = 0; this._repeat(c, key); this._playNativeTrack(c, key);
+    }
+    _refreshArrangementClock() {
+      if (!this.playing) return;
+      const now = clock(), delta = this._last ? Math.max(0, now - this._last) : 0;
+      this._last = now; this._advanceArrangement(delta);
     }
     _ensureAudio() {
       if (this.context) return;
@@ -216,7 +245,7 @@
     _activate(c) {
       if (!c || c.removed) return;
       this._stopBuffer(c); safePause(c.videoElement); safePause(c.audioElement);
-      c.generation++; c.age = 0; c.error = null; c.launched = true; this._sequenceAfter = c.id;
+      c.generation++; c.age = 0; c.error = null; c.blocked = { video: false, audio: false }; c.launched = true; this._sequenceAfter = c.id;
       c.video = { ...track(), rate: c.settings.videoRate, active: c.settings.videoEnabled && c.kind !== 'audio' };
       c.audio = { ...track(), rate: c.settings.audioRate, active: c.settings.audioEnabled };
       c.active = c.video.active || c.audio.active;
@@ -229,7 +258,7 @@
     }
     _repeat(c, key) {
       const t = c[key]; if (!t || !t.active) return;
-      t.loops++; t.rate = Model.nextRate(t.rate, c.settings[key + 'Wander']);
+      t.loops++; t.rate = Model.nextRate(t.rate, c.settings[key + 'Wander'], this.transport.mode === 'arrange' ? () => Model.repeatUnit(c[key + 'Seed'], t.loops) : Math.random);
       const media = key === 'video' ? c.videoElement : c.audioElement;
       if (media) media.playbackRate = t.rate;
       this._emit(true);
@@ -243,11 +272,12 @@
         const result = media.play();
         return Promise.resolve(result).then(() => { c.primed = true; }, error => {
           if (c.removed || c.generation !== generation || !this.playing) return;
+          c.blocked[key] = true;
           c[key].active = false; c[key].presence = 0; c.active = c.video.active || c.audio.active;
           this._updateVoice(c); this._error(c, new Error(`${c.name}: ${key} playback was blocked (${error.message || error}). Press Launch to retry.`));
         });
       } catch (error) {
-        c[key].active = false; c[key].presence = 0; c.active = c.video.active || c.audio.active; this._error(c, error); return Promise.resolve();
+        c.blocked[key] = true; c[key].active = false; c[key].presence = 0; c.active = c.video.active || c.audio.active; this._updateVoice(c); this._error(c, error); return Promise.resolve();
       }
     }
     _startBuffer(c) {
@@ -259,14 +289,17 @@
       source.onended = () => {
         if (generation !== c.audioGeneration || c.bufferSource !== source) return;
         source.disconnect(); c.bufferSource = null;
-        if (this.playing && c.audio.active && !c.removed) { c.audio.position = 0; this._repeat(c, 'audio'); this._startBuffer(c); }
+        if (this.playing && c.audio.active && !c.removed) {
+          if (this.transport.mode === 'arrange') this._refreshArrangementClock();
+          else { c.audio.position = 0; this._repeat(c, 'audio'); this._startBuffer(c); }
+        }
       };
       source.start(0, c.audio.position % c.buffer.duration);
     }
     _stopBuffer(c) {
       c.audioGeneration++;
       if (!c.bufferSource) return;
-      if (this.context && c.buffer) c.audio.position = Math.min(c.buffer.duration, c._bufferOffset + (this.context.currentTime - c._bufferStarted) * c._bufferRate);
+      if (this.context && c.buffer && this.transport.mode !== 'arrange') c.audio.position = Math.min(c.buffer.duration, c._bufferOffset + (this.context.currentTime - c._bufferStarted) * c._bufferRate);
       c.bufferSource.onended = null;
       try { c.bufferSource.stop(); } catch (_) {} try { c.bufferSource.disconnect(); } catch (_) {} c.bufferSource = null;
     }
@@ -280,8 +313,9 @@
       catch (error) { this._error(null, error); return; }
       // All gesture-dependent calls occur before this method's first await.
       const resume = this.context.resume();
+      if (this.transport.mode === 'arrange') this._syncArrangement(true);
       this.playing = true;
-      if (!this.clips.some(c => c.active)) { const first = this.clips.find(c => c.settings.videoEnabled || c.settings.audioEnabled); if (first) this._activate(first); }
+      if (this.transport.mode === 'perform' && !this.clips.some(c => c.active)) { const first = this.clips.find(c => c.settings.videoEnabled || c.settings.audioEnabled); if (first) this._activate(first); }
       const promises = [];
       this.clips.forEach(c => {
         if (c.active) promises.push(...this._start(c));
@@ -311,6 +345,7 @@
     }
     async launch(id) {
       const c = this.clips.find(x => x.id === id); if (!c || this.disposed) return;
+      if (this.transport.mode === 'arrange') { this.seek(c.settings.timelineStart); return this.play(); }
       try { this._ensureAudio(); this._ensureVoice(c); } catch (error) { this._error(c, error); return; }
       this._activate(c);
       if (!this.playing) return this.play();
@@ -321,6 +356,11 @@
       const c = this.clips.find(x => x.id === id); if (!c || this.disposed) return;
       const previous = c.settings; this._capture(c);
       c.settings = Model.normalizeSettings(partial, c.settings);
+      if (this.transport.mode === 'arrange') {
+        const resetKeys = ['video', 'audio'].filter(key => previous[key + 'Rate'] !== c.settings[key + 'Rate'] || previous[key + 'Wander'] !== c.settings[key + 'Wander']);
+        this._applyPitch(c); this._syncArrangement(previous.timelineStart !== c.settings.timelineStart, c, resetKeys);
+        this._draw(); this._emit(true); return;
+      }
       if (partial.videoRate !== undefined) { c.video.rate = c.settings.videoRate; if (c.videoElement) c.videoElement.playbackRate = c.video.rate; }
       if (partial.audioRate !== undefined) {
         this._capture(c); this._stopBuffer(c); c.audio.rate = c.settings.audioRate;
@@ -348,9 +388,99 @@
       if (this.master) this.master.setVolume(this.volume, !this.muted); this._emit(true);
     }
     setSequence(partial) {
-      if (partial.enabled !== undefined) this.sequence.enabled = !!partial.enabled;
+      if (partial.enabled !== undefined) this.sequence.enabled = this.transport.mode === 'perform' && !!partial.enabled;
       if (partial.interval !== undefined) { const n = Number(partial.interval); if (Number.isFinite(n)) this.sequence.interval = Math.max(1, Math.min(120, n)); }
       this._nextSequence = this.time + this.sequence.interval; this._emit(true);
+    }
+    setTransport(partial = {}) {
+      if (this.disposed) return;
+      const previous = this.transport.mode;
+      if (partial.mode === 'arrange' || partial.mode === 'perform') this.transport.mode = partial.mode;
+      if (partial.looping !== undefined) this.transport.looping = !!partial.looping;
+      for (const key of ['loopStart', 'loopEnd']) {
+        const value = Number(partial[key]);
+        if (partial[key] !== undefined && Number.isFinite(value)) this.transport[key] = Math.max(0, Math.min(4500, value));
+      }
+      if (this.transport.loopEnd <= this.transport.loopStart) this.transport.loopEnd = this.transport.loopStart + .25;
+      if (this.transport.mode === 'arrange') {
+        this.sequence.enabled = false; this._syncArrangement(previous !== 'arrange');
+      }
+      if (previous !== this.transport.mode) this._last = this.playing ? clock() : 0;
+      this._draw(); this._emit(true);
+    }
+    seek(seconds) {
+      if (this.disposed || !Number.isFinite(Number(seconds))) return;
+      this.time = Math.max(0, Math.min(4500, Number(seconds))); this._notifyAt = -Infinity;
+      this._last = this.playing ? clock() : 0;
+      if (this.transport.mode === 'arrange') this._syncArrangement(true);
+      this._draw(); this._emit(true);
+    }
+    stop() {
+      if (this.disposed) return;
+      this.pause();
+      if (this.transport.mode === 'perform') this.clips.forEach(c => {
+        c.generation++; c.age = 0; c.active = false; c.launched = false;
+        c.video = { ...track(), rate: c.settings.videoRate }; c.audio = { ...track(), rate: c.settings.audioRate };
+        seek(c.videoElement, 0); seek(c.audioElement, 0); this._updateVoice(c);
+      });
+      this.seek(0); this._nextSequence = this.sequence.interval;
+    }
+    _syncArrangement(force = false, only = null, resetKeys = []) {
+      const clips = only ? [only] : this.clips;
+      clips.forEach(c => {
+        const local = this.time - c.settings.timelineStart;
+        if (force) { c.generation++; c.error = null; c.blocked = { video: false, audio: false }; }
+        c.age = Math.max(0, local); c.launched = local >= 0;
+        if (this.playing && this.context && !c.graph) this._ensureVoice(c);
+        const starts = [];
+        ['video', 'audio'].forEach(key => {
+          const old = c[key], life = c.settings[key + 'Life'], age = Math.max(0, Math.min(life, local));
+          const duration = c[key + 'Duration'] || 0;
+          const position = Model.positionAt(age, duration, c.settings[key + 'Rate'], c.settings[key + 'Wander'], c[key + 'Seed']);
+          const active = local >= 0 && local < life - EPS && c.settings[key + 'Enabled'] && (key !== 'video' || c.kind !== 'audio') && !c.blocked[key];
+          const reset = force || resetKeys.includes(key) || (active && !old.active) || old.loops !== position.loops || old.rate !== position.rate;
+          if (key === 'audio' && c.bufferSource && (reset || !active)) this._stopBuffer(c);
+          c[key] = { ...old, ...position, age, active };
+          const media = key === 'video' ? c.videoElement : c.audioElement;
+          if (media) {
+            if (!active) safePause(media);
+            const drift = Math.abs(media.currentTime - position.position);
+            if (reset || (active && !media.seeking && drift > .2)) seek(media, position.position);
+            if (media.playbackRate !== position.rate) media.playbackRate = position.rate;
+            if (this.playing && active && (reset || (media.paused && !media.ended))) starts.push(key);
+          }
+        });
+        c.active = c.video.active || c.audio.active; this._updateVoice(c);
+        if (this.playing) {
+          if (c.kind === 'demo') this._startBuffer(c);
+          else starts.forEach(key => this._playNativeTrack(c, key));
+        }
+      });
+    }
+    _advanceArrangement(delta) {
+      let remaining = delta;
+      while (remaining > EPS) {
+        if (this.transport.looping && this.time + EPS >= this.transport.loopEnd) {
+          this.time = this.transport.loopStart + Math.max(0, this.time - this.transport.loopEnd) % (this.transport.loopEnd - this.transport.loopStart);
+          this._notifyAt = -Infinity; // A wrapped timeline must not wait for its previous notification time.
+          this._syncArrangement(true);
+        }
+        let step = remaining;
+        if (this.transport.looping) step = Math.min(step, this.transport.loopEnd - this.time);
+        this.clips.forEach(c => {
+          const start = c.settings.timelineStart;
+          for (const boundary of [start, start + c.settings.videoLife, start + c.settings.audioLife]) {
+            if (boundary > this.time + EPS) step = Math.min(step, boundary - this.time);
+          }
+        });
+        this.time += step; remaining -= step; this._syncArrangement();
+      }
+      if (this.transport.looping && this.time + EPS >= this.transport.loopEnd) {
+        this.time = this.transport.loopStart + Math.max(0, this.time - this.transport.loopEnd) % (this.transport.loopEnd - this.transport.loopStart);
+        this._notifyAt = -Infinity;
+        this._syncArrangement(true);
+      } else if (delta === 0) this._syncArrangement();
+      this._draw(); this._emit(false);
     }
     move(id, delta) {
       const from = this.clips.findIndex(c => c.id === id); if (from < 0) return;
@@ -359,6 +489,7 @@
     }
     remove(id) { const i = this.clips.findIndex(c => c.id === id); if (i < 0) return; this._release(this.clips[i]); this.clips.splice(i, 1); this._draw(); this._emit(true); }
     _capture(c) {
+      if (this.transport.mode === 'arrange') return;
       if (c.videoElement && c.video.active && Number.isFinite(c.videoElement.currentTime)) c.video.position = c.videoElement.currentTime;
       if (c.audioElement && c.audio.active && Number.isFinite(c.audioElement.currentTime)) c.audio.position = c.audioElement.currentTime;
       if (c.bufferSource && this.context) c.audio.position = Math.min(c.buffer.duration, c._bufferOffset + (this.context.currentTime - c._bufferStarted) * c._bufferRate);
@@ -366,12 +497,12 @@
     _updateVoice(c) {
       ['video', 'audio'].forEach(key => {
         const t = c[key], life = c.settings[key + 'Life'];
-        t.presence = t.active ? (c.settings.hold ? Math.min(1, t.age / c.settings.attack) : Model.envelope(t.age, life, c.settings.attack)) : 0;
+        t.presence = t.active ? (c.settings.hold ? (this.transport.mode === 'arrange' ? 1 : Math.min(1, t.age / c.settings.attack)) : Model.envelope(t.age, life, c.settings.attack)) : 0;
       });
       if (c.graph) c.graph.apply(c.settings, c.audio.presence, Model.phase(c.audio.age, c.settings.audioLife, c.settings.attack), this.time, c.combPhase);
     }
     _sequenceLaunch() {
-      if (!this.sequence.enabled || this.time + EPS < this._nextSequence || !this.clips.length) return;
+      if (this.transport.mode !== 'perform' || !this.sequence.enabled || this.time + EPS < this._nextSequence || !this.clips.length) return;
       const start = (this.clips.findIndex(c => c.id === this._sequenceAfter) + 1) % this.clips.length;
       for (let offset = 0; offset < this.clips.length; offset++) {
         const c = this.clips[(start + offset) % this.clips.length];
@@ -383,6 +514,7 @@
     }
     _advance(delta) {
       if (!this.playing || this.disposed || !Number.isFinite(delta) || delta < 0) return;
+      if (this.transport.mode === 'arrange') { this._advanceArrangement(delta); return; }
       // Split at sequence deadlines and track endings: a pending launch starts
       // as soon as a slot opens, without truncating an existing sound tail.
       let remaining = delta;
@@ -490,16 +622,19 @@
       });
     }
     snapshot() {
-      return { playing: this.playing, time: this.time, volume: this.volume, muted: this.muted, sequence: { ...this.sequence },
+      return { playing: this.playing, time: this.time, volume: this.volume, muted: this.muted, sequence: { ...this.sequence }, transport: { ...this.transport },
         capabilities: { canvasFilters: this._canvasFilters, cssPictureFilters: this._cssLayers, combType: 'finite-feed-forward' },
         clips: this.clips.map(c => ({ id: c.id, name: c.name, kind: c.kind, active: c.active, settings: { ...c.settings }, age: c.age, error: c.error,
-          capabilities: { ...c.capabilities }, video: { ...c.video }, audio: { ...c.audio, combHz: Model.combFrequency(this.time, c.settings, c.combPhase) } })) };
+          capabilities: { ...c.capabilities }, video: { ...c.video, duration: c.videoDuration || 0 }, audio: { ...c.audio, duration: c.audioDuration || 0, combHz: Model.combFrequency(this.time, c.settings, c.combPhase) } })) };
     }
     _release(c) {
       if (c.removed) return; c.removed = true; c.generation++; this._stopBuffer(c);
       [[c.videoElement, c._videoEnded], [c.audioElement, c._audioEnded]].forEach(([media, ended]) => {
         if (!media) return; safePause(media); if (ended) media.removeEventListener('ended', ended); media.removeAttribute('src'); try { media.load(); } catch (_) {}
       });
+      if (c.videoElement && c._pictureReady) {
+        c.videoElement.removeEventListener('seeked', c._pictureReady); c.videoElement.removeEventListener('loadeddata', c._pictureReady);
+      }
       if (c.mediaSource) { try { c.mediaSource.disconnect(); } catch (_) {} }
       if (c.graph) c.graph.dispose(); if (c.headroom) { try { c.headroom.disconnect(); } catch (_) {} }
       if (c.layer) c.layer.remove(); if (c.source.ownedURL && c.source.url && root.URL) root.URL.revokeObjectURL(c.source.url);
