@@ -149,10 +149,17 @@ async function prepare(page, {sample, pause, journal}, targets, result = {}, opt
     result.strategyStart.standbyRescue === true && Object.entries(RESCUE_POLICY)
       .every(([key, value]) => result.strategyStart.rescuePolicy?.[key] === value),
     'Controlled strategy was not installed before initial media');
-  const capture = async () => {
-    const row = await page.evaluate(sample, true); result.samples.push(row);
+  const recordSample = async row => {
+    result.samples.push(row);
     await journal.append('diagnostic-prelude-sample', row); return row;
   };
+  const capture = async () => recordSample(await page.evaluate(sample, true));
+  // These trusted verifier callbacks are self-contained. Serialize them into
+  // one browser task so promotion cannot occur between the two observations
+  // while protocol transport or journaling is awaited. Both retain trace data.
+  const sampleWithOverlap = new Function(`return {
+    row: (${sample.toString()})(true), overlap: (${overlapSnapshot.toString()})()
+  };`);
   const waitForSources = async selected => {
     const deadline = performance.now() + 30000;
     while (performance.now() < deadline) {
@@ -178,9 +185,10 @@ async function prepare(page, {sample, pause, journal}, targets, result = {}, opt
     const pending = page.evaluate(replacePinned, target).then(value => {succeeded = value;}, error => {failure = error;})
       .finally(() => {done = true;});
     while (!done && performance.now() - began < 30000) {
-      await capture();
       if (overlap) {
-        const row = await page.evaluate(overlapSnapshot);
+        const captured = await page.evaluate(sampleWithOverlap);
+        await recordSample(captured.row);
+        const row = captured.overlap;
         if (row) {
           result.incomingObservations.push(row); await journal.append('diagnostic-sibling-incoming', row);
           const incoming = row.incoming, p = incoming.progress;
@@ -193,7 +201,7 @@ async function prepare(page, {sample, pause, journal}, targets, result = {}, opt
             result.siblingOverlap.push(row);
           }
         }
-      }
+      } else await capture();
       await pause(137);
     }
     assert(done, 'Controlled reconciliation exceeded setup deadline');

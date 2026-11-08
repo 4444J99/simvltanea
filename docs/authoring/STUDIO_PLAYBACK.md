@@ -178,9 +178,9 @@ control is disabled; that fallback keeps its existing image and sound behavior.
 
 ## Recovery attempts for native loop seeks
 
-An observed native WebKit failure can leave a previously moving boomerang seeking
-at time zero after a loop boundary. The runtime watches the active deck from the
-simulation tick. After an observed end position and 600 milliseconds of continuous
+An observed native WebKit failure can leave a previously moving boomerang frozen
+at time zero after a loop boundary, even when `seeking` is false. The runtime watches
+the active deck from the simulation tick. After an observed end position and 600 milliseconds of continuous
 foreground simulation time without decoded progress, it pauses that element,
 seeks forward to the next frame and calls play in the same task. Its source,
 audio routing and sibling decks retain their identities. The explicit
@@ -195,7 +195,9 @@ invalidate the evidence. A sibling's pending replacement does not suspend the gu
 A delayed host callback contributes at most 100 milliseconds. Another ordinary
 attempt requires decoded recovery and a newly observed loop boundary. Resuming
 after a cancelled attempt can establish a new attempt owned by the current
-session only if that same previously attempted source remains frozen at its seek target.
+session only if that same previously attempted source remains frozen at its seek target
+and still reports seeking. A new observed seam can qualify independently of that flag;
+startup or an arbitrary quiet frame cannot.
 
 If the first native attempt does not produce two nonseeking frames within another
 200 milliseconds of foreground simulation time, one standby repair can prepare

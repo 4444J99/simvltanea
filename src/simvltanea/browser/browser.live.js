@@ -1478,7 +1478,10 @@ function applySlice(node) {
       } else if (changed && !media.seeking && current > .001) state.endSeen = false;
       const provenSeam = current <= .001 && state.endSeen && state.changes >= 2;
       const resumedSeek = state.resumedFailedSeek && current <= 1 / fps + .001;
-      if (!media.seeking || !(provenSeam || resumedSeek) || state.attempt || changed) {
+      // WebKit can park at zero after an observed wrap while reporting
+      // seeking=false. That flag cannot veto the proved seam's stall; a
+      // resumed failed seek still requires its original seeking evidence.
+      if (!(provenSeam || (media.seeking && resumedSeek)) || state.attempt || changed) {
         state.stalled = 0; return;
       }
       // Count foreground simulation time, not a single delayed host callback.
