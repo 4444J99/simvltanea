@@ -23,7 +23,7 @@ class EffectsLabAudioTests(unittest.TestCase):
     def setUp(self):
         self.page = self.browser.new_page()
         self.addCleanup(self.page.close)
-        for name in ['browser.lab_model.js', 'browser.audio.js', 'browser.lab_engine.js']:
+        for name in ['browser.compiler.js', 'browser.lab_model.js', 'browser.audio.js', 'browser.lab_engine.js']:
             self.page.add_script_tag(path=str(HERE / name))
 
     def test_presence_filters_change_the_actual_spectrum_in_both_directions(self):

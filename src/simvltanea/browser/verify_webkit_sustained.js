@@ -739,7 +739,8 @@ async function main() {
     receipt.os = execFileSync('sw_vers', {encoding: 'utf8'}).trim();
     receipt.stage = site;
     receipt.sha256 = Object.fromEntries(['index.html', 'runtime.js', 'studio.js', 'compiler.js', 'layouts.json',
-      'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js', 'library/manifest.json']
+      'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js',
+      'lab_compiler.js', 'lab_layouts.js', 'library/manifest.json']
       .map(name => [name, sha256(path.join(site, name))]));
     receipt.audioSourceSha256 = sha256(path.join(__dirname, 'browser.audio.js'));
     receipt.libraryBuild = 'python3 -m tools.publishing.build_studio_site, checked-out pinned defaults';

@@ -221,14 +221,15 @@ gesture it presents that same plan as plan v2 `spatial_loops`, with
 
 ## Run it locally
 
-`stage_studio(output)` writes ten flat files with relative URLs:
+`stage_studio(output)` writes twelve flat files with relative URLs:
 `index.html`, `runtime.js`, `compiler.js`, `studio.js`, `layouts.json`,
-`lab.html`, `lab_model.js`, `lab_engine.js`, `lab_ui.js`, and `lab_audio.js`. It
+`lab.html`, `lab_model.js`, `lab_engine.js`, `lab_ui.js`, `lab_audio.js`,
+`lab_compiler.js`, and `lab_layouts.js`. It
 refuses a directory that holds anything else, and staging twice yields
 identical bytes.
 
-The **Effects Lab** link opens a separate live instrument for overlapping
-visual layers, swept comb and pass filters, and independently evolving sound
+The **Effects Lab** link opens an editing workspace for spatial panels with
+overlapping visual layers, swept comb and pass filters, and independently evolving sound
 and picture clocks. See [Effects Lab](EFFECTS_LAB.md) for its controls and limits.
 
 ```bash

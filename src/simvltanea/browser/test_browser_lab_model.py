@@ -15,7 +15,8 @@ class EffectsLabModelTests(unittest.TestCase):
     def evaluate(self, expression: str):
         self.assertTrue(MODULE.is_file(), 'The Effects Lab model has not been implemented')
         code = f'const m=require({json.dumps(str(MODULE))}); console.log(JSON.stringify({expression}));'
-        result = subprocess.run(['node', '-e', code], check=True, text=True, capture_output=True)
+        result = subprocess.run(['node', '-e', code], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
     def test_picture_can_end_while_audio_still_has_presence(self):
@@ -133,6 +134,50 @@ class EffectsLabModelTests(unittest.TestCase):
         values = self.evaluate('[m.positionAt(-3,2,1,.2,1),m.positionAt(Infinity,2,1,.2,1),m.positionAt(3,0,1,.2,1),m.positionAt(3,NaN,1,.2,1)]')
         for value in values:
             self.assertEqual(value, {'position': 0, 'loops': 0, 'rate': 1})
+
+    def test_panel_assignment_is_integer_and_not_limited_by_visible_count(self):
+        values = self.evaluate('[m.normalizeSettings({panel:12}).panel,m.normalizeSettings({panel:2.7}).panel,m.normalizeSettings({panel:-1}).panel,m.normalizeSettings({panel:Infinity},m.normalizeSettings({panel:9})).panel]')
+        self.assertEqual(values, [12, 3, 1, 9])
+
+    def test_layout_normalizes_supported_families_counts_and_framing(self):
+        values = self.evaluate('''({defaults:m.DEFAULT_LAYOUT,frozen:Object.isFrozen(m.DEFAULT_LAYOUT),
+          strips:m.normalizeLayout({count:18,orientation:'portrait',framing:'slice'}),
+          authored:m.normalizeLayout({family:'authored',count:12,framing:'slice'}),
+          small:m.normalizeLayout({family:'authored',count:1}),
+          merged:m.normalizeLayout({framing:'contain'},{family:'strips',count:6,orientation:'portrait',framing:'cover'})})''')
+        self.assertEqual(values['defaults'], {'family':'strips','count':3,'orientation':'landscape','framing':'cover'})
+        self.assertTrue(values['frozen'])
+        self.assertEqual(values['strips'], {'family':'strips','count':12,'orientation':'portrait','framing':'slice'})
+        self.assertEqual(values['authored'], {'family':'authored','count':7,'orientation':'landscape','framing':'cover'})
+        self.assertEqual(values['small']['count'], 2)
+        self.assertEqual(values['merged'], {'family':'strips','count':6,'orientation':'portrait','framing':'contain'})
+
+    def test_panel_cells_use_canonical_strips_and_original_slice(self):
+        compiler = json.dumps(str(MODULE.with_name('browser.compiler.js')))
+        values = self.evaluate(f'''(()=>{{const compiler=require({compiler});
+          const number=x=>{{const [n,d=1]=String(x).split('/').map(Number);return n/d;}};
+          return [1,3,12].flatMap(count=>['landscape','portrait'].map(orientation=>{{
+            const cells=m.panelCells({{family:'strips',count,orientation,framing:'slice'}});
+            const canonical=compiler.stripsLayouts(count)[orientation].cells;
+            const slice=compiler.stripsSlice(count);
+            return {{cells,rects:canonical.map(c=>c.rect.map(number)),size:[number(slice.width),number(slice.height)]}};
+          }}));}})()''')
+        for result in values:
+            self.assertEqual([c['rect'] for c in result['cells']], result['rects'])
+            for index, cell in enumerate(result['cells'], 1):
+                self.assertEqual((cell['number'],cell['id']), (index,f'panel-{index}'))
+                self.assertEqual(cell['slice'][2:], result['size'])
+
+    def test_authored_panels_come_from_the_provided_canonical_bundle(self):
+        from simvltanea.browser.layout_bundle import layout_bundle_v2
+        bundle = layout_bundle_v2()
+        result = self.evaluate(f"m.panelCells({{family:'authored',count:7,orientation:'portrait',framing:'contain'}},{json.dumps(bundle)})")
+        canonical = bundle['families']['authored']['counts']['7']['portrait']['cells']
+        from fractions import Fraction
+        for panel, cell in zip(result, canonical):
+            self.assertEqual(panel['rect'], [float(Fraction(value)) for value in cell['rect']])
+            self.assertEqual(panel['fit'], 'contain')
+            self.assertIsNone(panel['slice'])
 
 
 if __name__ == '__main__':

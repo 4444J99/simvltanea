@@ -11,6 +11,7 @@ import unittest
 import wave
 
 from .browser_lab import LAB_FILES, LAB_HTML, lab_files
+from .layout_bundle import layout_bundle_v2
 
 MODULE = Path(__file__).with_name('browser.lab_ui.js')
 
@@ -35,10 +36,31 @@ class EffectsLabShellTests(unittest.TestCase):
         self.assertTrue(all(isinstance(value, bytes) and value for value in files.values()))
         scripts = [attrs for tag, attrs in self.shell.elements if tag == 'script']
         self.assertEqual([s['src'] for s in scripts],
-                         ['lab_model.js', 'lab_audio.js', 'lab_engine.js', 'lab_ui.js'])
+                         ['lab_compiler.js', 'lab_layouts.js', 'lab_model.js', 'lab_audio.js', 'lab_engine.js', 'lab_ui.js'])
         self.assertTrue(all('defer' in s for s in scripts))
         self.assertEqual(len({a['id'] for _, a in self.shell.elements if 'id' in a}),
                          len([a for _, a in self.shell.elements if 'id' in a]))
+
+    def test_panel_delivery_uses_complete_canonical_layout_bundle(self):
+        files = lab_files()
+        source = files['lab_layouts.js'].decode('utf-8')
+        prefix = 'globalThis.SimvltaneaLabLayoutBundle = '
+        self.assertTrue(source.startswith(prefix))
+        self.assertTrue(source.endswith(';\n'))
+        self.assertEqual(json.loads(source[len(prefix):-2]), layout_bundle_v2())
+        self.assertEqual(files['lab_compiler.js'], Path(__file__).with_name('browser.compiler.js').read_bytes())
+
+    def test_panel_controls_remain_reachable_in_preview_and_inspector(self):
+        by_id = {a['id']: (tag, a) for tag, a in self.shell.elements if 'id' in a}
+        for name in ['panel-decrease', 'panel-increase', 'panel-count', 'layout-family',
+                     'layout-orientation', 'layout-framing', 'panel-overlay', 'panel-queue',
+                     'clip-panel', 'queue-after', 'timeline-panel-filter', 'panel-import']:
+            self.assertIn(name, by_id)
+        self.assertEqual(by_id['panel-overlay'][1]['role'], 'group')
+        self.assertEqual(by_id['clip-panel'][1]['aria-label'], 'Selected clip panel assignment')
+        self.assertIn('8 clips max', LAB_HTML)
+        self.assertIn('Original slice', LAB_HTML)
+        self.assertIn('id="panel-count" aria-live="polite">3</output>', LAB_HTML)
 
     def test_media_remains_local_and_no_inline_event_handlers(self):
         policies = [a['content'] for tag, a in self.shell.elements
@@ -429,6 +451,67 @@ class EffectsLabUIContractTests(unittest.TestCase):
           return {calls,deletes,size:file.size};})()""")
         self.assertEqual(value, {'calls': 1, 'deletes': 1, 'size': 5})
 
+    def test_layout_and_parked_panel_assignments_round_trip_without_changing_audio(self):
+        value = self.evaluate("""(()=>{
+          const live={id:'voice-1',name:'found.wav',kind:'audio',settings:m.normalizeSettings({panel:8,audioLife:71,audioRate:.7,timelineStart:9.25})};
+          const pending={clipId:'voice-2',name:'footage.mov',kind:'video',settings:m.normalizeSettings({panel:12,videoLife:19,audioLife:83})};
+          const snapshot={clips:[live],layout:{family:'authored',count:3,orientation:'portrait',framing:'contain'},volume:.4,muted:false,sequence:{enabled:false,interval:8}};
+          const slots=[{id:'voice-1'},{key:'pending-0',pending}];
+          return ui.parseSession(ui.sessionData(snapshot,new Map(),slots,2));
+        })()""")
+        self.assertEqual(value['layout'], {'family': 'authored', 'count': 3, 'orientation': 'portrait', 'framing': 'contain'})
+        self.assertEqual(value['selectedPanel'], 2)
+        self.assertEqual([c['settings']['panel'] for c in value['clips']], [8, 12])
+        self.assertEqual(value['clips'][0]['settings']['audioLife'], 71)
+        self.assertEqual(value['clips'][0]['settings']['audioRate'], .7)
+        self.assertEqual(value['clips'][0]['settings']['timelineStart'], 9.25)
+        self.assertEqual(value['clips'][1]['settings']['audioLife'], 83)
+
+    def test_legacy_project_missing_layout_retains_one_full_frame_panel(self):
+        value = self.evaluate("""({fresh:m.DEFAULT_LAYOUT,legacy:ui.parseSession({format:ui.FORMAT,version:1,clips:[{kind:'video',name:'old.mov',settings:{audioLife:47}}]})})""")
+        self.assertEqual(value['fresh']['count'], 3)
+        self.assertEqual(value['legacy']['layout'], {'family': 'strips', 'count': 1, 'orientation': 'landscape', 'framing': 'cover'})
+        self.assertEqual(value['legacy']['clips'][0]['settings']['panel'], 1)
+        self.assertEqual(value['legacy']['clips'][0]['settings']['audioLife'], 47)
+
+    def test_effect_preset_preserves_panel_and_timeline_start(self):
+        value = self.evaluate("""(()=>{const s=m.normalizeSettings({panel:7,timelineStart:13.75,audioLife:99});
+          return m.normalizeSettings(ui.presetPatch(m.PRESETS.interference,s),s);})()""")
+        self.assertEqual(value['panel'], 7)
+        self.assertEqual(value['timelineStart'], 13.75)
+        self.assertEqual(value['blend'], 'difference')
+
+    def test_queue_after_uses_same_panel_picture_and_preserves_both_durations(self):
+        value = self.evaluate("""(()=>{
+          const clip=(id,kind,panel,start,videoLife,audioLife,attack=2)=>({id,kind,settings:m.normalizeSettings({panel,timelineStart:start,videoLife,audioLife,attack})});
+          const entries=[clip('other','video',1,0,200,300),clip('first','video',2,5,8,60),clip('sound','audio',2,9,.25,200),clip('next','video',2,0,6,40)];
+          const before=JSON.stringify(entries),edit=ui.queueAfterPicture(entries,'next');
+          const after=m.normalizeSettings({timelineStart:edit.timelineStart},entries[3].settings);
+          return {edit,after,unchanged:before===JSON.stringify(entries),order:ui.panelQueue(entries,2).map(c=>c.id),none:ui.queueAfterPicture(entries,'other')};
+        })()""")
+        self.assertEqual(value['edit'], {'timelineStart': 11, 'previousId': 'first', 'overlap': 2, 'limited': False})
+        self.assertEqual(value['after']['videoLife'], 6)
+        self.assertEqual(value['after']['audioLife'], 40)
+        self.assertEqual(value['after']['panel'], 2)
+        self.assertTrue(value['unchanged'])
+        self.assertEqual(value['order'], ['next', 'first', 'sound'])
+        self.assertIsNone(value['none'])
+
+    def test_panel_overlay_uses_fitted_picture_rectangle_for_both_orientations(self):
+        value = self.evaluate("""[
+          ui.fittedCanvasBounds(1280,720,1000,400),
+          ui.fittedCanvasBounds(720,1280,1000,400),
+          ui.fittedCanvasBounds(720,1280,300,800),
+          ui.fittedCanvasBounds(0,0,300,800)]""")
+        self.assertAlmostEqual(value[0]['left'], 144.4444444444)
+        self.assertAlmostEqual(value[0]['width'], 711.1111111111)
+        self.assertEqual(value[0]['top'], 0)
+        self.assertEqual(value[1], {'left': 387.5, 'top': 0, 'width': 225, 'height': 400})
+        self.assertEqual(value[2]['left'], 0)
+        self.assertAlmostEqual(value[2]['top'], 133.3333333333)
+        self.assertAlmostEqual(value[2]['height'], 533.3333333333)
+        self.assertEqual(value[3], {'left': 0, 'top': 0, 'width': 0, 'height': 0})
+
     def test_phone_mov_and_audio_without_mime_are_recognized(self):
         value = self.evaluate("""[
           {name:'IMG_42.MOV',type:''},{name:'field.WAV',type:''},
@@ -572,6 +655,41 @@ class EffectsLabLocalRestoreTests(unittest.TestCase):
         self.assertEqual(page.locator('.layer.pending').count(), 0)
         self.assertEqual(page.evaluate('() => SimvltaneaLabUI.engine.snapshot().clips.map(c=>c.audio.duration)'), [.25, .5])
 
+    def test_content_restoration_preserves_distinct_and_parked_panel_assignments(self):
+        page = self.open_lab()
+        page.locator('#media-input').set_input_files(self.wav_file())
+        self.ready(page)
+        page.locator('#duplicate-clip').click()
+        self.ready(page)
+        page.locator('#clip-panel').select_option('2')
+        page.locator('[data-preview-panel="3"]').click()
+        page.locator('#media-input').set_input_files(self.wav_file(4000))
+        self.ready(page)
+        page.locator('#clip-panel').select_option('8')
+        page.locator('#layout-orientation').select_option('portrait')
+        page.locator('[data-preview-panel="2"]').click()
+        self.save_reopen(page)
+        self.assertEqual(page.locator('#selected-panel-label').inner_text(), 'Panel 2')
+        self.assertEqual(page.locator('.layer.pending').count(), 3)
+        page.locator('#media-input').set_input_files({**self.wav_file(), 'name': 'renamed.wav'})
+        self.ready(page)
+        self.assertEqual(page.locator('.layer.pending').count(), 1)
+        self.assertEqual(page.evaluate('() => SimvltaneaLabUI.engine.snapshot().clips.map(c=>c.settings.panel)'), [1, 2])
+        page.locator('#save-settings').click()
+        saved = page.evaluate('() => JSON.parse(localStorage.getItem(SimvltaneaLabUI.STORAGE_KEY))')
+        self.assertEqual(saved['layout'], {'family': 'strips', 'count': 3, 'orientation': 'portrait', 'framing': 'cover'})
+        self.assertEqual([c['settings']['panel'] for c in saved['clips']], [1, 2, 8])
+        self.assertEqual(saved['clips'][0]['fileSha256'], saved['clips'][1]['fileSha256'])
+        self.assertNotEqual(saved['clips'][1]['fileSha256'], saved['clips'][2]['fileSha256'])
+        self.save_reopen(page)
+        page.locator('#media-input').set_input_files([self.wav_file(4000), self.wav_file()])
+        self.ready(page)
+        self.assertEqual(page.locator('.layer.pending').count(), 0)
+        snapshot = page.evaluate('() => SimvltaneaLabUI.engine.snapshot()')
+        self.assertEqual([c['settings']['panel'] for c in snapshot['clips']], [1, 2, 8])
+        self.assertEqual([c['audio']['duration'] for c in snapshot['clips']], [.25, .25, .5])
+        self.assertEqual(snapshot['layout'], saved['layout'])
+
     def test_cancel_held_download_preserves_playing_clips_and_allows_retry(self):
         page = self.open_lab()
         page.set_default_timeout(3000)
@@ -584,15 +702,16 @@ class EffectsLabLocalRestoreTests(unittest.TestCase):
         requests = []
         def public_response(route):
             requests.append(route)
-            if len(requests) > 1:
-                route.fulfill(status=200, content_type='audio/mpeg',
-                              headers={'Access-Control-Allow-Origin': '*'}, body=self.wav_file()['buffer'])
         page.route('https://upload.wikimedia.org/**', public_response)
         page.evaluate('''() => {const Native=AbortController;globalThis.AbortController=class extends Native {
           constructor(){super();Object.defineProperty(this.signal,'reason',{value:undefined});}abort(){super.abort();}};}''')
+        page.locator('[data-preview-panel="2"]').click()
         page.locator('#open-public-media').click()
         with page.expect_request(lambda request: request.url.startswith('https://upload.wikimedia.org/')):
             page.locator('[data-public-media="compressor-motor"]').click()
+        page.locator('#close-public-media').click()
+        page.locator('[data-preview-panel="3"]').click()
+        page.locator('#open-public-media').click()
         page.locator('#cancel-public-download').click()
         self.ready(page)
         self.assertTrue(page.locator('#cancel-public-download').is_hidden())
@@ -611,10 +730,16 @@ class EffectsLabLocalRestoreTests(unittest.TestCase):
         self.assertEqual(page.evaluate('() => SimvltaneaLabUI.engine.clips.length'), 1)
         self.assertFalse(page.evaluate('''async () => Boolean(await (await caches.open(SimvltaneaLabUI.MEDIA_CACHE))
           .match(SimvltaneaLabUI.publicMedia('compressor-motor').url))'''))
-        page.locator('[data-public-media="compressor-motor"]').click()
+        with page.expect_request(lambda request: request.url.startswith('https://upload.wikimedia.org/')):
+            page.locator('[data-public-media="compressor-motor"]').click()
+        page.locator('#close-public-media').click()
+        page.locator('[data-preview-panel="2"]').click()
+        requests[1].fulfill(status=200, content_type='audio/mpeg',
+                            headers={'Access-Control-Allow-Origin': '*'}, body=self.wav_file()['buffer'])
         self.ready(page)
         self.assertEqual(len(requests), 2)
         self.assertEqual(page.evaluate('() => SimvltaneaLabUI.engine.clips.length'), 2)
+        self.assertEqual(page.evaluate('() => SimvltaneaLabUI.engine.clips.map(c=>c.settings.panel)'), [1, 3])
         self.assertTrue(page.evaluate('() => existing===SimvltaneaLabUI.engine.clips[0].audioElement'))
 
     def test_failed_public_decode_evicts_caches_and_retry_loads_new_bytes(self):

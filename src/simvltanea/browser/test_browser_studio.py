@@ -33,6 +33,7 @@ import threading
 import unittest
 from fractions import Fraction
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import simvltanea.authoring.composition as c
 from simvltanea.browser import stage_studio, StudioStagingError
@@ -239,7 +240,8 @@ class StageStudioTests(unittest.TestCase):
         stage_studio(output)
         self.assertEqual(sorted(path.name for path in output.iterdir()), sorted(STUDIO_FILES))
         self.assertEqual(set(STUDIO_FILES), {'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json',
-                                           'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js'})
+                                           'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js',
+                                           'lab_compiler.js', 'lab_layouts.js'})
         self.assertTrue(all(path.is_file() and not path.is_symlink() for path in output.iterdir()))
         runtime_bytes = (output / 'runtime.js').read_bytes()
         self.assertIn(b'SimvltaneaLive', runtime_bytes)
