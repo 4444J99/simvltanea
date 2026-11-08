@@ -1,11 +1,13 @@
 /* Pure settings and modulation for the Effects Lab. No browser or audio clock. */
 (function (root) {
   'use strict';
+  const nodeCompiler = typeof module === 'object' && module.exports ? require('./browser.compiler.js') : null;
   const MAX_CLIPS = 8;
+  const DEFAULT_LAYOUT = Object.freeze({family: 'strips', count: 3, orientation: 'landscape', framing: 'cover'});
   const BLENDS = Object.freeze(['normal', 'screen', 'multiply', 'overlay', 'soft-light',
     'difference', 'exclusion', 'color-dodge', 'lighten', 'darken']);
   const FILTER_MODES = Object.freeze(['presence', 'presence-reverse', 'lowpass', 'highpass', 'bandpass', 'off']);
-  const DEFAULTS = Object.freeze({blend: 'screen', opacity: .85, brightness: 1, contrast: 1.15,
+  const DEFAULTS = Object.freeze({panel: 1, blend: 'screen', opacity: .85, brightness: 1, contrast: 1.15,
     saturation: 1.1, hue: 0, blur: 0, invert: 0, timelineStart: 0, attack: 2, videoLife: 24, audioLife: 36,
     audioGain: .65, filterMode: 'presence', cutoff: 1800, resonance: .8, combMix: .45,
     combFeedback: .35, combLow: 100, combHigh: 2400, combPeriod: 8,
@@ -27,7 +29,10 @@
     const result = {};
     for (const [name, fallback] of Object.entries(DEFAULTS)) {
       let value = Object.prototype.hasOwnProperty.call(patch, name) ? patch[name] : prior[name];
-      if (RANGES[name]) {
+      if (name === 'panel') {
+        if (!Number.isFinite(value)) value = Number.isFinite(prior[name]) ? prior[name] : fallback;
+        result[name] = clamp(Math.round(value), 1, 12);
+      } else if (RANGES[name]) {
         if (!Number.isFinite(value)) value = Number.isFinite(prior[name]) ? prior[name] : fallback;
         result[name] = clamp(value, ...RANGES[name]);
       } else if (typeof fallback === 'boolean') {
@@ -39,6 +44,38 @@
     }
     result.combHigh = Math.max(result.combLow, result.combHigh);
     return result;
+  }
+
+  function normalizeLayout(partial = {}, base = DEFAULT_LAYOUT) {
+    const patch = partial && typeof partial === 'object' ? partial : {};
+    const prior = base && typeof base === 'object' ? base : DEFAULT_LAYOUT;
+    const choice = (key, choices) => choices.includes(patch[key]) ? patch[key] : choices.includes(prior[key]) ? prior[key] : DEFAULT_LAYOUT[key];
+    const family = choice('family', ['strips', 'authored']);
+    const count = Number.isFinite(patch.count) ? patch.count : Number.isFinite(prior.count) ? prior.count : DEFAULT_LAYOUT.count;
+    let framing = choice('framing', ['cover', 'contain', 'slice']);
+    if (family === 'authored' && framing === 'slice') framing = 'cover';
+    return {family, count: clamp(Math.round(count), family === 'authored' ? 2 : 1, family === 'authored' ? 7 : 12),
+      orientation: choice('orientation', ['landscape', 'portrait']), framing};
+  }
+
+  // Layout geometry stays owned by the existing compiler and authored bundle.
+  // The lab changes bindings from loop IDs to stable panel numbers, not rectangles.
+  function panelCells(layout = DEFAULT_LAYOUT, bundle = root.SimvltaneaLabLayoutBundle) {
+    const compiler = nodeCompiler || root.SimvltaneaCompiler;
+    if (!compiler) throw new Error('The canonical layout compiler has not loaded.');
+    const settings = normalizeLayout(layout);
+    const entry = settings.family === 'strips'
+      ? {layouts: compiler.stripsLayouts(settings.count), slice: compiler.stripsSlice(settings.count)}
+      : compiler.layoutEntry(bundle, 'authored', settings.count);
+    const number = value => { const [n, d = 1] = String(value).split('/').map(Number); return n / d; };
+    return entry.layouts[settings.orientation].cells.map(cell => {
+      const index = Number(cell.loop.slice('loop-'.length));
+      const focal = cell.focal.map(number);
+      const size = settings.framing === 'slice' ? [number(entry.slice.width), number(entry.slice.height)] : null;
+      return {number: index, id: `panel-${index}`, rect: cell.rect.map(number), focal,
+        fit: settings.framing === 'contain' ? 'contain' : 'cover',
+        slice: size ? [(1 - size[0]) * focal[0], (1 - size[1]) * focal[1], ...size] : null};
+    });
   }
 
   function envelope(age, life, attack) {
@@ -149,8 +186,8 @@
         filterMode: 'off', videoWander: 0, audioWander: 0, hold: true})
   });
 
-  const api = {MAX_CLIPS, BLENDS, FILTER_MODES, DEFAULTS, RANGES, PRESETS,
-    normalizeSettings, envelope, phase, combFrequency, filterTargets, nextRate,
+  const api = {MAX_CLIPS, BLENDS, FILTER_MODES, DEFAULTS, DEFAULT_LAYOUT, RANGES, PRESETS,
+    normalizeSettings, normalizeLayout, panelCells, envelope, phase, combFrequency, filterTargets, nextRate,
     repeatUnit, positionAt};
   root.SimvltaneaLabModel = api;
   if (typeof module === 'object' && module.exports) module.exports = api;

@@ -11,6 +11,7 @@ builds. Files never leave the device. ``stage_studio(output)`` writes the flat, 
 
     index.html  runtime.js  compiler.js  studio.js  layouts.json
     lab.html  lab_model.js  lab_engine.js  lab_ui.js  lab_audio.js
+    lab_compiler.js  lab_layouts.js
 
 A public clip library (``library/manifest.json`` and ``library/clips/``) is added
 beside these at deploy time by ``tools.publishing.stage_library_site``, never here.

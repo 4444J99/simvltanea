@@ -12,6 +12,7 @@ NODE = shutil.which("node")
 ENGINE = HERE / "browser.lab_engine.js"
 MODEL = HERE / "browser.lab_model.js"
 AUDIO = HERE / "browser.audio.js"
+COMPILER = HERE / "browser.compiler.js"
 
 
 @unittest.skipUnless(NODE, "Node.js is required for engine unit tests")
@@ -57,6 +58,29 @@ const canvas = {{width:640,height:360,getContext:()=>null}};
  Math.random=()=>0; e._repeat(c,'audio');
  assert.ok(c.audio.rate<1); assert.equal(c.video.loops,1); assert.equal(c.audio.loops,1);
  Math.random=prior; e.dispose();
+})();
+""")
+
+    def test_layout_edits_preserve_panel_bindings_and_independent_running_clocks(self):
+        self.run_js("""
+(async()=>{
+ const updates=[],e=new Engine(canvas,{onChange:s=>updates.push(s)});
+ const id=await e.addClip({kind:'demo',demo:'tide'},{panel:3,hold:true});
+ await e.addClip({kind:'demo',demo:'prism'},{panel:1,hold:true});
+ e._activate(e.clips[0]);e.playing=true;e._advance(2);
+ const c=e.clips[0],video={...c.video},audio={...c.audio},generation=c.generation;
+ e.setLayout({count:1,orientation:'portrait'});
+ assert.equal(c.settings.panel,3);assert.equal(c.generation,generation);
+ assert.deepEqual(c.video,video);assert.deepEqual(c.audio,audio);
+ assert.equal(canvas.width,360);assert.equal(canvas.height,640);
+ assert.deepEqual(e.snapshot().panels.map(p=>p.number),[1]);
+ e._advance(1);assert.equal(c.audio.age,3);assert.equal(c.video.age,3);
+ e.setLayout({count:3,orientation:'landscape'});
+ const panels=e.snapshot().panels;e.move(id,1);
+ assert.deepEqual(e.snapshot().panels,panels);assert.equal(c.settings.panel,3);
+ assert.equal(c.audio.active,true);assert.equal(c.video.active,true);
+ e.set(id,{panel:2});assert.equal(c.settings.panel,2);assert.equal(c.audio.age,3);
+ assert.equal(updates.at(-1).layout.count,3);e.dispose();
 })();
 """)
 
@@ -253,7 +277,7 @@ class LabEngineSignalTests(unittest.TestCase):
     def setUp(self):
         self.page=self.browser.new_page()
         self.addCleanup(self.page.close)
-        for source in (MODEL,AUDIO,ENGINE):
+        for source in (COMPILER,MODEL,AUDIO,ENGINE):
             self.page.add_script_tag(content=source.read_text())
 
     def native_fixture(self):
@@ -340,6 +364,7 @@ class LabEngineSignalTests(unittest.TestCase):
  const detached=new SimvltaneaLabEngine.Engine(document.createElement('canvas'));
  await detached.addClip({kind:'demo'});const unsupported=detached.snapshot().clips[0].capabilities.pictureEffects;detached.dispose();
  window.lab=new SimvltaneaLabEngine.Engine(document.querySelector('#stage'));
+ lab.setLayout({count:1});
  window.layerId=await lab.addClip({kind:'demo',demo:'tide'},
    {hold:true,attack:.1,blend:'multiply',opacity:1,brightness:1,contrast:1,saturation:1});
  const c=lab.clips[0];lab._activate(c);c.video.age=1;c.audio.age=1;lab._updateVoice(c);lab._draw();
@@ -365,6 +390,7 @@ class LabEngineSignalTests(unittest.TestCase):
         result=self.page.evaluate("""async()=>{
  const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;
  const e=new SimvltaneaLabEngine.Engine(canvas);
+ e.setLayout({count:1});
  await e.addClip({kind:'demo',demo:'tide'},{hold:true,attack:.1,opacity:0});
  const top=await e.addClip({kind:'demo',demo:'prism'},{hold:true,attack:.1,opacity:1,blend:'normal'});
  for(const c of e.clips){e._activate(c);c.video.age=1;e._updateVoice(c);}e._draw();
@@ -472,6 +498,65 @@ class LabEngineSignalTests(unittest.TestCase):
  } finally {e.dispose();}
 }""")
         self.assertTrue(all(result.values()),result)
+
+    def test_panel_and_layout_changes_keep_the_actual_sound_source_and_clocks_running(self):
+        from simvltanea.browser.layout_bundle import layout_bundle_v2
+        result=self.page.evaluate("""async bundle=>{
+ const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;
+ const e=new SimvltaneaLabEngine.Engine(canvas,{layoutBundle:bundle});
+ try {
+  const id=await e.addClip({kind:'demo',demo:'tide'},{panel:3,hold:true,attack:.01});await e.play();
+  await new Promise(r=>setTimeout(r,120));const c=e.clips[0],source=c.bufferSource,graph=c.graph;
+  const before={time:e.time,video:{...c.video},audio:{...c.audio},generation:c.generation};
+  e.setLayout({count:1,orientation:'portrait'});e.set(id,{panel:2});
+  const immediate={time:e.time,video:{...c.video},audio:{...c.audio},generation:c.generation};
+  const hidden=Array.from(canvas.getContext('2d').getImageData(90,160,1,1).data).slice(0,3);
+  const analyser=e.context.createAnalyser();c.headroom.connect(analyser);
+  const silence=e.context.createGain();silence.gain.value=0;analyser.connect(silence);silence.connect(e.context.destination);
+  await new Promise(r=>setTimeout(r,180));const data=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(data);
+  const rms=Math.sqrt(data.reduce((sum,x)=>sum+x*x,0)/data.length),advanced=e.time>before.time&&c.audio.position>before.audio.position;
+  e.setLayout({family:'authored',count:4,framing:'contain'});
+  const after={retained:c.bufferSource===source&&c.graph===graph,active:c.audio.active&&c.video.active,panel:c.settings.panel,
+    size:[canvas.width,canvas.height],panels:e.snapshot().panels.length};
+  analyser.disconnect();silence.disconnect();return {before,immediate,hidden,rms,advanced,after};
+ } finally {e.dispose();}
+}""",layout_bundle_v2())
+        self.assertEqual(result['before'],result['immediate'],result)
+        self.assertEqual(result['hidden'],[6,8,13],result)
+        self.assertGreater(result['rms'],.001,result)
+        self.assertTrue(result['advanced'],result)
+        self.assertEqual(result['after'],{'retained':True,'active':True,'panel':2,'size':[180,320],'panels':4},result)
+
+    @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg is required for native media fixture generation')
+    def test_native_panel_reassignment_does_not_play_pause_seek_or_replace_media(self):
+        result=self.page.evaluate("""async encoded=>{
+ const url=URL.createObjectURL(new Blob([Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))],{type:'video/mp4'}));
+ const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;
+ const e=new SimvltaneaLabEngine.Engine(canvas);
+ try {
+  const id=await e.addClip({kind:'video',url,ownedURL:true},{panel:3,hold:true,attack:.01,videoRate:1.5,audioRate:.7,videoWander:0,audioWander:0,combMix:0,filterMode:'off'});
+  await e.play();await new Promise(r=>setTimeout(r,200));
+  const c=e.clips[0],video=c.videoElement,audio=c.audioElement,graph=c.graph,source=c.mediaSource;
+  const before={video:video.currentTime,audio:audio.currentTime,generation:c.generation};
+  const events=[];for(const [name,media] of [['video',video],['audio',audio]])for(const type of ['play','pause','seeking'])media.addEventListener(type,()=>events.push(name+':'+type));
+  const analyser=e.context.createAnalyser();c.headroom.connect(analyser);const silence=e.context.createGain();silence.gain.value=0;analyser.connect(silence);silence.connect(e.context.destination);
+  e.setLayout({count:1,orientation:'portrait'});e.set(id,{panel:2});
+  const hidden=Array.from(canvas.getContext('2d').getImageData(90,160,1,1).data).slice(0,3);
+  await new Promise(r=>setTimeout(r,180));const samples=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(samples);
+  const rms=Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length);
+  e.setLayout({count:3,framing:'contain'});
+  const pixels=canvas.getContext('2d').getImageData(0,107,180,106).data;let colored=0;
+  for(let i=0;i<pixels.length;i+=4)if(Math.abs(pixels[i]-6)+Math.abs(pixels[i+1]-8)+Math.abs(pixels[i+2]-13)>20)colored++;
+  const output={events:[...events],hidden,rms,colored,retained:c.graph===graph&&c.mediaSource===source&&c.videoElement===video&&c.audioElement===audio,
+    advanced:video.currentTime>before.video&&audio.currentTime>before.audio,generation:c.generation===before.generation,playing:!video.paused&&!audio.paused};
+  analyser.disconnect();silence.disconnect();return output;
+ } finally {e.dispose();}
+}""",self.native_fixture())
+        self.assertEqual(result['events'],[],result)
+        self.assertEqual(result['hidden'],[6,8,13],result)
+        self.assertGreater(result['rms'],.001,result)
+        self.assertGreater(result['colored'],100,result)
+        self.assertTrue(result['retained'] and result['advanced'] and result['generation'] and result['playing'],result)
 
 
 if __name__ == '__main__':

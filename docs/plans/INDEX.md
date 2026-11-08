@@ -28,6 +28,7 @@ evidence; branch, PR and workflow state belong in the current status projection.
 | 2026-11-07 | [clip-presence-filters](2026-11-07-clip-presence-filters.md) | Clip presence filters implementation plan |
 | 2026-11-07 | [compositor-workspace](2026-11-07-compositor-workspace.md) | Direct editing workspace |
 | 2026-11-07 | [effects-lab](2026-11-07-effects-lab.md) | Effects Lab implementation plan |
+| 2026-11-07 | [panel-workspace](2026-11-07-panel-workspace.md) | Spatial panels in the editing workspace |
 | 2026-11-07 | [studio-ecosystem-design](2026-11-07-studio-ecosystem-design.md) | Studio as an evolving audiovisual ecosystem |
 | 2026-11-07 | [studio-ecosystem-implementation](2026-11-07-studio-ecosystem-implementation.md) | Studio ecosystem implementation plan |
 

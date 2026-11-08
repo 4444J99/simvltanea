@@ -1,17 +1,17 @@
 # Effects Lab editing workspace
 
 Effects Lab is a browser editing workspace for **Independent Loop Compositor**.
-It combines a media bin, composition preview, arrangement timeline, clip
+It combines a media bin, spatial panel preview, arrangement timeline, clip
 inspector, and a separate performance view. Open it from the **Effects Lab** link
 in Studio, or directly at `lab.html` in a staged compositor site. The page opens
-on an empty timeline, ready for your footage and found sounds. No clips are
+on an empty timeline with three visible panels, ready for your footage and found sounds. No clips are
 inserted automatically. An optional **Public media** picker offers recorded
 footage and found sounds with their source and rights records.
 
 The earlier [dataset Lab](LAB.md) still explores strip layout, framing, pool
-selection, and source metadata. This workspace focuses on overlapping picture
-and sound pairs with independent repeat speeds, effects, and endings. It shares
-Studio's master audio protection and static publication path. Existing authored
+selection, and source metadata. This workspace places overlapping picture
+and sound pairs within panels, with independent repeat speeds, effects, and endings.
+It reuses Studio's canonical layout geometry, master audio protection, and static publication path. Existing authored
 composition rendering and export retain their separate behavior.
 
 ## Start editing
@@ -21,7 +21,7 @@ files** button, or the **＋** button to choose footage or found sounds. You can
 also drop video or audio files directly onto the timeline. Audio-only material
 is supported; no picture or musical structure is required.
 
-1. Import or drop a file. Its regions initially use the real source duration.
+1. Select a panel in the preview, then import or drop a file. Its regions initially use the real source duration.
 2. Press **Play** in the top transport to unlock sound and play the arrangement.
 3. Select a picture or sound region to open that pair's settings in the inspector.
 4. Drag a region's body to move both lanes to a new shared start.
@@ -36,14 +36,46 @@ does not overwrite the separately saved project.
 
 The timeline has one row per clip pair, with distinct **Picture** and **Sound**
 lanes. Up to **eight pairs** can occupy the project, including unresolved local
-media slots. Higher rows are in front in the visual blend stack. Row arrows
-change that order without changing scheduled start times.
+media slots. Higher rows are in front in the visual blend stack within their
+assigned panel. Row arrows change that order without changing scheduled start
+times or panel assignments.
 
 A picture and its sound always share a launch time. Their region durations,
 media positions, repeat counts, playback rates, and rate changes are independent.
 For example, a pair starting at 8 seconds with a 12-second picture region and a
 48-second sound region loses its picture at 20 seconds while its sound continues
 until 56 seconds.
+
+## Spatial panels
+
+Use the controls above the preview to change the panel count, layout family,
+orientation, and framing. **Strips** supports 1–12 panels; **Authored** supports
+2–7. Strips are columns in landscape and rows in portrait. Authored layouts use
+the existing composition geometry, including its gaps and orientation pairs.
+Panel capacity and clip capacity are separate: empty panels remain visible and
+selectable, while up to eight clip pairs can be loaded in the project.
+
+Click a panel to select it. New local imports and public-media additions belong
+to that panel. The clip inspector's panel assignment moves an existing clip to
+another panel. Timeline membership labels and panel filtering let you work on
+one panel's clips or see the whole composition. Multiple clips in the same panel
+can overlap; their existing layer order and blend controls apply within that panel.
+
+**Queue after** moves the selected clip after the other clips in its panel,
+overlapping its entrance with the previous picture's departure. The picture and
+sound still share that new start, and their independent durations, filters, and
+repeat behavior remain editable.
+
+**Fill** covers the panel and crops overflow. **Fit** keeps the whole picture
+within the panel. **Original slice** uses the canonical strips framing and is
+available for the strips family. Effects, including blur, remain clipped to the
+panel boundary.
+
+Changing layout, orientation, framing, or assignment does not relaunch a clip.
+Reducing the panel count keeps assignments to higher panels as parked pictures;
+their audio and playback clocks continue. Increasing the count restores their
+pictures at their current positions. The timeline identifies parked assignments
+so they can be restored or reassigned deliberately.
 
 ## Timeline controls
 
@@ -164,11 +196,11 @@ available. Reset clears both reuse stores without adding any sample material.
 Selecting a region updates the **Picture**, **Sound**, and **Timing** inspector
 for that pair only. Changing selection does not copy settings between clips.
 Presets change the selected pair's settings, including their envelope durations,
-but preserve its scheduled start. They are editable starting points.
+but preserve its scheduled start and panel assignment. They are editable starting points.
 
 ### Picture
 
-The preview composites visible pictures in layer order. Available blend modes
+The preview composites visible pictures in layer order within each panel. Available blend modes
 are Normal, Screen, Multiply, Overlay, Soft light, Difference, Exclusion, Color
 dodge, Lighten, and Darken. Opacity combines with the picture's presence envelope.
 Brightness, contrast, saturation, hue, blur, and inversion are independent
@@ -220,7 +252,8 @@ that project. **Export JSON** and **Import JSON** move the settings between page
 or devices. Restoring a project opens it paused.
 
 The JSON describes arranged clips, their settings and layer order, source names,
-stable clip identities, transport mode, and loop range. Public-media clips also
+stable clip identities, panel assignments, composition layout, transport mode,
+and loop range. Public-media clips also
 retain a known catalog `sampleId`. The JSON contains no media bytes, blob URLs,
 or remote download URLs. It does not record a rendered composition, the active
 playhead position, or a durable copy of the entire source bin.
@@ -243,7 +276,9 @@ Stable clip identities retain deterministic repeat decisions and comb phase
 through reordering and restoration. New clips reserve identities belonging to
 unresolved media, preventing a later file restoration from colliding with a new
 admission. Duplicates receive fresh identities. Older settings without clip
-identities or timeline starts remain importable. Legacy projects containing
+identities or timeline starts remain importable. Projects without saved layout
+data open as a single full-frame panel, preserving their earlier composition.
+Legacy projects containing
 generated test sources can still be opened, but those sources are not offered
 in the public import workflow and are never added at startup or Reset.
 
@@ -281,7 +316,8 @@ PYTHONPATH=src python -m simvltanea.browser.browser_studio --output var/site/stu
 ```
 
 Open staged `lab.html` using the supported local or hosted preview. The workspace
-adds five declared assets to the existing five-file Studio output. Public
+adds seven declared assets to the existing five-file Studio output. The two
+layout dependencies are the existing compiler and a generated canonical bundle. Public
 library staging uses the same allowlist and rejects unrelated files.
 
 Desktop browser, decoded-frame/audio-signal, and emulated phone checks remain

@@ -9,6 +9,7 @@ import subprocess
 import unittest
 
 from .browser_lab import LAB_FILES, LAB_HTML, lab_files
+from .layout_bundle import layout_bundle_v2
 
 MODULE = Path(__file__).with_name('browser.lab_ui.js')
 
@@ -33,10 +34,31 @@ class EffectsLabShellTests(unittest.TestCase):
         self.assertTrue(all(isinstance(value, bytes) and value for value in files.values()))
         scripts = [attrs for tag, attrs in self.shell.elements if tag == 'script']
         self.assertEqual([s['src'] for s in scripts],
-                         ['lab_model.js', 'lab_audio.js', 'lab_engine.js', 'lab_ui.js'])
+                         ['lab_compiler.js', 'lab_layouts.js', 'lab_model.js', 'lab_audio.js', 'lab_engine.js', 'lab_ui.js'])
         self.assertTrue(all('defer' in s for s in scripts))
         self.assertEqual(len({a['id'] for _, a in self.shell.elements if 'id' in a}),
                          len([a for _, a in self.shell.elements if 'id' in a]))
+
+    def test_panel_delivery_uses_complete_canonical_layout_bundle(self):
+        files = lab_files()
+        source = files['lab_layouts.js'].decode('utf-8')
+        prefix = 'globalThis.SimvltaneaLabLayoutBundle = '
+        self.assertTrue(source.startswith(prefix))
+        self.assertTrue(source.endswith(';\n'))
+        self.assertEqual(json.loads(source[len(prefix):-2]), layout_bundle_v2())
+        self.assertEqual(files['lab_compiler.js'], Path(__file__).with_name('browser.compiler.js').read_bytes())
+
+    def test_panel_controls_remain_reachable_in_preview_and_inspector(self):
+        by_id = {a['id']: (tag, a) for tag, a in self.shell.elements if 'id' in a}
+        for name in ['panel-decrease', 'panel-increase', 'panel-count', 'layout-family',
+                     'layout-orientation', 'layout-framing', 'panel-overlay', 'panel-queue',
+                     'clip-panel', 'queue-after', 'timeline-panel-filter', 'panel-import']:
+            self.assertIn(name, by_id)
+        self.assertEqual(by_id['panel-overlay'][1]['role'], 'group')
+        self.assertEqual(by_id['clip-panel'][1]['aria-label'], 'Selected clip panel assignment')
+        self.assertIn('8 clips max', LAB_HTML)
+        self.assertIn('Original slice', LAB_HTML)
+        self.assertIn('id="panel-count" aria-live="polite">3</output>', LAB_HTML)
 
     def test_media_remains_local_and_no_inline_event_handlers(self):
         policies = [a['content'] for tag, a in self.shell.elements
@@ -292,6 +314,67 @@ class EffectsLabUIContractTests(unittest.TestCase):
         self.assertEqual(len(value['errors']), 2)
         self.assertIn('403', value['errors'][1])
         self.assertEqual(value['deleted'], 'independent-loop-compositor-effects-lab:public-media-v1')
+
+    def test_layout_and_parked_panel_assignments_round_trip_without_changing_audio(self):
+        value = self.evaluate("""(()=>{
+          const live={id:'voice-1',name:'found.wav',kind:'audio',settings:m.normalizeSettings({panel:8,audioLife:71,audioRate:.7,timelineStart:9.25})};
+          const pending={clipId:'voice-2',name:'footage.mov',kind:'video',settings:m.normalizeSettings({panel:12,videoLife:19,audioLife:83})};
+          const snapshot={clips:[live],layout:{family:'authored',count:3,orientation:'portrait',framing:'contain'},volume:.4,muted:false,sequence:{enabled:false,interval:8}};
+          const slots=[{id:'voice-1'},{key:'pending-0',pending}];
+          return ui.parseSession(ui.sessionData(snapshot,new Map(),slots,2));
+        })()""")
+        self.assertEqual(value['layout'], {'family': 'authored', 'count': 3, 'orientation': 'portrait', 'framing': 'contain'})
+        self.assertEqual(value['selectedPanel'], 2)
+        self.assertEqual([c['settings']['panel'] for c in value['clips']], [8, 12])
+        self.assertEqual(value['clips'][0]['settings']['audioLife'], 71)
+        self.assertEqual(value['clips'][0]['settings']['audioRate'], .7)
+        self.assertEqual(value['clips'][0]['settings']['timelineStart'], 9.25)
+        self.assertEqual(value['clips'][1]['settings']['audioLife'], 83)
+
+    def test_legacy_project_missing_layout_retains_one_full_frame_panel(self):
+        value = self.evaluate("""({fresh:m.DEFAULT_LAYOUT,legacy:ui.parseSession({format:ui.FORMAT,version:1,clips:[{kind:'video',name:'old.mov',settings:{audioLife:47}}]})})""")
+        self.assertEqual(value['fresh']['count'], 3)
+        self.assertEqual(value['legacy']['layout'], {'family': 'strips', 'count': 1, 'orientation': 'landscape', 'framing': 'cover'})
+        self.assertEqual(value['legacy']['clips'][0]['settings']['panel'], 1)
+        self.assertEqual(value['legacy']['clips'][0]['settings']['audioLife'], 47)
+
+    def test_effect_preset_preserves_panel_and_timeline_start(self):
+        value = self.evaluate("""(()=>{const s=m.normalizeSettings({panel:7,timelineStart:13.75,audioLife:99});
+          return m.normalizeSettings(ui.presetPatch(m.PRESETS.interference,s),s);})()""")
+        self.assertEqual(value['panel'], 7)
+        self.assertEqual(value['timelineStart'], 13.75)
+        self.assertEqual(value['blend'], 'difference')
+
+    def test_queue_after_uses_same_panel_picture_and_preserves_both_durations(self):
+        value = self.evaluate("""(()=>{
+          const clip=(id,kind,panel,start,videoLife,audioLife,attack=2)=>({id,kind,settings:m.normalizeSettings({panel,timelineStart:start,videoLife,audioLife,attack})});
+          const entries=[clip('other','video',1,0,200,300),clip('first','video',2,5,8,60),clip('sound','audio',2,9,.25,200),clip('next','video',2,0,6,40)];
+          const before=JSON.stringify(entries),edit=ui.queueAfterPicture(entries,'next');
+          const after=m.normalizeSettings({timelineStart:edit.timelineStart},entries[3].settings);
+          return {edit,after,unchanged:before===JSON.stringify(entries),order:ui.panelQueue(entries,2).map(c=>c.id),none:ui.queueAfterPicture(entries,'other')};
+        })()""")
+        self.assertEqual(value['edit'], {'timelineStart': 11, 'previousId': 'first', 'overlap': 2, 'limited': False})
+        self.assertEqual(value['after']['videoLife'], 6)
+        self.assertEqual(value['after']['audioLife'], 40)
+        self.assertEqual(value['after']['panel'], 2)
+        self.assertTrue(value['unchanged'])
+        self.assertEqual(value['order'], ['next', 'first', 'sound'])
+        self.assertIsNone(value['none'])
+
+    def test_panel_overlay_uses_fitted_picture_rectangle_for_both_orientations(self):
+        value = self.evaluate("""[
+          ui.fittedCanvasBounds(1280,720,1000,400),
+          ui.fittedCanvasBounds(720,1280,1000,400),
+          ui.fittedCanvasBounds(720,1280,300,800),
+          ui.fittedCanvasBounds(0,0,300,800)]""")
+        self.assertAlmostEqual(value[0]['left'], 144.4444444444)
+        self.assertAlmostEqual(value[0]['width'], 711.1111111111)
+        self.assertEqual(value[0]['top'], 0)
+        self.assertEqual(value[1], {'left': 387.5, 'top': 0, 'width': 225, 'height': 400})
+        self.assertEqual(value[2]['left'], 0)
+        self.assertAlmostEqual(value[2]['top'], 133.3333333333)
+        self.assertAlmostEqual(value[2]['height'], 533.3333333333)
+        self.assertEqual(value[3], {'left': 0, 'top': 0, 'width': 0, 'height': 0})
 
     def test_phone_mov_and_audio_without_mime_are_recognized(self):
         value = self.evaluate("""[

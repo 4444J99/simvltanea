@@ -131,8 +131,23 @@
       this.options = options || {}; this.clips = []; this.playing = false; this.time = 0; this.volume = .45; this.muted = false;
       this.sequence = { enabled: false, interval: 8 }; this.context = null; this.master = null;
       this.transport = { mode: 'perform', looping: false, loopStart: 0, loopEnd: 60 };
+      this.layout = Model.normalizeLayout(this.options.layout);
+      this.panels = Model.panelCells(this.layout, this.options.layoutBundle || root.SimvltaneaLabLayoutBundle);
+      this._panelLayers = new Map(); this._cssRoot = null; this._resizeObserver = null;
       this.disposed = false; this._pending = 0; this._pendingIds = new Set(); this._serial = 0; this._sequenceAfter = null; this._nextSequence = 8; this._frame = null; this._last = 0; this._notifyAt = -Infinity;
       this._canvasFilters = supportsCanvasFilter(); this._cssLayers = !this._canvasFilters && !!(canvas && canvas.parentElement && root.document);
+      this._orientCanvas();
+      if (this._cssLayers) {
+        this._cssRoot = root.document.createElement('div'); this._cssRoot.setAttribute('aria-hidden', 'true');
+        this._cssRoot.dataset.labCssPanels = '';
+        Object.assign(this._cssRoot.style, {position:'absolute',pointerEvents:'none',zIndex:'0',overflow:'hidden',isolation:'isolate'});
+        canvas.parentElement.insertBefore(this._cssRoot, canvas.nextSibling);
+        this._syncPanelLayers();
+        if (root.ResizeObserver) {
+          this._resizeObserver = new root.ResizeObserver(() => this._draw());
+          this._resizeObserver.observe(canvas); this._resizeObserver.observe(canvas.parentElement);
+        }
+      }
       this._visibility = () => { if (root.document.hidden && this.playing) this.pause(); };
       if (root.document) root.document.addEventListener('visibilitychange', this._visibility);
     }
@@ -161,7 +176,7 @@
       this._pending++; this._pendingIds.add(id);
       const c = { id, name: source.name || 'Untitled clip', kind: source.kind, source: { ...source }, settings: Model.normalizeSettings(partial), age: 0, active: false, error: null,
         video: track(), audio: track(), videoElement: null, audioElement: null, buffer: null, bufferSource: null, graph: null, headroom: null,
-        mediaSource: null, generation: 0, audioGeneration: 0, primed: false, launched: false, layer: null, duration: 0, removed: false, blocked: { video: false, audio: false },
+        mediaSource: null, generation: 0, audioGeneration: 0, primed: false, launched: false, layer: null, sourceCanvas: null, duration: 0, removed: false, blocked: { video: false, audio: false },
         capabilities: { preservePitch: source.kind !== 'demo', canvasFilters: this._canvasFilters, pictureEffects: this._canvasFilters || this._cssLayers, combType: 'finite-feed-forward' } };
       Object.defineProperty(c, 'combPhase', { value: ((seedFor(id, 'comb') - seedFor('lab-1', 'comb')) >>> 0) / 4294967296, enumerable: true });
       Object.defineProperty(c, 'videoSeed', { value: seedFor(id, 'video'), enumerable: true });
@@ -173,9 +188,10 @@
         if (this.clips.some(x => x.id === id)) throw new Error('A clip with this ID already exists.');
         if (root.document && c.kind !== 'audio') {
           c.layer = root.document.createElement('canvas'); c.layer.width = this.canvas.width; c.layer.height = this.canvas.height;
+          if (c.kind === 'demo') { c.sourceCanvas = root.document.createElement('canvas'); c.sourceCanvas.width = 960; c.sourceCanvas.height = 540; }
           if (this._cssLayers) {
-            Object.assign(c.layer.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none', zIndex: '0', display: 'none' });
-            c.layer.setAttribute('aria-hidden', 'true'); this.canvas.parentElement.insertBefore(c.layer, this.canvas.nextSibling);
+            Object.assign(c.layer.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', objectFit: 'fill', pointerEvents: 'none', display: 'none' });
+            c.layer.setAttribute('aria-hidden', 'true');
           }
         }
         this.clips.push(c); this._sortLayers();
@@ -354,8 +370,12 @@
     }
     set(id, partial) {
       const c = this.clips.find(x => x.id === id); if (!c || this.disposed) return;
+      if (partial && Object.keys(partial).every(key => key === 'panel')) {
+        c.settings = Model.normalizeSettings(partial, c.settings); this._sortLayers(); this._draw(); this._emit(true); return;
+      }
       const previous = c.settings; this._capture(c);
       c.settings = Model.normalizeSettings(partial, c.settings);
+      if (previous.panel !== c.settings.panel) this._sortLayers();
       if (this.transport.mode === 'arrange') {
         const resetKeys = ['video', 'audio'].filter(key => previous[key + 'Rate'] !== c.settings[key + 'Rate'] || previous[key + 'Wander'] !== c.settings[key + 'Wander']);
         this._applyPitch(c); this._syncArrangement(previous.timelineStart !== c.settings.timelineStart, c, resetKeys);
@@ -391,6 +411,54 @@
       if (partial.enabled !== undefined) this.sequence.enabled = this.transport.mode === 'perform' && !!partial.enabled;
       if (partial.interval !== undefined) { const n = Number(partial.interval); if (Number.isFinite(n)) this.sequence.interval = Math.max(1, Math.min(120, n)); }
       this._nextSequence = this.time + this.sequence.interval; this._emit(true);
+    }
+    setLayout(partial = {}) {
+      if (this.disposed) return false;
+      try {
+        const layout = Model.normalizeLayout(partial, this.layout);
+        const panels = Model.panelCells(layout, this.options.layoutBundle || root.SimvltaneaLabLayoutBundle);
+        this.layout = layout; this.panels = panels; this._orientCanvas(); this._syncPanelLayers();
+        this._draw(); this._emit(true); return true;
+      } catch (error) { this._error(null, error); return false; }
+    }
+    _orientCanvas() {
+      if (!this.canvas) return;
+      const long = Math.max(this.canvas.width || 1280, this.canvas.height || 720);
+      const short = Math.min(this.canvas.width || 1280, this.canvas.height || 720);
+      const portrait = this.layout.orientation === 'portrait', width = portrait ? short : long, height = portrait ? long : short;
+      if (this.canvas.width !== width) this.canvas.width = width;
+      if (this.canvas.height !== height) this.canvas.height = height;
+      if (this.canvas.style) this.canvas.style.aspectRatio = `${width} / ${height}`;
+    }
+    _syncPanelLayers() {
+      if (!this._cssRoot) return;
+      for (const [number, box] of this._panelLayers) {
+        if (!this.panels.some(panel => panel.number === number)) { box.remove(); this._panelLayers.delete(number); }
+      }
+      this.panels.forEach(panel => {
+        let box = this._panelLayers.get(panel.number);
+        if (!box) {
+          box = root.document.createElement('div'); box.dataset.panel = String(panel.number);
+          Object.assign(box.style, {position:'absolute',overflow:'hidden',isolation:'isolate',background:'#06080d'});
+          this._panelLayers.set(panel.number, box);
+        }
+        const [x, y, width, height] = panel.rect;
+        Object.assign(box.style, {left:`${x * 100}%`,top:`${y * 100}%`,width:`${width * 100}%`,height:`${height * 100}%`});
+        this._cssRoot.appendChild(box);
+      });
+      this._sortLayers();
+    }
+    _positionCssLayers() {
+      if (!this._cssRoot || !this.canvas.getBoundingClientRect) return;
+      const rect = this.canvas.getBoundingClientRect(), parent = this.canvas.parentElement.getBoundingClientRect();
+      let width = rect.width, height = rect.height;
+      const fit = root.getComputedStyle ? root.getComputedStyle(this.canvas).objectFit : 'contain';
+      if ((fit === 'contain' || fit === 'scale-down') && width > 0 && height > 0) {
+        const scale = Math.min(width / this.canvas.width, height / this.canvas.height);
+        width = this.canvas.width * scale; height = this.canvas.height * scale;
+      }
+      Object.assign(this._cssRoot.style, {left:`${rect.left - parent.left + (rect.width - width) / 2}px`,
+        top:`${rect.top - parent.top + (rect.height - height) / 2}px`,width:`${width}px`,height:`${height}px`});
     }
     setTransport(partial = {}) {
       if (this.disposed) return;
@@ -562,14 +630,32 @@
       });
     }
     _sortLayers() {
-      this.clips.forEach(c => { if (c.layer && c.layer.parentNode) c.layer.parentNode.appendChild(c.layer); });
+      if (!this._cssLayers) return;
+      this.clips.forEach(c => {
+        if (!c.layer) return;
+        const box = this._panelLayers.get(c.settings.panel);
+        if (box) box.appendChild(c.layer); else c.layer.remove();
+      });
     }
-    _picture(x, c, w, h) {
+    _picture(x, c, w, h, panel) {
+      let source, width, height;
       if (c.kind === 'video') {
         const el = c.videoElement; if (!el || el.readyState < 2 || !el.videoWidth) return;
-        const ratio = Math.max(w / el.videoWidth, h / el.videoHeight), dw = el.videoWidth * ratio, dh = el.videoHeight * ratio;
-        x.drawImage(el, (w - dw) / 2, (h - dh) / 2, dw, dh); return;
+        source = el; width = el.videoWidth; height = el.videoHeight;
+      } else {
+        source = c.sourceCanvas; if (!source) return;
+        width = source.width; height = source.height;
+        const scene = source.getContext('2d'); if (!scene) return;
+        scene.clearRect(0, 0, width, height); this._demoPicture(scene, c, width, height);
       }
+      const [sx, sy, sw, sh] = panel.slice || [0, 0, 1, 1];
+      const windowWidth = sw * width, windowHeight = sh * height;
+      const scale = (panel.fit === 'contain' ? Math.min : Math.max)(w / windowWidth, h / windowHeight);
+      const dw = windowWidth * scale, dh = windowHeight * scale;
+      x.drawImage(source, sx * width, sy * height, windowWidth, windowHeight,
+        (w - dw) * panel.focal[0], (h - dh) * panel.focal[1], dw, dh);
+    }
+    _demoPicture(x, c, w, h) {
       const t = c.video.position, demo = c.source.demo || 'tide';
       if (demo === 'prism') {
         x.fillStyle = '#120b25'; x.fillRect(0, 0, w, h);
@@ -598,31 +684,38 @@
       if (!this.canvas) return;
       const w = this.canvas.width || 960, h = this.canvas.height || 540;
       if (this.ctx) { this.ctx.save(); this.ctx.setTransform(1, 0, 0, 1, 0, 0); this.ctx.filter = 'none'; this.ctx.globalAlpha = 1; this.ctx.globalCompositeOperation = 'source-over'; this.ctx.fillStyle = '#06080d'; this.ctx.fillRect(0, 0, w, h); this.ctx.restore(); }
-      let hasPicture = false;
+      this._positionCssLayers();
+      const occupied = new Set();
       this.clips.forEach(c => {
-        const visible = c.video.active && c.video.presence > 0 && c.settings.opacity > 0 &&
+        const panel = this.panels.find(cell => cell.number === c.settings.panel);
+        const visible = !!panel && c.video.active && c.video.presence > 0 && c.settings.opacity > 0 &&
           (c.kind !== 'video' || (c.videoElement && c.videoElement.readyState >= 2 && c.videoElement.videoWidth > 0));
         if (this._cssLayers && c.layer) c.layer.style.display = visible ? 'block' : 'none';
         if (!visible || !c.layer) return;
-        if (c.layer.width !== w) c.layer.width = w; if (c.layer.height !== h) c.layer.height = h;
+        const [px, py, pw, ph] = panel.rect;
+        const left = Math.round(px * w), top = Math.round(py * h);
+        const width = Math.max(1, Math.round((px + pw) * w) - left), height = Math.max(1, Math.round((py + ph) * h) - top);
+        if (c.layer.width !== width) c.layer.width = width; if (c.layer.height !== height) c.layer.height = height;
         const x = c.layer.getContext('2d'); if (!x) return;
         // Build one opaque picture before applying this clip's opacity, filter,
         // and blend. Applying them per primitive changes the intended result.
         x.save(); x.setTransform(1, 0, 0, 1, 0, 0); x.filter = 'none'; x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
-        x.clearRect(0, 0, w, h); this._picture(x, c, w, h); x.restore();
-        const blend = hasPicture ? c.settings.blend : 'normal'; hasPicture = true;
+        x.clearRect(0, 0, width, height); this._picture(x, c, width, height, panel); x.restore();
+        const blend = occupied.has(panel.number) ? c.settings.blend : 'normal'; occupied.add(panel.number);
         if (this._cssLayers) {
           c.layer.style.filter = filterCSS(c.settings); c.layer.style.opacity = String(c.settings.opacity * c.video.presence);
           c.layer.style.mixBlendMode = blend;
         } else if (this.ctx) {
-          this.ctx.save(); this.ctx.filter = filterCSS(c.settings); this.ctx.globalAlpha = c.settings.opacity * c.video.presence;
+          this.ctx.save(); this.ctx.beginPath(); this.ctx.rect(left, top, width, height); this.ctx.clip();
+          this.ctx.filter = filterCSS(c.settings); this.ctx.globalAlpha = c.settings.opacity * c.video.presence;
           this.ctx.globalCompositeOperation = blend === 'normal' ? 'source-over' : blend;
-          this.ctx.drawImage(c.layer, 0, 0); this.ctx.restore();
+          this.ctx.drawImage(c.layer, left, top); this.ctx.restore();
         }
       });
     }
     snapshot() {
       return { playing: this.playing, time: this.time, volume: this.volume, muted: this.muted, sequence: { ...this.sequence }, transport: { ...this.transport },
+        layout: { ...this.layout }, panels: this.panels.map(panel => ({...panel,rect:[...panel.rect],focal:[...panel.focal],slice:panel.slice ? [...panel.slice] : null})),
         capabilities: { canvasFilters: this._canvasFilters, cssPictureFilters: this._cssLayers, combType: 'finite-feed-forward' },
         clips: this.clips.map(c => ({ id: c.id, name: c.name, kind: c.kind, active: c.active, settings: { ...c.settings }, age: c.age, error: c.error,
           capabilities: { ...c.capabilities }, video: { ...c.video, duration: c.videoDuration || 0 }, audio: { ...c.audio, duration: c.audioDuration || 0, combHz: Model.combFrequency(this.time, c.settings, c.combPhase) } })) };
@@ -642,6 +735,8 @@
     dispose() {
       if (this.disposed) return; this.pause(); this.disposed = true;
       this.clips.forEach(c => this._release(c)); this.clips.length = 0;
+      if (this._resizeObserver) this._resizeObserver.disconnect();
+      if (this._cssRoot) this._cssRoot.remove(); this._panelLayers.clear();
       if (root.document) root.document.removeEventListener('visibilitychange', this._visibility);
       if (this.master) this.master.dispose(); if (this.context && this.context.state !== 'closed') this.context.close().catch(() => {});
     }
