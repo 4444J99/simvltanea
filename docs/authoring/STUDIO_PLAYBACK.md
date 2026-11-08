@@ -184,6 +184,14 @@ two-second verification gate remain unchanged. This is a bounded recovery attemp
 not a guarantee that the browser's native seek will complete. Native evidence must
 distinguish an exercised recovery from a passing run that never triggers it.
 
+When a replacement is ready, an outgoing source that is still seeking after its
+own recovery attempt can use a 0.2-second fade. This requires the same source,
+epoch and playback generation, with no distinct decoded frame since the attempt.
+The incoming clip must first pass its normal freshness check. Healthy or recovered
+sources keep the requested fade duration, and deliberate suspension invalidates
+the shortcut. A `handoff-expedited` event records the decision. This shortens the
+frozen picture's departure without declaring recovery or clearing frame history.
+
 ## Audio and asset evidence
 
 The persistent master chain includes compression, a compensated soft clipper and
@@ -211,6 +219,13 @@ Confirm that untouched panels keep moving and that no transition clears the stag
 Confirm that panel controls stop at four on the phone, including after uploads
 or opening a shared composition that requests more panels.
 Linux WebKit and an emulated phone viewport are separate automated evidence.
+
+Native verification distinguishes a cancelled internal blob read during hidden
+preparation from an active-source failure. Successful admission evidence must bind
+the same slot, deck, URL and source epoch across priming and parking, retain
+recorded ownership and outgoing playback, then show two fresh frames before
+visibility and a completed promotion. Missing or contradictory evidence remains
+an error. The separate one-second recovered-read rule is unchanged.
 
 The filter integration retains the accepted continuity and progress verification
 from merged [PR #90](https://github.com/4444J99/tool-video-loop-compositor/pull/90).

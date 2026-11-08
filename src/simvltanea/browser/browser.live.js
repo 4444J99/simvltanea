@@ -592,8 +592,15 @@ function applySlice(node) {
           // source. The next registration belongs to its current epoch.
           if (deck.progress && deck.progress.epoch === frameEpoch && media.currentSrc === deck.url)
             deck.progress?.observe(wall, metadata.mediaTime);
-          if (deck.handoff && deck.sourceEpoch === frameSourceEpoch && media.currentSrc === deck.url)
-            deck.handoff.observe(wall, metadata.mediaTime);
+          if (deck.sourceEpoch === frameSourceEpoch && media.currentSrc === deck.url) {
+            const seek = deck.loopSeek;
+            // The retained outgoing deck can recover while its slot is busy.
+            // Preserve that fact independently of the active guard's eligibility.
+            if (seek?.attempt && seek.epoch === deck.sourceEpoch && seek.url === deck.url &&
+                Number.isFinite(metadata.mediaTime) && metadata.mediaTime !== seek.attempt.decoded)
+              seek.attempt.progressed = true;
+            deck.handoff?.observe(wall, metadata.mediaTime);
+          }
           frameEpoch = deck.progress?.epoch;
           frameSourceEpoch = deck.sourceEpoch;
           if (node.active === deck) { node.callbacks++; node.decoded = deck.decoded; }
@@ -964,6 +971,20 @@ function applySlice(node) {
           incoming.media.style.zIndex = '1';
           if (outgoing) outgoing.media.style.zIndex = '0';
           if (outgoing && this.running && !node.resting && duration > 0) {
+            const seek = outgoing.loopSeek, attempt = seek?.attempt;
+            // A native recovery request can fulfill without producing a frame.
+            // Once the successor has passed freshness, use the existing rapid
+            // fade instead of retaining that known frozen picture for 1.2 s.
+            if (handoff && attempt && attempt.generation === this.generation &&
+                seek.url === outgoing.url && seek.epoch === outgoing.sourceEpoch &&
+                outgoing.media.currentSrc === outgoing.url && outgoing.media.seeking &&
+                !outgoing.media.paused && !outgoing.media.error && !attempt.progressed &&
+                Number.isFinite(attempt.decoded) && duration > .2) {
+              this.record('handoff-expedited', node.id, {reason: 'outgoing-native-seek-stalled',
+                url: outgoing.url, sourceEpoch: outgoing.sourceEpoch, attemptedAt: attempt.time,
+                requestedDuration: duration, duration: .2});
+              duration = .2;
+            }
             node.phase = 'CROSSFADING';
             await new Promise((resolve, reject) => {
               let done = false;
@@ -1278,7 +1299,8 @@ function applySlice(node) {
       if (state.stalled + 1e-9 < .6) return;
       const pauseBeforeSeek = this.options?.nativeLoopSeekPauseBeforeSeek !== false;
       const strategy = pauseBeforeSeek ? 'pause-seek-play' : 'seek-play';
-      const attempt = state.attempt = {time, generation: this.generation, strategy};
+      const attempt = state.attempt = {time, generation: this.generation, strategy,
+        decoded: state.decoded, progressed: false};
       const detail = {url: state.url, sourceEpoch: state.epoch, current, seeking: media.seeking,
         decoded: state.decoded, priorSeamCurrent: state.seamCurrent, duration,
         stalledSimSec: state.stalled, target: 1 / fps, strategy, afterPause: null};

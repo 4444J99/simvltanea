@@ -99,6 +99,60 @@ result.requestFailures = [Object.freeze({wall: 12100, phase: 'controls', url: fe
 Object.freeze(result.requestFailures);
 '''
 
+PARKED_BLOB = r'''
+// Timings default to the original held-source cancellation. Other two native
+// failures use the same observed ownership/parking/admission sequence below.
+const parkedCase = globalThis.parkedCase || {id: 'loop-2', before: 38178, error: 38504,
+  first: 38429, parked: 38642, lastPark: 42006, resume: 42157,
+  frames: [42163, 42196], visible: 42196, promoted: 43501};
+const parkedUrl = 'blob:http://127.0.0.1/parked-' + parkedCase.id;
+const oldUrl = 'blob:http://127.0.0.1/outgoing-' + parkedCase.id;
+const makeParkRow = (wall, phase, paused, visible, active, count, current) => {
+  const points = [{wall: parkedCase.first, mediaTime: 0, changes: 1},
+    {wall: parkedCase.frames[0], mediaTime: 1 / 30, changes: 2},
+    {wall: parkedCase.frames[1], mediaTime: 2 / 30, changes: 3}].slice(0, count);
+  const last = points.at(-1), progress = {schema: 1, supported: true, live: true,
+    url: parkedUrl, epoch: 1, changes: count, sourceChanges: count,
+    lastChangeWall: last?.wall ?? null, mediaTime: last?.mediaTime ?? null,
+    foreground: visible, running: visible, foregroundSince: visible ? parkedCase.visible : null,
+    lastForegroundChangeWall: visible ? parkedCase.visible : null,
+    maxGapMs: visible ? wall - parkedCase.visible : 0,
+    currentGapMs: visible ? wall - parkedCase.visible : 0,
+    lifetimeMaxGapMs: visible ? wall - parkedCase.visible : 0, trace: points};
+  const outgoing = {id: parkedCase.id, deck: 0, active: !active, populated: true,
+    src: oldUrl, currentSrc: oldUrl, paused: false, seeking: false, ready: 4,
+    current, duration: 6, decoded: current, callbacks: wall, nativeError: null,
+    progress: {schema: 1, supported: true, live: true, url: oldUrl, epoch: 1,
+      changes: wall, sourceChanges: wall, lastChangeWall: wall, mediaTime: current,
+      foreground: true, running: true, foregroundSince: 1, lastForegroundChangeWall: wall,
+      currentGapMs: 0, maxGapMs: 140, lifetimeMaxGapMs: 140}};
+  const incoming = {id: parkedCase.id, deck: 1, active, populated: true, src: parkedUrl,
+    currentSrc: count ? parkedUrl : '', paused, seeking: false, ready: count ? 4 : 0,
+    current: last?.mediaTime ?? 0, decoded: last?.mediaTime ?? null, callbacks: count + 1,
+    weight: visible ? active ? 1 : .1 : 0, muted: !visible, nativeError: null, progress};
+  const node = {id: parkedCase.id, deck: active ? 1 : 0, phase, busy: !active,
+    resting: false, paused: false, nativeError: null, current, decoded: current,
+    callbacks: wall, progress: active ? progress : outgoing.progress};
+  return {wall, running: true, hidden: false, audioState: 'running', lastFailure: null,
+    standbys: active ? 0 : 1, progressSummary: {suspensionCount: 0}, nodes: [node], decks: [outgoing, incoming]};
+};
+const parkRows = [makeParkRow(parkedCase.before, 'PRIMING', false, false, false, 0, .2)];
+for (let wall = parkedCase.parked; wall < parkedCase.lastPark; wall += 140)
+  parkRows.push(makeParkRow(wall, 'READY', true, false, false, 1, .4 + (wall - parkedCase.parked) / 1000));
+parkRows.push(makeParkRow(parkedCase.lastPark, 'READY', true, false, false, 1, 5.9));
+const hiddenResume = parkedCase.resume
+  ? makeParkRow(parkedCase.resume, 'READY', false, false, false,
+    1 + parkedCase.frames.filter(wall => wall <= parkedCase.resume).length, .01) : null;
+if (hiddenResume) parkRows.push(hiddenResume);
+parkRows.push(makeParkRow(parkedCase.visible + 50, 'CROSSFADING', false, true, false, 3, .02));
+const firstVisibleRow = parkRows.at(-1), resumeRow = hiddenResume || firstVisibleRow;
+parkRows.push(makeParkRow(parkedCase.visible + 700, 'CROSSFADING', false, true, false, 3, .2));
+parkRows.push(makeParkRow(parkedCase.promoted, 'ACTIVE', false, true, true, 3, .3));
+result.progressSchema = 1; result.samples = []; result.prelude = {samples: parkRows};
+result.requestFailures = [{wall: parkedCase.error, url: parkedUrl, method: 'GET',
+  resourceType: 'other', failure: {errorText: 'cancelled'}}];
+'''
+
 
 def classify(mutation: str = '') -> dict:
     program = FIXTURE + mutation + '\nprocess.stdout.write(JSON.stringify(analyse(result)));'
@@ -218,6 +272,94 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
         self.assertTrue(summary['pass'], summary)
         self.assertEqual(len(summary['resourceErrors']['expectedAborts']), 1)
         self.assertEqual(summary['resourceErrors']['expectedAborts'][0]['lagMs'], 100)
+
+    def test_hidden_preparation_cancellation_requires_verified_same_source_admission(self):
+        cases = (
+            {'id': 'loop-2', 'before': 38178, 'error': 38504, 'first': 38429,
+             'parked': 38642, 'lastPark': 42006, 'resume': 42157, 'frames': [42163, 42196],
+             'visible': 42196, 'promoted': 43501},
+            {'id': 'loop-4', 'before': 8938, 'error': 9133, 'first': 9138,
+             'parked': 9143, 'lastPark': 14861, 'frames': [14939, 14973],
+             'visible': 14973, 'promoted': 16352},
+            {'id': 'loop-3', 'before': 19270, 'error': 19527, 'first': 19455,
+             'parked': 19664, 'lastPark': 23322, 'resume': 23538, 'frames': [23506, 23541],
+             'visible': 23542, 'promoted': 24960},
+        )
+        for case in cases:
+            with self.subTest(case=case['id']):
+                summary = classify_resources('globalThis.parkedCase = ' + json.dumps(case) + ';\n' + PARKED_BLOB)
+                self.assertTrue(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['recoveredReads'], [])
+                proof = summary['resourceErrors']['admittedPreparations'][0]
+                self.assertEqual(proof['id'], case['id'])
+                self.assertEqual(proof['deck'], 1)
+                self.assertEqual(proof['epoch'], 1)
+                self.assertEqual([frame['wall'] for frame in proof['frames']], case['frames'])
+                self.assertEqual(proof['promotedAt'], case['promoted'])
+
+    def test_hidden_preparation_requires_every_ownership_parking_and_admission_fact(self):
+        mutations = (
+            'parkRows[1].decks[1].active = true;',
+            'parkRows[1].decks[1].weight = .01;',
+            'parkRows[1].decks[1].muted = false;',
+            'parkRows[1].decks[1].paused = false;',
+            'parkRows[1].decks[1].seeking = true;',
+            'parkRows[1].decks[1].ready = 2;',
+            "parkRows[1].nodes[0].phase = 'ACTIVE';",
+            'parkRows[1].nodes[0].busy = false;',
+            'parkRows[1].nodes[0].resting = true;',
+            'parkRows[1].decks[1].progress.foregroundSince = 1;',
+            'parkRows[1].decks[1].progress.maxGapMs = 100;',
+            '''parkRows.unshift(structuredClone(parkRows[0]));
+parkRows[0].wall -= 140; parkRows[0].decks[1].progress.foregroundSince = 1;''',
+            'parkRows[2].running = false;',
+            'parkRows[2].hidden = true;',
+            "parkRows[2].audioState = 'suspended';",
+            'parkRows[2].progressSummary.suspensionCount = 1;',
+            "parkRows[2].lastFailure = 'native failure';",
+            'parkRows[2].standbys = 2;',
+            "parkRows[2].decks[1].src = 'blob:other';",
+            'parkRows[2].decks[1].progress.epoch = 2;',
+            'parkRows[2].decks[1].deck = 0;',
+            'parkRows[2].decks[1].nativeError = {code: 3};',
+            "parkRows[2].decks[0].progress.url = 'blob:other';",
+            'parkRows[2].decks[0].progress.epoch = 2;',
+            'resumeRow.decks[0].current = 6;',
+            'firstVisibleRow.decks[1].progress.foregroundSince = parkedCase.frames[0];',
+            'resumeRow.decks[1].paused = true;',
+            'resumeRow.decks[1].seeking = true;',
+            'parkRows.at(-1).decks[1].active = false;',
+            'parkRows.at(-1).decks[1].progress.epoch = 2;',
+            'parkRows.at(-1).decks[1].progress.foreground = false;',
+            'parkRows.at(-1).decks[1].progress.running = false;',
+            'parkRows.forEach(row => {row.decks[0].decoded = .1;});',
+            '''parkRows.filter(row => row.decks[1].progress.foreground).forEach(row => {
+  const p = row.decks[1].progress; p.trace.pop(); p.changes = p.sourceChanges = 2;
+  p.lastChangeWall = parkedCase.frames[0]; p.mediaTime = 1 / 30;
+});''',
+            'parkRows.splice(-2);',
+            'parkRows.splice(3, 12);',
+            'parkRows[0].wall -= 1000;',
+            'delete result.progressSchema;',
+            "result.requestFailures[0].failure.errorText = 'network failed';",
+            "result.requestFailures[0].resourceType = 'fetch';",
+            "result.requestFailures[0].method = 'POST';",
+            "result.consoleErrors.push({wall: parkedCase.error, url: parkedUrl, message: 'decode failure'});",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                summary = classify_resources(PARKED_BLOB + mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors'].get('admittedPreparations', []), [])
+
+    def test_hidden_resume_cannot_delay_visibility_beyond_its_evidence_deadline(self):
+        # Two early decoded frames cannot justify a later visibility boundary.
+        case = {'id': 'loop-2', 'before': 38178, 'error': 38504, 'first': 38429,
+                'parked': 38642, 'lastPark': 42006, 'resume': 42157,
+                'frames': [42163, 42196], 'visible': 43007, 'promoted': 44312}
+        summary = classify_resources('globalThis.parkedCase = ' + json.dumps(case) + ';\n' + PARKED_BLOB)
+        self.assertFalse(summary['pass'], summary)
+        self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
 
     def test_unknown_http_request_failure_cannot_use_abort_classification(self):
         for mutation in (

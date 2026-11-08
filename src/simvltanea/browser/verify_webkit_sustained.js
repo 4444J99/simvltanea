@@ -128,12 +128,120 @@ function traceFrames(result, url) {
     invalid, nativeFailure, ambiguous: owners.size > 1};
 }
 
+function admittedPreparation(result, error) {
+  // A hidden preparation can cancel an internal read just before being parked.
+  // This proves a later successful admission, never that pause caused the error.
+  // Generic active-source recovery retains its separate 1,000 ms deadline.
+  if (result.progressSchema !== 1 || error.method !== 'GET' || error.resourceType !== 'other' ||
+      result.errors?.length || (result.consoleErrors || []).some(row => row.url === error.url) ||
+      (result.httpErrors || []).some(row => row.url === error.url)) return null;
+  const rows = result.samples, url = error.url;
+  const afterIndex = rows.findIndex(row => row.wall >= error.wall);
+  if (afterIndex < 1) return null;
+  const before = rows[afterIndex - 1], after = rows[afterIndex];
+  if (after.wall - before.wall > 1000 || before.wall > error.wall) return null;
+  const present = row => (row.decks || []).filter(deck => deck.populated && deck.src === url);
+  const first = present(after);
+  if (first.length !== 1) return null;
+  const identity = first[0], epoch = identity.progress?.epoch;
+  const context = row => {
+    const found = present(row), deck = found[0], progress = deck?.progress;
+    if (found.length !== 1 || deck.id !== identity.id || deck.deck !== identity.deck ||
+        progress?.url !== url || progress.epoch !== epoch || !validProgress(progress, row.wall) ||
+        deck.nativeError || row.running !== true || row.hidden !== false || row.audioState !== 'running' ||
+        row.lastFailure || row.progressSummary?.suspensionCount !== 0) return null;
+    const node = (row.nodes || []).find(node => node.id === identity.id);
+    if (!node || node.nativeError || node.paused || node.resting) return null;
+    return {row, deck, progress, node};
+  };
+  const hidden = state => state && !state.deck.active && state.deck.weight === 0 && state.deck.muted === true &&
+    state.row.standbys === 1 && state.node.busy === true && state.node.deck !== identity.deck &&
+    state.progress.foreground === false && state.progress.running === false &&
+    state.progress.foregroundSince === null && state.progress.lastForegroundChangeWall === null &&
+    state.progress.maxGapMs === 0 && state.progress.currentGapMs === 0;
+  const parked = state => hidden(state) && state.node.phase === 'READY' && state.deck.paused === true &&
+    state.deck.seeking === false && state.deck.ready >= 3 && state.deck.currentSrc === url &&
+    state.progress.sourceChanges >= 1;
+  const prior = context(before), initial = context(after);
+  if (!hidden(prior) || !['PRIMING', 'READY'].includes(prior.node.phase) || !parked(initial) ||
+      (prior.deck.currentSrc !== url && !(prior.node.phase === 'PRIMING' &&
+        prior.deck.currentSrc === '' && prior.progress.sourceChanges === 0))) return null;
+  // A previously visible source cannot be relabelled as a new preparation.
+  if (rows.slice(0, afterIndex).some(row => present(row).some(deck => deck.active || deck.weight > 0 ||
+      deck.progress?.foreground || deck.progress?.foregroundSince != null))) return null;
+  const outgoing = state => {
+    const deck = state.row.decks.find(deck => deck.id === identity.id && deck.deck === state.node.deck && deck.active);
+    return deck && deck.deck !== identity.deck && deck.populated && !deck.paused && !deck.nativeError &&
+      deck.src === deck.currentSrc && validProgress(deck.progress, state.row.wall, true) &&
+      deck.progress.url === deck.src ? deck : null;
+  };
+  const original = outgoing(prior);
+  if (!original) return null;
+  const sameOutgoing = state => {
+    const deck = outgoing(state);
+    return deck && deck.deck === original.deck && deck.src === original.src &&
+      deck.progress.epoch === original.progress.epoch ? deck : null;
+  };
+  let lastPark = initial, old = sameOutgoing(initial), moved = false, resumed, resumedIndex;
+  if (!old) return null;
+  for (let index = afterIndex + 1; index < rows.length; index++) {
+    if (rows[index].wall <= rows[index - 1].wall || rows[index].wall - rows[index - 1].wall > 1000) return null;
+    const state = context(rows[index]), resident = state && sameOutgoing(state);
+    if (!state || !resident) return null;
+    if (resident.progress.sourceChanges > old.progress.sourceChanges && resident.decoded !== old.decoded) moved = true;
+    if (!state.deck.paused) { resumed = state; resumedIndex = index; break; }
+    if (!parked(state) || state.progress.sourceChanges !== initial.progress.sourceChanges ||
+        state.progress.mediaTime !== initial.progress.mediaTime) return null;
+    lastPark = state; old = resident;
+  }
+  if (!resumed || !moved || resumed.deck.seeking || resumed.deck.ready < 3 || resumed.deck.currentSrc !== url ||
+      resumed.deck.active || resumed.node.busy !== true || !['READY', 'CROSSFADING'].includes(resumed.node.phase) ||
+      !(sameOutgoing(resumed).current + .05 < old.current)) return null;
+  // The first resumed observation may still be hidden while fresh frames are
+  // arriving. Preserve its seam witness, then require continuous owned evidence
+  // through the first visibility boundary within the same 1,000 ms budget.
+  let visible = resumed, visibleIndex = resumedIndex;
+  while (!visible.progress.foreground) {
+    if (!hidden(visible) || visible.deck.paused || visible.deck.seeking || visible.deck.ready < 3 ||
+        visible.row.wall - lastPark.row.wall > 1000 || ++visibleIndex >= rows.length ||
+        rows[visibleIndex].wall <= visible.row.wall || rows[visibleIndex].wall - visible.row.wall > 1000) return null;
+    visible = context(rows[visibleIndex]);
+    if (!visible || !sameOutgoing(visible)) return null;
+  }
+  const foregroundAt = visible.progress.foregroundSince, trace = traceFrames(result, url);
+  if (!Number.isFinite(foregroundAt) || foregroundAt <= lastPark.row.wall || foregroundAt > lastPark.row.wall + 1000 ||
+      foregroundAt > visible.row.wall ||
+      trace.invalid || trace.nativeFailure || trace.ambiguous) return null;
+  const points = [...new Map(trace.frames.filter(frame => frame.id === identity.id && frame.deck === identity.deck &&
+    frame.epoch === epoch && frame.wall > lastPark.row.wall && frame.wall <= lastPark.row.wall + 1000 &&
+    frame.wall <= foregroundAt && frame.changes > lastPark.progress.changes).map(frame => [frame.changes, frame])).values()]
+    .sort((a, b) => a.wall - b.wall);
+  const firstFrame = points[0], secondFrame = points.find(frame => firstFrame && frame.wall > firstFrame.wall &&
+    frame.changes > firstFrame.changes && frame.decoded !== firstFrame.decoded);
+  if (!secondFrame) return null;
+  for (let index = visibleIndex; index < rows.length; index++) {
+    if (index > visibleIndex && (rows[index].wall <= rows[index - 1].wall || rows[index].wall - rows[index - 1].wall > 1000)) return null;
+    const state = context(rows[index]);
+    if (!state || state.deck.paused || state.deck.seeking || state.deck.currentSrc !== url || state.deck.ready < 3 ||
+        state.progress.foregroundSince !== foregroundAt || !validProgress(state.progress, state.row.wall, true)) return null;
+    if (state.deck.active) {
+      if (state.node.deck !== identity.deck || state.node.busy || state.node.phase !== 'ACTIVE' ||
+          state.node.progress?.url !== url || state.node.progress?.epoch !== epoch) return null;
+      return {id: identity.id, deck: identity.deck, epoch, bracket: [before.wall, after.wall],
+        parkedAt: after.wall, lastParkedAt: lastPark.row.wall, foregroundAt, promotedAt: state.row.wall,
+        frames: [firstFrame, secondFrame], outgoing: {deck: original.deck, url: original.src, epoch: original.progress.epoch}};
+    }
+    if (!sameOutgoing(state) || !state.node.busy || !['READY', 'CROSSFADING'].includes(state.node.phase)) return null;
+  }
+  return null;
+}
+
 function classifyResourceErrors(result) {
   // Prelude reads belong to the same document and native source lifetimes.
   // Include them only in resource evidence, never in sustained timing/progress.
   const observations = [...(result.prelude?.samples || []), ...(result.samples || [])];
   const evidence = {...result, samples: observations};
-  const classified = {expectedRetirements: [], expectedAborts: [], recoveredReads: [], unexpected: []};
+  const classified = {expectedRetirements: [], expectedAborts: [], recoveredReads: [], admittedPreparations: [], unexpected: []};
   const nativeBlobError = /^The operation couldn[’']t be completed\. \(WebKitBlobResource error 1\.\)$/;
   for (const kind of ['consoleErrors', 'requestFailures']) {
     for (const [index, error] of (result[kind] || []).entries()) {
@@ -199,6 +307,8 @@ function classifyResourceErrors(result) {
           if (proof) { classified.recoveredReads.push({...reference, frames: proof}); continue; }
         }
       }
+      const admitted = blob && cancelled && admittedPreparation(evidence, error);
+      if (admitted) { classified.admittedPreparations.push({...reference, ...admitted}); continue; }
       classified.unexpected.push(reference);
     }
   }
