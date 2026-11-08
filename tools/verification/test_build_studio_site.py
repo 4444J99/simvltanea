@@ -84,7 +84,8 @@ class BuildStudioSiteTests(unittest.TestCase):
         files = {path.relative_to(self.output).as_posix()
                  for path in self.output.rglob('*') if path.is_file()}
         self.assertEqual(files, {'index.html', 'runtime.js', 'compiler.js', 'studio.js',
-                                 'layouts.json', 'library/manifest.json',
+                                 'layouts.json', 'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js',
+                                 'lab_audio.js', 'lab_compiler.js', 'lab_layouts.js', 'library/manifest.json',
                                  'library/' + self.clip['file']})
         self.assertEqual((self.output / 'library/manifest.json').read_bytes(), self.manifest)
         self.assertEqual((self.output / 'library' / self.clip['file']).read_bytes(), self.data)

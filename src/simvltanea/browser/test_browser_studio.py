@@ -24,6 +24,7 @@ import http.server
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,7 @@ import threading
 import unittest
 from fractions import Fraction
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import simvltanea.authoring.composition as c
 from simvltanea.browser import stage_studio, StudioStagingError
@@ -63,6 +65,23 @@ MEDIA_BUDGET_PROBE = r'''(() => {
   for(const method of ['play','load']){const native=HTMLMediaElement.prototype[method];
     HTMLMediaElement.prototype[method]=function(...args){const result=native.apply(this,args);sample();return result;};}
   const tick=()=>{sample();requestAnimationFrame(tick)};requestAnimationFrame(tick);
+})();'''
+BUILTIN_RECORDING_GATE = r'''(() => {
+  const NativeRecorder = MediaRecorder;
+  let next = 0;
+  window.heldBuiltinRecordings = new Map();
+  window.MediaRecorder = class extends NativeRecorder {
+    constructor(...args) { super(...args); this.builtinIndex = next++; }
+    set onstop(handler) {
+      super.onstop = event => heldBuiltinRecordings.set(this.builtinIndex, () => handler.call(this, event));
+    }
+  };
+  window.releaseBuiltinRecordings = (indices = null) => {
+    for (const [index, release] of heldBuiltinRecordings) {
+      if (indices && !indices.includes(index)) continue;
+      heldBuiltinRecordings.delete(index); release();
+    }
+  };
 })();'''
 REPOSITORY = HERE.parents[2]
 # Twelve distinct H.264 MP4 loops with AAC audio and pairwise different periods.
@@ -237,7 +256,9 @@ class StageStudioTests(unittest.TestCase):
         output = self.temp / 'nested' / 'studio'
         stage_studio(output)
         self.assertEqual(sorted(path.name for path in output.iterdir()), sorted(STUDIO_FILES))
-        self.assertEqual(set(STUDIO_FILES), {'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json'})
+        self.assertEqual(set(STUDIO_FILES), {'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json',
+                                           'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js',
+                                           'lab_compiler.js', 'lab_layouts.js'})
         self.assertTrue(all(path.is_file() and not path.is_symlink() for path in output.iterdir()))
         runtime_bytes = (output / 'runtime.js').read_bytes()
         self.assertIn(b'SimvltaneaLive', runtime_bytes)
@@ -294,6 +315,25 @@ class StageStudioTests(unittest.TestCase):
     def test_staged_text_is_public_safe_and_relative(self):
         output = self.temp / 'public'
         stage_studio(output)
+        # Only the Lab's fixed public catalog and its CSP may use HTTPS.
+        # Keep exact URLs, rather than permitting arbitrary paths on these hosts.
+        lab_https_urls = {
+            'lab.html': {'https://upload.wikimedia.org'},
+            'lab_ui.js': {
+                'https://upload.wikimedia.org',
+                'https://creativecommons.org/publicdomain/zero/1.0/deed.en',
+                'https://commons.wikimedia.org/wiki/File:Rainy_night_in_Sham_Shui_Po.webm',
+                'https://commons.wikimedia.org/wiki/File:StreamOfFlowingWater.webm',
+                'https://commons.wikimedia.org/wiki/File:Flowing-water-100019.ogg',
+                'https://commons.wikimedia.org/wiki/File:Flowing-water-100019.ogg#Licensing',
+                'https://commons.wikimedia.org/wiki/File:Compressor_motor.ogg',
+                'https://commons.wikimedia.org/wiki/File:Compressor_motor.ogg#Licensing',
+                'https://upload.wikimedia.org/wikipedia/commons/transcoded/3/36/Rainy_night_in_Sham_Shui_Po.webm/Rainy_night_in_Sham_Shui_Po.webm.480p.vp9.webm',
+                'https://upload.wikimedia.org/wikipedia/commons/transcoded/e/e0/StreamOfFlowingWater.webm/StreamOfFlowingWater.webm.480p.vp9.webm',
+                'https://upload.wikimedia.org/wikipedia/commons/transcoded/2/26/Flowing-water-100019.ogg/Flowing-water-100019.ogg.mp3',
+                'https://upload.wikimedia.org/wikipedia/commons/transcoded/d/db/Compressor_motor.ogg/Compressor_motor.ogg.mp3',
+            },
+        }
         for path in output.iterdir():
             text = path.read_text(encoding='utf-8')
             with self.subTest(file=path.name):
@@ -301,7 +341,8 @@ class StageStudioTests(unittest.TestCase):
                 self.assertNotIn(str(Path.home()), text)
                 self.assertNotIn(str(HERE), text)
                 self.assertNotIn('http://', text.replace('http://www.w3.org', ''))
-                self.assertNotIn('https://', text)
+                self.assertEqual(set(re.findall(r'''https://[^\s"'<>;]+''', text)),
+                                 lab_https_urls.get(path.name, set()))
         self.assertFalse([path for path in output.iterdir() if path.name.startswith('.')])
         html = (output / 'index.html').read_text()
         self.assertIn("default-src 'none'", html)
@@ -555,6 +596,18 @@ class StudioBrowserTests(unittest.TestCase):
     def snapshot(self, page):
         return page.evaluate('SimvltaneaStudio.snapshot()')
 
+    def settled(self, page):
+        """Wait for the current intent's accepted residents and export metadata."""
+        return page.evaluate('''async () => {
+          let timer;
+          try {
+            await Promise.race([compositionIO.plan(), new Promise((_, reject) => {
+              timer=setTimeout(() => reject(new Error('Studio settlement timed out')),45000);
+            })]);
+            return SimvltaneaStudio.snapshot();
+          } finally { clearTimeout(timer); }
+        }''')
+
     def playing(self, page, count=None, timeout=45000):
         """Wait until the runtime plays every panel with decoded frames, then return its snapshot."""
         page.wait_for_function(
@@ -602,6 +655,19 @@ class StudioBrowserTests(unittest.TestCase):
         are made on the device)."""
         staged = {f'{self.origin}/{SUBPATH}/{name}' for name in ('', *STUDIO_FILES, 'library/manifest.json')}
         return [url for url in page.requests if not (url.split('?')[0] in staged or url.startswith(('blob:', 'data:')))]
+
+    def observe_ecology(self, page):
+        """Observe real scheduler decisions without changing its clock or policy."""
+        page.evaluate('''() => {
+          window.automaticRequests=[];
+          const step=SimvltaneaEcosystem.Engine.prototype.step;
+          SimvltaneaEcosystem.Engine.prototype.step=function(time,dt,residents,options) {
+            const out=step.call(this,time,dt,residents,options);
+            window.ecologyOptions={enabled:options.enabled,canReplace:options.canReplace,canRest:options.canRest};
+            for(const request of out.requests) automaticRequests.push({time,...request});
+            return out;
+          };
+        }''')
 
     # ---- tests -------------------------------------------------------------
 
@@ -657,15 +723,16 @@ class StudioBrowserTests(unittest.TestCase):
             before = self.snapshot(first)
             self.tap(first, '#shuffle')
             first.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=before['seed'])
-            after = self.snapshot(first)
-            self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}$')
+            after = self.settled(first)
+            self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}(?:&mix=[sa][\d.]+)?$')
             rolls.add((after['family'], tuple(after['selection'])))
             self.assertEqual(len(set(after['selection'])), after['panels'])
         self.assertGreater(len(rolls), 1)
         last = self.snapshot(first)
         self.playing(first, last['panels'])
-        again = self.open(f'?seed={last["seed"]}')
-        self.assertEqual(self.snapshot(again)['selection'], last['selection'])
+        # Resident clips keep their slots; the settled URL records any normalized mix.
+        again = self.open(first.evaluate('location.search'))
+        self.assertEqual(self.settled(again)['selection'], last['selection'])
         self.assertEqual(self.allowed(first), [])
 
     def test_unlock_during_recording_produces_audio_after_transition(self):
@@ -765,7 +832,7 @@ class StudioBrowserTests(unittest.TestCase):
         box = page.locator('#stage .loop[data-loop-id="loop-1"]').bounding_box()
         page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
         page.wait_for_function('b => SimvltaneaStudio.snapshot().selection.join() !== b.join()', arg=before)
-        after = self.snapshot(page)['selection']
+        after = self.settled(page)['selection']
         self.assertEqual(len(after), len(before))
         if len(before) < 12:
             self.assertNotEqual(after[0], before[0])
@@ -796,11 +863,85 @@ class StudioBrowserTests(unittest.TestCase):
         seed = self.snapshot(page)['seed']
         page.locator('body').press('r')
         page.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=seed)
+        self.settled(page)
         # Manual population survives shuffle and is retained in the reproducible URL.
         self.assertRegex(page.evaluate('location.search'), r'^\?seed=\d+&mix=[sa][\d.]+$')
         self.assertEqual(self.snapshot(page)['panels'], 7)
         self.playing(page)
         self.assertEqual(self.allowed(page), [])
+
+    def test_recording_completion_preserves_pending_keyboard_edits_and_share_link(self):
+        # Delay only delivery of real MediaRecorder stop events. The controls,
+        # compiler, recorded bytes, and playback all use the real implementation.
+        page = self.open('?seed=5', init_script=BUILTIN_RECORDING_GATE)
+        page.wait_for_function('() => heldBuiltinRecordings.size === 12')
+        initial = self.snapshot(page)
+        page.locator('body').press('ArrowRight' if initial['panels'] < 7 else 'ArrowLeft')
+        if self.snapshot(page)['family'] == 'authored':
+            self.tap(page, '#families button[data-family="strips"]')
+        while self.snapshot(page)['panels'] < 9:
+            self.tap(page, '#more')
+        self.tap(page, '#families button[data-family="authored"]')
+        self.assertEqual(self.snapshot(page)['panels'], 7)
+        page.locator('body').press('r')
+        requested = self.snapshot(page)
+        self.assertNotEqual(requested['seed'], initial['seed'])
+        self.assertEqual(requested['builtinsReady'], 0)
+        page.evaluate('releaseBuiltinRecordings()')
+        accepted = self.settled(page)
+        self.assertEqual(accepted['seed'], requested['seed'])
+        self.assertEqual(accepted['family'], requested['family'])
+        self.assertEqual(accepted['selection'], requested['selection'])
+        self.assertEqual(accepted['panels'], 7)
+        self.assertRegex(page.evaluate('location.search'), rf'^\?seed={requested["seed"]}&mix=[sa][\d.]+$')
+        self.playing(page, 7)
+
+    def test_pending_builtin_edit_keeps_new_intent_and_export_waiter(self):
+        page = self.open('?seed=5&mix=s0.1&evolve=0', init_script=BUILTIN_RECORDING_GATE)
+        page.wait_for_function('() => heldBuiltinRecordings.size === 12')
+        page.evaluate('releaseBuiltinRecordings([0, 1])')
+        page.wait_for_function('() => SimvltaneaStudio.snapshot().builtinsReady === 2')
+        self.tap(page, '#families button[data-family="authored"]')
+        self.settled(page)
+        self.playing(page, 2)
+        self.tap(page, '#more')
+        pending = page.evaluate('''async () => {
+          window.pendingRecordingExport = null;
+          compositionIO.plan().then(plan => { window.pendingRecordingExport = plan; });
+          await Promise.resolve();
+          return {snapshot:SimvltaneaStudio.snapshot(), exported:pendingRecordingExport !== null};
+        }''')
+        page.evaluate('releaseBuiltinRecordings()')
+        accepted = self.settled(page)
+        self.assertEqual(pending['snapshot']['panels'], 3, 'recording must not discard the requested third panel')
+        self.assertFalse(pending['exported'], 'export must wait for the pending user intent')
+        self.assertEqual(accepted['panels'], 3)
+        self.playing(page, 3)
+        page.wait_for_function('() => pendingRecordingExport !== null')
+        self.assertEqual(page.evaluate('pendingRecordingExport.tracks.length'), 3)
+
+    def test_recording_completion_preserves_initial_explicit_mix(self):
+        page = self.open('?seed=5&mix=s0.1', init_script=BUILTIN_RECORDING_GATE)
+        page.wait_for_function('() => heldBuiltinRecordings.size === 12')
+        page.evaluate('releaseBuiltinRecordings()')
+        accepted = self.settled(page)
+        self.assertEqual(accepted['selection'], ['drift', 'bands'])
+        self.assertEqual(accepted['family'], 'strips')
+        self.assertEqual(page.evaluate('location.search'), '?seed=5&mix=s0.1')
+        self.playing(page, 2)
+
+    def test_recording_completion_preserves_family_only_share_intent(self):
+        page = self.open('?seed=5', init_script=BUILTIN_RECORDING_GATE)
+        page.wait_for_function('() => heldBuiltinRecordings.size === 12')
+        self.tap(page, '#families button[data-family="authored"]')
+        requested = self.snapshot(page)
+        page.evaluate('releaseBuiltinRecordings()')
+        accepted = self.settled(page)
+        self.assertEqual(accepted['selection'], requested['selection'])
+        self.assertEqual(accepted['family'], 'authored')
+        self.assertEqual(accepted['panels'], 7)
+        self.assertRegex(page.evaluate('location.search'), r'^\?seed=5&mix=a[\d.]+$')
+        self.playing(page, 7)
 
     def test_picker_replaces_the_loops_with_the_visitors_own(self):
         page = self.open('?seconds=30')
@@ -814,6 +955,127 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertEqual([loop['audio'] for loop in snapshot['loops']], [{'codec': 'aac', 'channels': 1}] * 3)
         self.unlock(page)
         self.assertEqual(page.evaluate('compositionRuntime.plan.sources.map(s => s.audio_stream.codec)'), ['aac'] * 3)
+        self.assertEqual(self.allowed(page), [])
+
+    def test_personal_spares_evolve_locally_with_hold_and_stable_siblings(self):
+        page = self.open('?seed=99&evolve=0')
+        methods = []
+        page.on('request', lambda request: methods.append(request.method))
+        admitted = self.add(page, self.loops[:3])
+        self.playing(page, 3)
+        self.tap(page, '#fewer')
+        self.playing(page, 2)
+        page.wait_for_function('() => compositionRuntime.audio.context?.state===\'running\' && '
+                               '[...compositionRuntime.nodes.values()].every(n=>n.audio)')
+        self.observe_ecology(page)
+        page.evaluate('''() => {
+          window.localBefore=[...compositionRuntime.nodes.values()].map(n=>({id:n.id,media:n.media,
+            binding:n.audio,sha:n.item.sha256,frames:n.callbacks,calls:[]}));
+          for(const entry of localBefore) for(const name of ['play','pause','load']) {
+            const original=entry.media[name].bind(entry.media);
+            entry.media[name]=(...args)=>{entry.calls.push(name);return original(...args)};
+          }
+          window.localContext=compositionRuntime.audio.context;
+        }''')
+        self.tap(page, '#activity')
+        page.wait_for_function('() => window.ecologyOptions?.enabled===true', timeout=1500)
+        page.wait_for_function('''() => !compositionRuntime.draining &&
+          [...compositionRuntime.nodes.values()].some((n,i)=>n.item.sha256!==localBefore[i].sha)''', timeout=40000)
+        self.tap(page, '#activity')
+        page.wait_for_function('() => !compositionRuntime.draining')
+        after = page.evaluate('''() => {
+          const r=compositionRuntime, nodes=[...r.nodes.values()];
+          return {changes:nodes.map((n,i)=>n.item.sha256!==localBefore[i].sha),
+            stable:nodes.map((n,i)=>n.item.sha256===localBefore[i].sha ?
+              n.media===localBefore[i].media && n.audio===localBefore[i].binding && localBefore[i].calls.length===0 : true),
+            old:localBefore.map(n=>n.sha),current:nodes.map(n=>n.item.sha256),
+            context:r.audio.context===localContext,budget:r.snapshot().maxConcurrentStandbys,
+            forward:nodes.every(n=>n.media.loop && n.media.playbackRate===1 && !n.item.clip && n.media.src.startsWith('blob:'))};
+        }''')
+        self.assertEqual(sum(after['changes']), 1)
+        self.assertTrue(all(after['stable']))
+        self.assertTrue(after['context'])
+        self.assertTrue(after['forward'])
+        self.assertEqual(after['budget'], 1)
+        self.assertTrue(set(after['current']).issubset({item['sha256'] for item in admitted['loops']}))
+        self.assertEqual(self.snapshot(page)['panels'], 2)
+        self.assertTrue(page.is_hidden('#loop-mode'))
+        page.wait_for_function('() => window.ecologyOptions?.enabled===false && ecologyOptions.canReplace===false', timeout=1500)
+        # The sole spare has just departed, so its SHA is still cooling down.
+        held_at = page.evaluate('compositionRuntime.clock.simTime')
+        page.wait_for_function('at=>compositionRuntime.clock.simTime>at+2', arg=held_at)
+        self.assertFalse(page.evaluate('ecologyOptions.canReplace'))
+        held = after['current']
+        frames = page.evaluate('[...compositionRuntime.nodes.values()].map(n=>n.callbacks)')
+        page.wait_for_function('''() => SimvltaneaStudio.snapshot().ecosystem.residents.every(
+          resident=>resident.age>resident.deadlineAge+.2)''', timeout=35000)
+        self.assertEqual(page.evaluate('[...compositionRuntime.nodes.values()].map(n=>n.item.sha256)'), held)
+        self.assertTrue(page.evaluate('before=>[...compositionRuntime.nodes.values()].every((n,i)=>n.callbacks>before[i])', frames))
+        self.tap(page, '#activity')
+        page.wait_for_function('''before => !compositionRuntime.draining &&
+          [...compositionRuntime.nodes.values()].some((n,i)=>n.item.sha256!==before[i])''', arg=held, timeout=10000)
+        departed = next(sha for sha in after['old'] if sha not in held)
+        self.assertIn(departed, page.evaluate('[...compositionRuntime.nodes.values()].map(n=>n.item.sha256)'))
+        self.assertEqual(self.allowed(page), [])
+        self.assertTrue(all(method == 'GET' for method in methods))
+        self.assertNotIn('mix=', page.evaluate('location.search'))
+        for path in self.loops[:3]:
+            self.assertNotIn(path.name, page.evaluate('location.href'))
+
+    def test_personal_pool_without_spares_extends_full_loops_in_place(self):
+        page = self.open('?seed=99&mix=s0.1')
+        self.add(page, self.loops[:2])
+        self.playing(page, 2)
+        self.observe_ecology(page)
+        page.wait_for_function('() => window.ecologyOptions?.enabled===true', timeout=1500)
+        before = self.snapshot(page)['ecosystem']['residents']
+        page.evaluate('window.localResidents=[...compositionRuntime.nodes.values()].map(n=>({media:n.media,sha:n.item.sha256,frames:n.callbacks}))')
+        page.wait_for_function('''before=>SimvltaneaStudio.snapshot().ecosystem.residents.some(
+          (resident,i)=>resident.deadlineAge>before[i].deadlineAge)''', arg=before, timeout=35000)
+        after = self.snapshot(page)['ecosystem']['residents']
+        extended = [(now, old) for now, old in zip(after, before) if now['deadlineAge'] > old['deadlineAge']]
+        self.assertTrue(extended)
+        for now, old in extended:
+            multiple = (now['deadlineAge'] - old['deadlineAge']) / now['duration']
+            self.assertAlmostEqual(multiple, round(multiple))
+        state = page.evaluate('''() => ({same:[...compositionRuntime.nodes.values()].every((n,i)=>
+          n.media===localResidents[i].media && n.item.sha256===localResidents[i].sha &&
+          n.callbacks>localResidents[i].frames && !n.resting && !n.media.paused),
+          requests:automaticRequests,eligible:ecologyOptions.canReplace})''')
+        self.assertTrue(state['same'])
+        self.assertFalse(state['eligible'])
+        self.assertEqual(state['requests'], [])
+        self.assertEqual(self.allowed(page), [])
+
+    def test_personal_admission_blocks_automatic_selection_of_partial_pool(self):
+        page = self.open('?seed=99&mix=s0.1&evolve=0')
+        self.add(page, self.loops[:2])
+        self.playing(page, 2)
+        self.observe_ecology(page)
+        page.evaluate('''() => {
+          const read=File.prototype.arrayBuffer;
+          File.prototype.arrayBuffer=function() {
+            if(this.name==='pending-fourth.mp4')return new Promise(resolve=>{
+              window.releaseLocalAdmission=()=>resolve(read.call(this));
+            });
+            return read.call(this);
+          };
+          window.admissionBefore=[...compositionRuntime.nodes.values()].map(n=>n.media);
+        }''')
+        page.set_input_files('#files', [dict(name=self.loops[2].name,mimeType='video/mp4',buffer=self.loops[2].read_bytes()),
+                                      dict(name='pending-fourth.mp4',mimeType='video/mp4',buffer=self.loops[3].read_bytes())])
+        page.wait_for_function('() => SimvltaneaStudio.snapshot().busy && SimvltaneaStudio.snapshot().loops.length===3 && Boolean(window.releaseLocalAdmission)')
+        self.tap(page, '#activity')
+        page.wait_for_function('() => window.ecologyOptions?.enabled===true', timeout=1500)
+        self.assertEqual(page.evaluate('ecologyOptions'), dict(enabled=True,canReplace=False,canRest=False))
+        page.wait_for_function('''() => SimvltaneaStudio.snapshot().ecosystem.residents.some(
+          resident=>resident.age>resident.presenceDeadlineAge+.2)''', timeout=35000)
+        self.assertEqual(page.evaluate('automaticRequests'), [])
+        self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every((n,i)=>n.media===admissionBefore[i])'))
+        page.evaluate('releaseLocalAdmission()')
+        page.wait_for_function('() => !SimvltaneaStudio.snapshot().busy')
+        self.playing(page, 4)
+        self.assertEqual(len(self.snapshot(page)['loops']), 4)
         self.assertEqual(self.allowed(page), [])
 
     def test_drop_anywhere_replaces_the_loops(self):
@@ -1183,6 +1445,7 @@ class StudioLibraryTests(unittest.TestCase):
         cls.thread.join()
 
     snapshot = StudioBrowserTests.snapshot
+    settled = StudioBrowserTests.settled
     playing = StudioBrowserTests.playing
     unlock = StudioBrowserTests.unlock
     tap = StudioBrowserTests.tap
@@ -1249,11 +1512,20 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertEqual(self.snapshot(page)['panels'], 4)
         self.assertTrue(page.locator('#more').is_disabled())
         for _ in range(3):
-            before = self.snapshot(page)['seed']
+            before = self.snapshot(page)
             self.tap(page, '#shuffle')
-            page.wait_for_function('seed=>SimvltaneaStudio.snapshot().seed!==seed', arg=before)
-            self.showing(page, self.snapshot(page)['selection'])
-            self.assertEqual(self.snapshot(page)['panels'], 4)
+            page.wait_for_function('seed=>SimvltaneaStudio.snapshot().seed!==seed', arg=before['seed'])
+            requested = self.snapshot(page)['selection']
+            accepted = self.settled(page)
+            # Surviving residents keep their slots even when the requested
+            # shuffle lists those clips in a different order.
+            self.assertCountEqual(accepted['selection'], requested)
+            self.assertEqual(len(set(accepted['selection'])), 4)
+            for slot, clip in enumerate(before['selection']):
+                if clip in requested:
+                    self.assertEqual(accepted['selection'][slot], clip)
+            self.showing(page, accepted['selection'])
+            self.assertEqual(accepted['panels'], 4)
         budget = page.evaluate('mediaBudget')
         self.assertLessEqual(budget['populated'], 5, budget)
         self.assertLessEqual(budget['playing'], 5, budget)
@@ -1506,6 +1778,74 @@ class StudioLibraryTests(unittest.TestCase):
         page.evaluate('releaseCompilation()')
         self.showing(page, expected)
 
+    def test_library_fetch_continuation_respects_personal_pool_change(self):
+        for added in (True, False):
+            with self.subTest(personal_file_admitted=added):
+                page = self.open(query='?seed=99&mix=s0.1&evolve=0')
+                held, block = [], [True]
+
+                def route(request):
+                    clip_id = request.request.url.rsplit('/', 1)[-1][:-4]
+                    if block[0] and clip_id not in self.ids[:2]:
+                        held.append(request)
+                    else:
+                        request.continue_()
+
+                page.route('**/library/clips/*.mp4', route)
+                page.reload()
+                self.showing(page, self.ids[:2])
+                self.tap(page, '#speaker')
+                page.wait_for_function("() => SimvltaneaStudio.snapshot().sound==='on'")
+                page.evaluate('''() => {
+                  const r=compositionRuntime, reconcile=r.reconcile.bind(r);
+                  window.admissionReconciles=[];
+                  r.reconcile=request=>{admissionReconciles.push({busy:SimvltaneaStudio.snapshot().busy,
+                    shas:request.items.map(item=>item.sha256)});return reconcile(request)};
+                  window.originalLocalHandoff=[...r.nodes.values()].map(n=>n.media);
+                  const read=File.prototype.arrayBuffer;
+                  File.prototype.arrayBuffer=function(){return this.name==='second.mp4' ?
+                    new Promise(resolve=>{window.releaseSecondLocal=()=>resolve(read.call(this))}) : read.call(this)};
+                  const step=SimvltaneaEcosystem.Engine.prototype.step;
+                  SimvltaneaEcosystem.Engine.prototype.step=function(time,dt,residents,options){
+                    window.observedLogicalIds=residents.map(item=>({logicalId:item.logicalId,sha:item.clipKey}));
+                    return step.call(this,time,dt,residents,options);
+                  };
+                }''')
+                page.locator('.loop[data-loop-id="loop-2"]').click()
+                page.wait_for_function('before=>SimvltaneaStudio.snapshot().selection.join()!==before.join()', arg=self.ids[:2])
+                wanted = self.snapshot(page)['selection'][1]
+                payloads = [dict(name=name,mimeType='video/mp4',buffer=(LIBRARY / self.by_id[clip_id]['file']).read_bytes() if added else b'invalid')
+                            for name, clip_id in zip(('first.mp4', 'second.mp4'), self.ids[:2])]
+                page.set_input_files('#files', payloads)
+                page.wait_for_function('count=>Boolean(window.releaseSecondLocal) && SimvltaneaStudio.snapshot().busy && '
+                                       'SimvltaneaStudio.snapshot().loops.length===count', arg=int(added))
+                self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every((n,i)=>n.media===originalLocalHandoff[i])'))
+                block[0] = False
+                for request in held:
+                    request.continue_()
+                page.wait_for_function('id=>SimvltaneaStudio.snapshot().library.cached.includes(id)', arg=wanted)
+                if added:
+                    # Let fulfilled fetch and compile microtasks run while the
+                    # second file is still blocked at its normal local read.
+                    page.wait_for_timeout(200)
+                    self.assertEqual(page.evaluate('admissionReconciles'), [])
+                    self.assertEqual(page.evaluate('compositionRuntime.nodes.size'), 2)
+                    self.assertTrue(page.evaluate('[...compositionRuntime.nodes.values()].every((n,i)=>n.media===originalLocalHandoff[i])'))
+                else:
+                    # An entirely refused batch never changes the pool. The
+                    # original library request must still complete normally.
+                    self.showing(page, self.snapshot(page)['selection'])
+                    self.assertTrue(page.evaluate('admissionReconciles.length>0'))
+                    self.assertEqual(self.snapshot(page)['source'], 'library')
+                page.evaluate('releaseSecondLocal()')
+                page.wait_for_function('() => !SimvltaneaStudio.snapshot().busy')
+                self.playing(page, 2)
+                self.assertEqual(self.snapshot(page)['source'], 'own' if added else 'library')
+                if added:
+                    page.wait_for_function('() => !compositionRuntime.draining && observedLogicalIds.length===2 && '
+                                           'observedLogicalIds.every(item=>SimvltaneaStudio.snapshot().loops.some(loop=>loop.sha256===item.sha))')
+                    self.assertTrue(page.evaluate('observedLogicalIds.every(item=>item.logicalId===item.sha)'))
+
     def test_library_mode_fetches_only_the_rolls_clips(self):
         page = self.open(query='?seed=424242')
         expected = self.roll(424242)
@@ -1543,11 +1883,22 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertEqual(ready['prefetch'], self.roll(ready['next'])['ids'])
         self.tap(first, '#shuffle')
         first.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=99)
-        after = self.snapshot(first)
+        after = self.settled(first)
         self.assertEqual(after['seed'], ready['next'])
-        self.assertEqual(after['selection'], ready['prefetch'])
-        self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}$')
+        self.assertEqual(after['panels'], len(ready['prefetch']))
+        self.assertEqual(len(set(after['selection'])), after['panels'])
+        self.assertTrue(set(after['selection']) <= set(expected['ids']) | set(ready['prefetch']))
+        self.assertTrue(set(ready['prefetch']) - set(expected['ids']) <= set(after['selection']))
+        # A resident requested again keeps its surviving slot through a shuffle.
+        # Shrinking can retain a different old clip instead of moving a retiring one.
+        for slot, clip_id in enumerate(expected['ids'][:after['panels']]):
+            if clip_id in ready['prefetch']:
+                self.assertEqual(after['selection'][slot], clip_id)
+        self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}(?:&mix=[sa][\d.]+)?$')
         self.showing(first, after['selection'])
+        again = self.open(query=first.evaluate('location.search'))
+        self.assertEqual(self.settled(again)['selection'], after['selection'])
+        self.showing(again, after['selection'])
         later = self.prefetched(first)
         requested = self.clip_requests(first)
         self.assertEqual(len(requested), len(set(requested)), 'a clip was fetched twice')
@@ -1559,7 +1910,7 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertIn(after['panels'], after['counts'])
         first.locator('body').press('ArrowRight' if after['panels'] < max(after['counts']) else 'ArrowLeft')
         first.wait_for_function('n => SimvltaneaStudio.snapshot().panels !== n', arg=after['panels'])
-        edited = self.snapshot(first)
+        edited = self.settled(first)
         self.showing(first, edited['selection'])
         self.assertTrue(set(self.clip_requests(first)) - before <= set(edited['selection']) | set(later['prefetch']))
         self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}&mix=[sa]\d')

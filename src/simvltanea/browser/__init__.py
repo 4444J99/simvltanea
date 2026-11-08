@@ -6,6 +6,7 @@ from .browser_runtime import (
     build_preview,
 )
 from .browser_studio import (
+    STUDIO_FILES,
     StudioStagingError,
     stage_studio,
 )
@@ -23,6 +24,7 @@ __all__ = [
     'compile_plan',
     'build_preview',
     'stage_studio',
+    'STUDIO_FILES',
     'StudioStagingError',
     'authored_layout_bundle',
     'authored_layouts',

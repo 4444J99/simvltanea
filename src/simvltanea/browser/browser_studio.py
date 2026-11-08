@@ -10,6 +10,8 @@ compiles them in the browser. The families and the counts each offers come from
 builds. Files never leave the device. ``stage_studio(output)`` writes the flat, relative-URL site::
 
     index.html  runtime.js  compiler.js  studio.js  layouts.json
+    lab.html  lab_model.js  lab_engine.js  lab_ui.js  lab_audio.js
+    lab_compiler.js  lab_layouts.js
 
 A public clip library (``library/manifest.json`` and ``library/clips/``) is added
 beside these at deploy time by ``tools.publishing.stage_library_site``, never here.
@@ -29,10 +31,11 @@ import json
 from pathlib import Path
 
 from simvltanea.browser.layout_bundle import layout_bundle_v2
+from simvltanea.browser.browser_lab import LAB_FILES, lab_files
 
 HERE = Path(__file__).resolve().parent
 STUDIO_TITLE = 'SIMVLTANEA studio: loops on their own clocks'
-STUDIO_FILES = ('index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json')
+STUDIO_FILES = ('index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json', *LAB_FILES)
 
 STYLE = '''
 :root{color-scheme:dark;--bg:#0a0a0b;--fg:rgba(255,255,255,.88);--dim:rgba(255,255,255,.55);
@@ -81,6 +84,8 @@ button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.6
 #families button[aria-checked=true]{background:rgba(255,255,255,.17);color:#fff}
 #families button[aria-checked=false]{color:var(--dim)}
 #effects[aria-pressed=true]{background:rgba(255,255,255,.17);color:#fff}
+.lab-link{color:var(--fg);text-decoration:none;font-size:12px;padding:10px 12px;border-radius:999px;white-space:nowrap}
+.lab-link:hover{background:rgba(255,255,255,.1);color:#fff}
 #sound{display:flex;align-items:center}
 #volume{width:0;opacity:0;margin:0;height:44px;accent-color:#fff;cursor:pointer;
 transition:width 200ms var(--ease),opacity 200ms var(--ease),margin 200ms var(--ease)}
@@ -105,6 +110,20 @@ padding:18px 20px;border-radius:18px;background:rgba(16,16,18,.72);border:1px so
 -webkit-backdrop-filter:blur(22px);backdrop-filter:blur(22px);box-shadow:0 20px 60px rgba(0,0,0,.5)}
 #about p{margin:0 0 8px}#about p:last-child{margin:0;color:var(--dim);font-size:13px}
 #about:focus-visible{outline-offset:-2px}
+#filter-settings{color:var(--fg);background:rgba(16,16,18,.97);border:1px solid var(--edge);
+border-radius:18px;padding:18px;width:min(92vw,24rem);max-height:82vh;overflow:auto;
+box-shadow:0 20px 60px rgba(0,0,0,.5)}
+#filter-settings::backdrop{background:rgba(0,0,0,.35)}
+#filter-settings header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#filter-settings h2{font-size:18px;margin:0}#filter-settings p{font-size:13px;color:var(--dim);margin:4px 0 14px}
+#filter-settings fieldset{border:0;border-top:1px solid var(--edge);margin:10px 0;padding:10px 0 0}
+#filter-settings legend{font-weight:600;padding:0 6px 0 0}
+.filter-control{display:grid;grid-template-columns:1fr auto;gap:4px 12px;margin:8px 0}
+.filter-control output{font-variant-numeric:tabular-nums;color:var(--dim)}
+.filter-control input{grid-column:1/-1;width:100%;min-height:32px;margin:0;accent-color:#fff}
+#fx-curve{background:#222;color:var(--fg);border:1px solid var(--edge);border-radius:8px;
+font:inherit;padding:7px;width:100%;margin-top:4px}
+#fx-reset{width:auto;padding:0 14px;border:1px solid var(--edge)}
 #drop{position:fixed;inset:12px;border:1.5px dashed rgba(255,255,255,.6);border-radius:22px;display:none;
 align-items:center;justify-content:center;background:rgba(0,0,0,.35);pointer-events:none}
 #drop svg{width:56px;height:56px;fill:none;stroke:#fff;stroke-width:1.2;stroke-linecap:round}
@@ -188,14 +207,43 @@ INDEX_HTML = '''<!doctype html>
 accept="video/*,.mov,.mp4,.m4v,.webm,.json,application/json">
 </div>
 <div id="corner" role="toolbar" aria-label="Page">
+<a class="lab-link" href="lab.html">Effects Lab</a>
 <button id="activity" type="button" aria-label="Hold changes" aria-pressed="false" title="Hold changes">∞</button>
 <button id="effects" type="button" aria-label="Filters" aria-pressed="true" title="Filters on">ƒx</button>
+<button id="filter-tune" type="button" aria-label="Filter settings" aria-haspopup="dialog"
+aria-controls="filter-settings" aria-expanded="false" title="Filter settings">☷</button>
 <button id="loop-mode" type="button" aria-label="Play forward loops" title="Boomerang loops" hidden>↔</button>
 <button id="fullscreen" type="button" aria-label="Full screen" aria-keyshortcuts="F">''' + ICONS['fullscreen'] + '''</button>
 <button id="help" type="button" aria-label="About this page" aria-expanded="false" aria-controls="about">?</button>
 </div>
+<dialog id="filter-settings" aria-labelledby="filter-title">
+<header><h2 id="filter-title">Clip filters</h2><button id="fx-close" type="button" aria-label="Close filter settings">×</button></header>
+<p>Each clip rises and recedes on its own. Set any effect to zero to bypass it.</p>
+<fieldset><legend>Timing</legend>
+<div class="filter-control"><label for="fx-attack">Rise</label><output id="fx-attack-value" for="fx-attack">1.2 s</output>
+<input id="fx-attack" type="range" min="0.1" max="5" step="0.1" value="1.2"></div>
+<label for="fx-curve">Curve</label><select id="fx-curve"><option value="linear">Linear</option><option value="smooth">Smooth</option></select>
+<div class="filter-control"><label for="fx-tail">Waiting presence</label><output id="fx-tail-value" for="fx-tail">12%</output>
+<input id="fx-tail" type="range" min="5" max="50" step="1" value="12"></div>
+</fieldset>
+<fieldset><legend>Sound</legend>
+<div class="filter-control"><label for="fx-gain">Volume swell</label><output id="fx-gain-value" for="fx-gain">100%</output>
+<input id="fx-gain" type="range" min="0" max="100" step="1" value="100"></div>
+<div class="filter-control"><label for="fx-lowpass">Low-pass filter</label><output id="fx-lowpass-value" for="fx-lowpass">100%</output>
+<input id="fx-lowpass" type="range" min="0" max="100" step="1" value="100"></div>
+</fieldset>
+<fieldset><legend>Image</legend>
+<div class="filter-control"><label for="fx-brightness">Brightness swell</label><output id="fx-brightness-value" for="fx-brightness">100%</output>
+<input id="fx-brightness" type="range" min="0" max="100" step="1" value="100"></div>
+<div class="filter-control"><label for="fx-saturation">Color swell</label><output id="fx-saturation-value" for="fx-saturation">100%</output>
+<input id="fx-saturation" type="range" min="0" max="100" step="1" value="100"></div>
+<div class="filter-control"><label for="fx-blur">Blur</label><output id="fx-blur-value" for="fx-blur">2 px</output>
+<input id="fx-blur" type="range" min="0" max="2" step="0.1" value="2"></div>
+</fieldset>
+<button id="fx-reset" type="button">Reset filters</button>
+</dialog>
 <div id="about" role="dialog" aria-label="About" tabindex="-1" hidden>
-<p>Loops on their own clocks, rising and receding in sound and image. ƒx toggles filters; ∞ holds changes; ↔ switches loop direction.</p>
+<p>Loops on their own clocks, rising and receding in sound and image. ƒx toggles filters; ☷ adjusts them; ∞ holds changes; ↔ switches loop direction.</p>
 <p>Your videos never leave this device. Nothing is uploaded.</p>
 <p>Space play · R shuffle · M sound · F full screen · ← → panels</p>
 </div>
@@ -225,13 +273,14 @@ def studio_files() -> dict[str, bytes]:
         'compiler.js': (HERE / 'browser.compiler.js').read_bytes(),
         'studio.js': (HERE / 'browser.studio.js').read_bytes(),
         'layouts.json': layouts.encode(),
+        **lab_files(),
     }
 
 
 def stage_studio(output: Path) -> None:
     """Write the flat studio into ``output``, creating it when absent.
 
-    Only the five studio files are ever written. A directory holding anything
+    Only the declared Studio and Effects Lab files are ever written. A directory holding anything
     else (including hidden files, subdirectories or symlinks) is refused before
     any byte is written, so staging cannot clobber or mix with foreign content.
     """

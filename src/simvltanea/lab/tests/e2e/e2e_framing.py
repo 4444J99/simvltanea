@@ -253,13 +253,17 @@ def test_a_window_depends_on_the_neighbour(make_lab):
     lab.set("framing.zoom_jitter", 0)
     out = lab.js("""(async () => {
       const f = await import('./framing.js'); const P = __lab.player;
-      const p = P.panels[2], s = p.slots[p.active], r = p.rect;
-      const ctx = {srcAspect: s.vw / s.vh, cellAspect: r.w / r.h};
+      const r = P.panels[2].rect;
+      // The live scheduler may choose a deliberately degraded, flat-colour
+      // fixture. Such a clip cannot distinguish crops by neighbour colour.
+      const clip = P.records.find((rec) => rec.id.startsWith('fx-00-'));
+      if (f.colourOf(clip).kind !== 'grid8') throw new Error('Expected spatial colour fixture');
+      const ctx = {srcAspect: clip.width / clip.height, cellAspect: r.w / r.h};
       const params = f.framingParams({...__lab.effective(), 'framing.mode': 'blend', 'framing.temperature': 0, 'framing.neighbour_influence': 1, 'framing.zoom_jitter': 0});
       const wins = [];
       for (const other of [3, 4, 5, 6, 7, 8]) {
         const nb = {dir: -1, win: {cx: 0.5, cy: 0.5, zoom: 4}, clip: P.records[other], srcAspect: 0.75, cellAspect: r.w / r.h};
-        wins.push(f.deriveWindow({clip: s.rec, ...ctx, baseZoom: 4, seed: 1, neighbours: [nb], params}));
+        wins.push(f.deriveWindow({clip, ...ctx, baseZoom: 4, seed: 1, neighbours: [nb], params}));
       }
       return wins.map((w) => [w.cx.toFixed(3), w.cy.toFixed(3)].join(','));
     })()""")

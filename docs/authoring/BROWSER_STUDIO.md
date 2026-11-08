@@ -40,6 +40,7 @@ pixels (44 on wider screens).
 | Volume | none | Master level; appears when the speaker is hovered or focused |
 | Add yours | none | Opens the file picker for your own videos |
 | ƒx Filters | none | Links each clip's audible and visible rise and fall; toggles the effect without restarting playback |
+| ☷ Filter settings | Esc closes | Adjusts rise, curve, waiting presence, and separate sound and image effect strengths |
 | Full screen | F | Enters or leaves full screen where the browser allows it |
 | ? | Esc closes | Three short lines: what this is, privacy, the keys |
 | A panel | none | Swaps that panel's loop for one not on screen |
@@ -220,10 +221,16 @@ gesture it presents that same plan as plan v2 `spatial_loops`, with
 
 ## Run it locally
 
-`stage_studio(output)` writes five flat files with relative URLs:
-`index.html`, `runtime.js`, `compiler.js`, `studio.js`, and `layouts.json`. It
+`stage_studio(output)` writes twelve flat files with relative URLs:
+`index.html`, `runtime.js`, `compiler.js`, `studio.js`, `layouts.json`,
+`lab.html`, `lab_model.js`, `lab_engine.js`, `lab_ui.js`, `lab_audio.js`,
+`lab_compiler.js`, and `lab_layouts.js`. It
 refuses a directory that holds anything else, and staging twice yields
 identical bytes.
+
+The **Effects Lab** link opens an editing workspace for spatial panels with
+overlapping visual layers, swept comb and pass filters, and independently evolving sound
+and picture clocks. See [Effects Lab](EFFECTS_LAB.md) for its controls and limits.
 
 ```bash
 PYTHONPATH=src python3 -m simvltanea.browser.browser_studio --output var/site/studio

@@ -168,8 +168,17 @@ class NativeFrameProgressTests(unittest.TestCase):
         page.evaluate('''()=>{live.crossfadeSec=1;window.pending=change(1);}''')
         page.wait_for_function('Boolean(live.fade)')
         self.assertTrue(page.evaluate('live.fade.incoming.progress.foreground && live.fade.outgoing.progress.foreground'))
-        page.evaluate('''()=>{live.clock.pause();window.incoming=live.fade.incoming;
-          window.outgoing=live.fade.outgoing;incoming.media.pause();}''')
+        unchanged = page.evaluate('''()=>{window.incoming=live.fade.incoming;window.outgoing=live.fade.outgoing;
+          const before=incoming.progress.snapshot(performance.now());
+          // Deliberately disable the new protective rollback for this telemetry
+          // fault injection: the original >2s hold must remain observable.
+          live.handoff.stop();
+          const after=incoming.progress.snapshot(performance.now());
+          live.clock.pause();incoming.media.pause();
+          return before.epoch===after.epoch && before.changes===after.changes &&
+            before.sourceChanges===after.sourceChanges && before.url===after.url &&
+            after.maxGapMs>=before.maxGapMs; }''')
+        self.assertTrue(unchanged, 'disabling protection reset the source progress evidence')
         page.wait_for_timeout(2200)
         held = page.evaluate('incoming.progress.snapshot(performance.now())')
         self.assertGreater(held['maxGapMs'], 2000)

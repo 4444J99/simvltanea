@@ -23,8 +23,9 @@
  * Library mode: when library/manifest.json (simvltanea.public-demo/1) sits beside the page and
  * validates, its clips replace the generated loops (?gen=1 forces the generated ones). A roll
  * picks clips by their tags (no palette+shot twice when avoidable, a portrait/landscape mix), and
- * only those clips are fetched, checked like a visitor's file and kept in a small LRU; the next
- * shuffle's clips are prefetched when idle. The clips' own audio plays in the spatial mix.
+ * only those clips are fetched, checked against their manifest and kept in a small LRU; the next
+ * shuffle's clips are prefetched when idle. Real decoding is verified at standby admission.
+ * The clips' own audio plays in the spatial mix.
  *
  * A visitor's own files are optional. Each one is gated before it becomes a loop:
  * a total-size cap, a container/codec sniff checked with video.canPlayType(), a
@@ -659,12 +660,35 @@
       eligible: (id, time) => !departed.has(id) || time - departed.get(id) >= 10};
   }
 
+  const EFFECT_PARAMS = Object.freeze({attackSeconds: 'fx_attack', curve: 'fx_curve', tail: 'fx_tail',
+    gainDepth: 'fx_gain', lowpassDepth: 'fx_lowpass', brightnessDepth: 'fx_brightness',
+    saturationDepth: 'fx_saturation', blurPx: 'fx_blur'});
+  const presenceApi = () => root.SimvltaneaPresence ||
+    (typeof module === 'object' && module.exports ? require('./browser.presence.js') : null);
+  function effectSettingsFromSearch(search) {
+    const params = new URLSearchParams(search), values = {};
+    for (const [key, name] of Object.entries(EFFECT_PARAMS)) {
+      const value = params.get(name);
+      if (value !== null && value.trim() !== '') values[key] = key === 'curve' ? value : Number(value);
+    }
+    return presenceApi().normalizeSettings(values);
+  }
+  function effectSettingsSearch(search, settings) {
+    const params = new URLSearchParams(search), P = presenceApi(), values = P.normalizeSettings(settings);
+    for (const [key, name] of Object.entries(EFFECT_PARAMS)) {
+      if (values[key] === P.DEFAULT_SETTINGS[key]) params.delete(name);
+      else params.set(name, String(values[key]));
+    }
+    return params.toString();
+  }
+
   const api = {
     FPS, DEFAULT_SECONDS, DEFAULT_PANELS, MAX_TOTAL_BYTES, MIN_FRAMES, MAX_SPANS_PER_TRACK, OWN_FAMILY,
     quantizeDuration, admitSize, countVerdict, spanVerdict, nearestCount, familyLabel, oneLine, sniffContainer,
     playbackQueries, blobType, mediaSuffix, compositionFrames, formatMiB, seededRandom, parseSeed, createSuccession,
     rollComposition, formatMix, parseMix, stripsPreset, loopGain, audioStream,
     libraryClips, chooseClips, rollLibrary, LIBRARY_CACHE,
+    effectSettingsFromSearch, effectSettingsSearch,
     BUILTINS: BUILTINS.map(item => ({name: item.name, frames: item.frames})),
   };
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -685,6 +709,7 @@
   const ui = {
     frame: $('#frame'), preview: $('#preview'), ghost: $('#ghost'), bar: $('#bar'), play: $('#play'), start: $('#start'),
     corner: $('#corner'), activity: $('#activity'), effects: $('#effects'), loopMode: $('#loop-mode'),
+    filterTune: $('#filter-tune'), filterDialog: $('#filter-settings'),
     shuffle: $('#shuffle'), fewer: $('#fewer'), more: $('#more'), panels: $('#panel-count'),
     families: $('#families'), speaker: $('#speaker'), volume: $('#volume'), add: $('#add'), files: $('#files'),
     fullscreen: $('#fullscreen'), help: $('#help'), about: $('#about'), toast: $('#toast'),
@@ -696,6 +721,7 @@
   let manualPopulation = new URLSearchParams(search).has('mix');
   const reduced = Boolean(root.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   let filtersEnabled = !reduced && new URLSearchParams(search).get('fx') !== '0';
+  let effectSettings = effectSettingsFromSearch(search);
   const FADE_MS = reduced ? 0 : 220, IDLE_MS = 3000, TOAST_MS = 4200;
   const compiler = () => root.SimvltaneaCompiler;
   const runtime = () => root.compositionRuntime;
@@ -720,9 +746,10 @@
     requested: 0, next: null, prefetch: [], probe: null};
   const digests = new WeakMap();
   const sound = {unlocked: false, muted: false, volume: 0.7, mixer: null};
-  let selection = null, session = null, waiting = [], launches = 0, hold = reduced, paused = false;
-  let lastRefusals = [], busy = 0, recordMode = 'pending', previewClock = null;
+  let selection = null, session = null, exportFailure = null, waiting = [], launches = 0, hold = reduced, paused = false;
+  let lastRefusals = [], busy = 0, recordMode = 'pending', builtinRecording = null, previewClock = null;
   const liveVoices = new Map();
+  let liveVoiceClock = null;
   let ecosystem = new root.SimvltaneaEcosystem.Engine({seed: parseSeed(search) ?? 1});
   let succession = createSuccession(parseSeed(search) ?? 1), pendingSelection = false;
   const residentModels = new WeakMap(), residents = [];
@@ -730,8 +757,10 @@
   let previousLogicalIds = new Set(), currentLogicalIds = new Set();
   const live = root.compositionRuntime = new root.SimvltaneaLive.Session(stage, {
     crossfadeSec: reduced ? 0 : 1.2,
-    effects: filtersEnabled, reducedMotion: reduced,
+    effects: filtersEnabled, reducedMotion: reduced, effectSettings,
     onAudioNode: attachLiveVoice,
+    onDeckAudio: attachDeckVoice,
+    onDeckUnload: detachLiveVoice,
     onError: () => toast('That loop could not start. The current picture keeps playing.'),
   });
 
@@ -752,7 +781,8 @@
     const count = nearestCount(fits(family), Math.min(value.loops.length, live.maxForeground));
     if (count === null) return null;
     return family === value.family && count === value.loops.length ? value :
-      {...value, family, panels: count, loops: value.loops.slice(0, count)};
+      {...value, family, panels: count, loops: value.loops.slice(0, count),
+        retained: new Map([...(value.retained || [])].filter(([slot]) => slot < count))};
   }
 
   // ---- Toast, idle chrome, about ------------------------------------------------
@@ -772,7 +802,7 @@
     idleTimer = setTimeout(() => {
       const active = document.activeElement;
       const focused = active && active !== document.body && (ui.bar.contains(active) || ui.corner.contains(active));
-      if (!focused && ui.about.hidden && !hold) studio.classList.add('idle');
+      if (!focused && ui.about.hidden && !ui.filterDialog.open && !hold) studio.classList.add('idle');
     }, IDLE_MS);
   }
   for (const type of ['pointermove', 'pointerdown', 'keydown', 'focusin']) document.addEventListener(type, wake, true);
@@ -826,17 +856,17 @@
     if (!wantSound()) media.muted = true;
   }
 
-  function promoteAudioPlan() {
-    const r = runtime();
-    if (!r || !r.plan || !sound.unlocked) return;
-    Object.assign(r.plan, {plan_version: 2, engine_version: '1.1.0', audio: {
+  function promoteAudioPlan(current = session) {
+    if (!current || !sound.unlocked) return;
+    const {plan, bySha} = current;
+    Object.assign(plan, {plan_version: 2, engine_version: '1.1.0', audio: {
       mode: 'spatial_loops', master_volume: '1', spatial_panning: true,
-      per_loop: Object.fromEntries(r.plan.tracks.map(track => [track.id,
-        {gain: loopGain(r.nodes.size || 1), mute_on_hold: true}]))}});
-    r.plan.sources.forEach(source => {
-      source.audio_stream = session?.bySha.get(source.sha256)?.audioStream || null;
+      per_loop: Object.fromEntries(plan.tracks.map(track => [track.id,
+        {gain: loopGain(plan.tracks.length), mute_on_hold: true}]))}});
+    plan.sources.forEach(source => {
+      source.audio_stream = bySha.get(source.sha256)?.audioStream || null;
     });
-    if (session) session.sound = true;
+    current.sound = true;
   }
   function unlock() {
     if (sound.unlocked) {
@@ -961,48 +991,82 @@
   }
   setInterval(() => {
     try {
-      if (session && session.clock) pumpVoices(session.clock);
+      if (liveVoiceClock && !live.disposed) pumpVoices(liveVoiceClock);
       if (previewClock && previewClock.audio) pumpVoices(previewClock.audio);
     } catch (_) { /* a closed context; the next launch rebuilds the voices */ }
   }, 120);
 
-  // Generated voices follow their resident deck; unrelated voices keep their buses.
+  // Native analysis remains attached to the resident source. Generated voices
+  // instead follow each persistent deck, including both sides of a handoff.
   function attachLiveVoice(node, context) {
-    const old = liveVoices.get(node.id);
-    if (old) { old.input.disconnect(); liveVoices.delete(node.id); }
     if (!node.audio.analyser) {
       node.audio.analyser = context.createAnalyser(); node.audio.analyser.fftSize = 256;
       node.audio.samples = new Float32Array(256);
       node.audio.source.connect(node.audio.analyser);
     }
-    const item = node.item;
+    attachDeckVoice(node.active, context);
+  }
+  function attachDeckVoice(deck, context) {
+    if (!deck || !deck.binding || deck.enteredAt === null || !context) return;
+    const item = deck.item, old = liveVoices.get(deck);
+    if (old && old.item === item && old.binding === deck.binding) {
+      refreshVoiceClock(); return;
+    }
+    if (old) { old.input.disconnect(); liveVoices.delete(deck); }
     if (builtins.includes(item)) {
-      const input = context.createGain(); input.connect(node.audio.filter || node.audio.pan);
-      liveVoices.set(node.id, {period: item.quantized.seconds, events: VOICES[item.name], input,
-        until: context.currentTime, offset: live.clock.simTime - node.media.currentTime});
+      const input = context.createGain(); input.connect(deck.binding.filter || deck.binding.pan);
+      liveVoices.set(deck, {item, binding: deck.binding, period: item.quantized.seconds,
+        events: VOICES[item.name], input, until: context.currentTime - 0.15,
+        offset: live.clock.simTime - deck.media.currentTime});
     }
     refreshVoiceClock();
   }
+  function detachLiveVoice(deck) {
+    const voice = liveVoices.get(deck);
+    if (!voice) return;
+    liveVoices.delete(deck); voice.input.disconnect();
+    refreshVoiceClock();
+  }
   function refreshVoiceClock() {
-    if (!session || !live.audio.context) return;
-    for (const [id, voice] of liveVoices) if (!live.nodes.has(id)) {
-      voice.input.disconnect(); liveVoices.delete(id);
+    if (!live.audio.context) return;
+    const decks = new Set([...live.nodes.values()].flatMap(node => node.decks));
+    for (const [deck, voice] of liveVoices) if (!decks.has(deck) || deck.item !== voice.item) {
+      voice.input.disconnect(); liveVoices.delete(deck);
     }
-    session.clock = {context: live.audio.context, voices: [...liveVoices.values()], generation: -1,
-      running: () => live.running, origin: () => live.origin, epoch: () => live.generation};
+    // Adding a voice must not replay the lookahead window of its siblings. Only
+    // an actual live clock epoch change resets their scheduling horizons.
+    if (!liveVoiceClock || liveVoiceClock.context !== live.audio.context) {
+      liveVoiceClock = {context: live.audio.context, voices: [], generation: live.generation,
+        running: () => live.running, origin: () => live.origin, epoch: () => live.generation};
+    }
+    liveVoiceClock.voices = [...liveVoices.values()];
+    if (session) session.clock = liveVoiceClock;
   }
 
   // ---- The runtime hook ------------------------------------------------------
 
   root.__sharedEngineUnavailable =
     'The studio plays every loop with its authored framing; the panel framing sweep is not included.';
+  // Export consumers keep the plan's source objects through their asynchronous
+  // reads. Their files must survive a later selection without a strong cache.
+  const exportedMedia = new WeakMap();
+  function exportPlan(current) {
+    const plan = structuredClone(current.plan);
+    for (const source of plan.sources) {
+      const item = current.bySha.get(source.sha256);
+      exportedMedia.set(source, {file: item.file, type: item.type, sha256: item.sha256});
+    }
+    return plan;
+  }
   root.compositionIO = {
     maxMediaBytes: MAX_TOTAL_BYTES,
     plan() {
-      return session ? Promise.resolve(session.plan) : new Promise(resolve => { waiting.push(resolve); });
+      if (pendingSelection || (!session && !exportFailure))
+        return new Promise((resolve, reject) => { waiting.push({resolve, reject}); });
+      return exportFailure ? Promise.reject(exportFailure) : Promise.resolve(exportPlan(session));
     },
     async bytes(source) {
-      const item = session && session.bySha.get(source.sha256);
+      const item = exportedMedia.get(source);
       if (!item) throw new Error(`Missing media: ${source.id}`);
       const buffer = await item.file.arrayBuffer();
       digests.set(buffer, item.sha256);
@@ -1012,7 +1076,7 @@
       return digests.get(buffer) ?? hex(await crypto.subtle.digest('SHA-256', buffer));
     },
     type(source) {
-      const item = session && session.bySha.get(source.sha256);
+      const item = exportedMedia.get(source);
       return item ? item.type : null;
     },
   };
@@ -1087,40 +1151,171 @@
     return plan;
   }
 
-  const selectedItems = () => (selection ? selection.loops.map(index => pool()[index]).filter(Boolean) : []);
+  const selectedItems = (sel = selection, sourcePool = pool()) => (sel ?
+    sel.loops.map((index, slot) => sel.retained?.get(slot) || sourcePool[index]).filter(Boolean) : []);
   const itemsReady = items => items.length > 0 && items.every(item => item.sha256);
+
+  function replaceSelectionItem(sel, slot, index) {
+    const retained = new Map(sel.retained);
+    retained.delete(slot);
+    return {...sel, loops: sel.loops.map((old, at) => at === slot ? index : old), retained};
+  }
+
+  function residentSelection(requested, items, sourcePool) {
+    const retained = new Map();
+    const loops = items.map((item, slot) => {
+      let index = sourcePool.indexOf(item);
+      if (index < 0) index = sourcePool.findIndex(candidate =>
+        item.clip && candidate.clip ? item.clip.id === candidate.clip.id :
+          Boolean(item.sha256) && item.sha256 === candidate.sha256);
+      // A deferred old variant or a resident from the previous source pool
+      // remains exact. Never put its bytes into the newly requested pool item.
+      if (sourcePool[index] !== item) retained.set(slot, item);
+      return index < 0 ? null : index;
+    });
+    return {...requested, loops, retained};
+  }
+
+  function residentAdmission(items, r) {
+    const current = items.map((_, index) => r.nodes.get(`loop-${index + 1}`)?.item);
+    const residentHashes = new Set([...r.nodes.values()].map(node => node.item?.sha256));
+    const wanted = new Set(items.map(item => item.sha256));
+    const aligned = current.map(item => item && wanted.has(item.sha256) ? item : null);
+    const used = new Set(aligned.filter(Boolean).map(item => item.sha256));
+    const fresh = items.filter(item => !residentHashes.has(item.sha256));
+    // Keep existing ownership even for a permutation or a shrinking shuffle.
+    // Moving an occupied source can otherwise leave duplicate residents when
+    // its old slot's replacement fails or a later intent cancels retirement.
+    items.forEach((item, index) => {
+      if (!aligned[index] && fresh.includes(item) && !used.has(item.sha256)) {
+        aligned[index] = item; used.add(item.sha256);
+      }
+    });
+    aligned.forEach((item, index) => {
+      if (item) return;
+      const next = fresh.find(candidate => !used.has(candidate.sha256)) || current[index];
+      if (next && !used.has(next.sha256)) { aligned[index] = next; used.add(next.sha256); }
+    });
+    return aligned.every(Boolean) ? aligned : null;
+  }
 
   /* Compile layout/export metadata, then reconcile residents in place. The live
    * session owns native loops; editing metadata never restarts its global clock. */
-  async function launch({atLoopBoundary = false} = {}) {
+  async function launch({atLoopBoundary = false, shareMix} = {}) {
     const bounded = boundedSelection(selection);
     if (bounded !== selection) { selection = bounded; renderControls(); }
-    const token = ++launches, r = runtime(), items = selectedItems();
+    const token = ++launches, r = runtime(), requested = selection, sourcePool = pool();
+    const items = selectedItems(requested, sourcePool);
+    const ownsIntent = () => token === launches && selection === requested && pool() === sourcePool;
+    let published = false, attempted = false, settledCohort = null;
+    const ownsCohort = value => value && r.revision === value.revision && r.plan === value.plan &&
+      r.nodes.size === value.cohort.length && value.cohort.every(({id, node, deck, item, source, url, epoch, residentIdentity}) =>
+        r.nodes.get(id) === node && node.item === item && node.source === source &&
+        ((node.active === deck && deck.url === url && deck.sourceEpoch === epoch) ||
+          // A verified decoder rescue transfers this opaque identity without
+          // changing the resident or its bytes. A new admission cannot inherit
+          // it, and still has to satisfy the revision and intent fences above.
+          (residentIdentity && node.residentIdentity === residentIdentity &&
+            node.active?.residentIdentity === residentIdentity)));
+    const finish = () => {
+      if (token !== launches) return;
+      if (!published && !ownsIntent()) return;
+      const previousCurrent = session && r.plan === session.plan && r.nodes.size === session.byTrack.size &&
+        [...session.byTrack].every(([id, item]) => r.nodes.get(id)?.active && r.nodes.get(id).item === item);
+      // A compiler/admission refusal may leave the previous accepted cohort
+      // entirely intact. Restore its metadata, never a superseding user intent.
+      if (!published && previousCurrent) {
+        selection = residentSelection(session.selection, [...session.byTrack.values()], sourcePool);
+        writeUrl(session.mix);
+        renderControls();
+      } else if (!published && ownsCohort(settledCohort)) {
+        // Even if export compilation fails, describe the actual mixed field.
+        selection = residentSelection(requested, settledCohort.cohort.map(({item}) => item), sourcePool);
+        writeUrl(formatMix(selection.family, selection.loops));
+        renderControls();
+      }
+      pendingSelection = false;
+      if (published || previousCurrent) {
+        exportFailure = null;
+        waiting.splice(0).forEach(({resolve}) => resolve(exportPlan(session)));
+      } else if (attempted) {
+        // A prior export remains readable, but it cannot represent a field
+        // changed by partial admission whose new metadata did not compile.
+        exportFailure = new Error('The current composition is not ready to export. Try another edit.');
+        waiting.splice(0).forEach(({reject}) => reject(exportFailure));
+      }
+      renderPreview(); sync();
+    };
     pendingSelection = true;
     if (pendingCompilation) pendingCompilation.cancel();
     renderPreview();
-    if ((!layout.bundle && !layout.own) || !selection) { pendingSelection = false; return false; }
+    if ((!layout.bundle && !layout.own) || !selection) { finish(); return false; }
     if (!itemsReady(items)) {
-      if (usingLibrary() && items.length) {
+      if (sourcePool === builtins && builtinRecording) {
+        // Recording is preparation, not a refused edit. Keep this intent and
+        // its export waiters pending, just as for a library fetch below.
+        await builtinRecording;
+        if (!ownsIntent()) return false;
+        if (itemsReady(items)) return launch({atLoopBoundary, shareMix});
+      } else if (usingLibrary() && items.length) {
         const ok = await loadClips(items);
         if (token !== launches) return false;
-        if (ok) return launch({atLoopBoundary});
+        // A local import can change pools while this library fetch is pending.
+        // Its completed batch owns the next launch, never the partial pool.
+        if (pool() !== sourcePool) { finish(); return false; }
+        if (ok) return launch({atLoopBoundary, shareMix});
         repairSelection();
       }
-      if (token === launches) pendingSelection = false;
+      finish();
       return false;
     }
+    attempted = true;
     try {
-      const plan = await compile(selection, items, sound.unlocked);
-      if (token !== launches) return false;
-      session = {plan, sound: sound.unlocked, token, clock: null,
-        bySha: new Map(items.map(item => [item.sha256, item])),
-        byTrack: new Map(plan.tracks.map((track, index) => [track.id, items[index]]))};
-      waiting.splice(0).forEach(resolve => resolve(plan));
+      let admission = residentAdmission(items, r), plan;
+      while (ownsIntent()) {
+        if (!admission) return false;
+        plan = await compile(requested, admission, sound.unlocked);
+        if (!ownsIntent()) return false;
+        // An older handoff can finish while the compiler is working. Recheck
+        // ownership before submitting this intent to the serialized runtime.
+        const latest = residentAdmission(items, r);
+        if (latest && latest.every((item, index) => item === admission[index])) break;
+        admission = latest;
+      }
+      if (!ownsIntent()) return false;
+      const reordered = admission.some((item, index) => item !== items[index]);
       r.setSound({enabled: wantSound(), volume: sound.volume});
-      const completed = await r.reconcile({plan, items, playing: !hold && !paused, atLoopBoundary});
-      if (token !== launches) return false;
+      const completed = await r.reconcile({plan, items: admission, playing: !hold && !paused, atLoopBoundary});
+      if (!ownsIntent()) return false;
+      const revision = r.revision;
+      const cohort = plan.tracks.map(track => {
+        const node = r.nodes.get(track.id), deck = node?.active;
+        return {id: track.id, node, deck, item: node?.item, source: node?.source,
+          url: deck?.url, epoch: deck?.sourceEpoch, residentIdentity: node?.residentIdentity};
+      });
+      // Initial admission may have no outgoing resident to keep. Do not export
+      // a requested source which never became a real resident.
+      if (cohort.some(({node, deck, item}) => !node || !deck || !item)) return false;
+      settledCohort = {plan, revision, cohort};
+      const actualItems = cohort.map(({item}) => item);
+      const changed = actualItems.some((item, index) => item !== admission[index]);
+      const acceptedSelection = residentSelection(requested, actualItems, sourcePool);
+      const acceptedPlan = changed ? await compile(acceptedSelection, actualItems, sound.unlocked) : plan;
+      if (!ownsIntent() || !ownsCohort(settledCohort)) return false;
+      // Reconciliation can retain one outgoing clip and admit its siblings.
+      // Repair only metadata, including compiled loop spans, from that cohort.
+      r.plan = acceptedPlan;
+      acceptedPlan.tracks.forEach((track, index) => { cohort[index].node.span = track.spans?.[0] ?? null; });
+      session = {plan: acceptedPlan, selection: acceptedSelection, sound: sound.unlocked, token, clock: null,
+        bySha: new Map(actualItems.map(item => [item.sha256, item])),
+        byTrack: new Map(cohort.map(({id, item}) => [id, item]))};
+      selection = acceptedSelection;
       promoteAudioPlan(); refreshVoiceClock();
+      if (shareMix !== undefined || changed || reordered)
+        writeUrl(shareMix || changed || reordered ? formatMix(selection.family, selection.loops) : null);
+      session.mix = new URLSearchParams(root.location.search).get('mix');
+      published = true;
+      renderControls();
       if (r.ready) studio.dataset.phase = 'playing';
       if (usingLibrary()) prefetchNext();
       return completed;
@@ -1128,7 +1323,7 @@
       if (token === launches && error.name !== 'AbortError') toast(oneLine(error.message || error));
       return false;
     } finally {
-      if (token === launches) { pendingSelection = false; renderPreview(); sync(); }
+      finish();
     }
   }
   function guardAll() { const r = runtime(); if (r) for (const node of r.nodes.values()) guardMute(node.media); }
@@ -1139,7 +1334,9 @@
     if (!root.history || !history.replaceState || !selection) return;
     const params = new URLSearchParams(root.location.search);
     params.set('seed', String(selection.seed));
-    if (mix && !own.length) params.set('mix', mix); else params.delete('mix');
+    if (mix && !own.length && selection.loops.every(Number.isInteger) &&
+        new Set(selection.loops).size === selection.loops.length) params.set('mix', mix);
+    else params.delete('mix');
     history.replaceState(null, '', `${root.location.pathname}?${params}`);
   }
   function freshSeed() {
@@ -1176,14 +1373,12 @@
       rolled = {...rolled, family, loops: moreLoops([], count, family)};
     }
     selection = rolled;
-    writeUrl(manualPopulation ? formatMix(selection.family, selection.loops) : null);
     renderControls();
-    launch();
+    launch({shareMix: manualPopulation});
   }
   function edited() {
-    writeUrl(formatMix(selection.family, selection.loops));
     renderControls();
-    launch();
+    launch({shareMix: true});
   }
 
   function setCount(target) {
@@ -1206,7 +1401,7 @@
     if (count === selection.loops.length) return;
     selection = {...selection, loops: count > selection.loops.length ?
       selection.loops.concat(moreLoops(selection.loops, count - selection.loops.length, selection.family)) :
-      selection.loops.slice(0, count)};
+      selection.loops.slice(0, count), retained: new Map([...(selection.retained || [])].filter(([slot]) => slot < count))};
     edited();
   }
 
@@ -1217,7 +1412,8 @@
     const count = nearestCount(counts, selection.loops.length);
     if (count !== selection.loops.length) toast(`${familyLabel(family, layout.own && layout.own.name)}: ${count} panels.`);
     selection = {...selection, family, loops: count <= selection.loops.length ? selection.loops.slice(0, count) :
-      selection.loops.concat(moreLoops(selection.loops, count - selection.loops.length, family))};
+      selection.loops.concat(moreLoops(selection.loops, count - selection.loops.length, family)),
+      retained: new Map([...(selection.retained || [])].filter(([slot]) => slot < count))};
     edited();
   }
 
@@ -1226,10 +1422,8 @@
     if (!selection || index < 0 || index >= selection.loops.length) return;
     const others = selection.loops.filter((_, at) => at !== index);
     const [fresh] = moreLoops(others, 1, selection.family, [selection.loops[index]]);
-    const loops = selection.loops.slice();
-    if (fresh !== undefined) loops[index] = fresh;
-    else { toast('Every available clip is already on screen.'); return; }
-    selection = {...selection, loops};
+    if (fresh === undefined) { toast('Every available clip is already on screen.'); return; }
+    selection = replaceSelectionItem(selection, index, fresh);
     edited();
   }
 
@@ -1370,7 +1564,6 @@
       }
     }
     recordMode = 'recorded';
-    if (!own.length) launch();
   }
 
   // ---- The visitor's own files ----------------------------------------------------
@@ -1403,9 +1596,10 @@
     }));
   }
 
-  /* The playability and duration checks every loop passes, the visitor's files and library clips
-   * alike: {refusal} or {sniff, type, facts, quantized}. */
-  async function inspect(file, buffer, name, declared, probe) {
+  /* Container, codec and duration checks for both sources. Personal files decode
+   * their metadata here; byte-checked library assets supply validated manifest
+   * facts and wait for their real standby admission to allocate a decoder. */
+  async function inspect(file, buffer, name, declared, probe, publishedFacts = null) {
     const sniff = sniffContainer(buffer);
     const type = blobType(name, declared, sniff);
     const described = sniff.codec ? `${type}, ${sniff.codec.label}${sniff.codec.string &&
@@ -1416,7 +1610,7 @@
     const {decisive, queries} = playbackQueries(type, sniff);
     const answers = queries.map(query => probe.canPlayType(query));
     if (decisive ? answers[0] === '' : answers.every(answer => answer === '')) return {refusal: cannot};
-    const facts = await metadata(file, type);
+    const facts = publishedFacts || await metadata(file, type);
     if (!facts) return {refusal: cannot};
     let quantized = null;
     try { quantized = quantizeDuration(facts.duration, FPS); } catch (_) { /* shorter than one frame */ }
@@ -1567,9 +1761,10 @@
     for (const [id, job] of library.inflight) if (!wanted.has(id)) job.controller.abort();
   }
 
-  /* Fetch one clip, then check it exactly as a chosen file: its size and SHA-256 must match the
-   * manifest (the id is the digest's first 12 hex digits), then the codec, a decoded frame and a
-   * duration of whole frames. Resolves true when the clip is ready, false when it is not. */
+  /* Prefetch verifies the published asset's bytes, SHA-256 prefix and browser
+   * codec support, using its already validated manifest dimensions and duration.
+   * Actual decoding is checked by the persistent standby's admission gates, so
+   * caching a spare clip does not allocate another temporary video decoder. */
   let activeFetches = 0;
   const fetchQueue = [];
   function boundedFetch(task) {
@@ -1605,7 +1800,8 @@
     if (!sha256.startsWith(asset.id)) throw new Error('digest differs from the manifest');
     const file = new Blob([buffer], {type: 'video/mp4'});
     if (!library.probe) library.probe = document.createElement('video');
-    const checked = await inspect(file, buffer, `${item.name}.mp4`, 'video/mp4', library.probe);
+    const checked = await inspect(file, buffer, `${item.name}.mp4`, 'video/mp4', library.probe,
+      {width: asset.width, height: asset.height, duration: asset.duration_seconds});
     if (checked.refusal) throw new Error('not playable');
     if (controller.signal.aborted) return false;
     Object.assign(item, {file, type: checked.type, suffix: 'mp4', size: buffer.byteLength, sha256,
@@ -1648,10 +1844,13 @@
     if (!bad.length) { launch({fade: false}); return; }
     const counts = familyCounts()[selection.family].filter(count => count <= available());
     if (!counts.length || available() < 1) { fallbackToGenerated(); return; }
-    let loops = selection.loops.filter(index => !library.broken.has(index));
+    let kept = selection.loops.map((index, slot) => ({index, retained: selection.retained?.get(slot)}))
+      .filter(({index}) => !library.broken.has(index));
     const count = counts.includes(selection.loops.length) ? selection.loops.length : nearestCount(counts, selection.loops.length);
-    if (loops.length > count) loops = loops.slice(0, count);
-    selection = {...selection, loops: loops.concat(moreLoops(loops, count - loops.length, selection.family))};
+    if (kept.length > count) kept = kept.slice(0, count);
+    const loops = kept.map(({index}) => index);
+    selection = {...selection, loops: loops.concat(moreLoops(loops, count - loops.length, selection.family)),
+      retained: new Map(kept.flatMap(({retained}, slot) => retained ? [[slot, retained]] : []))};
     edited();
   }
 
@@ -1666,7 +1865,8 @@
     renderControls();
     renderPreview();
     sync();
-    recordBuiltins();
+    builtinRecording = recordBuiltins();
+    launch();
   }
 
   /* After a roll plays, the next shuffle's seed is chosen and its clips fetched while the page is
@@ -1715,12 +1915,15 @@
 
   function ecologyTick(time, dt) {
     if (!live.ready || !selection) return;
+    const published = usingLibrary(), automaticSources = published || own.length > 0;
     residents.length = 0; currentLogicalIds.clear();
     for (const node of live.nodes.values()) {
       if (!node.item || !node.media) continue;
       let model = residentModels.get(node);
       if (!model) { model = {}; residentModels.set(node, model); }
-      const logicalId = node.item.clip?.id || node.item.sha256;
+      // Equal uploaded bytes may reuse a library resident and its metadata.
+      // Personal cooldowns still follow the admitted content digest.
+      const logicalId = published ? node.item.clip?.id || node.item.sha256 : node.item.sha256;
       currentLogicalIds.add(logicalId); model.logicalId = logicalId;
       model.id = node.id; model.index = node.ordinal - 1; model.clipKey = node.item.sha256;
       model.duration = node.media.duration || node.item.duration || node.item.quantized.seconds;
@@ -1736,18 +1939,27 @@
     }
     for (const id of previousLogicalIds) if (!currentLogicalIds.has(id)) succession.depart(id, time);
     const spareIds = previousLogicalIds; previousLogicalIds = currentLogicalIds; currentLogicalIds = spareIds;
-    const eligible = usingLibrary() && library.items.some(item => !selection.loops.includes(item.index) &&
-      !library.broken.has(item.index) && succession.eligible(item.clip.id, time));
+    const eligible = automaticSources && pool().some((item, index) => !selection.loops.includes(index) &&
+      (!published || !library.broken.has(index)) && succession.eligible(item.clip?.id || item.sha256, time));
     const out = ecosystem.step(time, dt, residents, {
-      enabled: evolving && !hold && !reduced && usingLibrary(), manualCount: manualPopulation,
-      effects: filtersEnabled,
-      canReplace: eligible && !ecologicalRequest && !pendingSelection,
-      canRest: !ecologicalRequest,
+      enabled: evolving && !hold && !reduced && automaticSources, manualCount: manualPopulation,
+      effects: filtersEnabled, effectSettings,
+      // Admission grows the local pool before its final selection is ready.
+      canReplace: eligible && !ecologicalRequest && !pendingSelection && busy === 0,
+      canRest: !ecologicalRequest && busy === 0,
     });
+    let leadingProminence = 0;
+    for (let i = 0; i < residents.length; i++) {
+      if (residents[i].hasAudio && !residents[i].resting)
+        leadingProminence = Math.max(leadingProminence, out.prominence[i]);
+    }
     for (let i = 0; i < residents.length; i++) {
       const node = live.nodes.get(residents[i].id);
+      // Solo/tied leaders stay open; quieter rivals yield spectral space.
+      const spectralPriority = !residents[i].hasAudio || residents[i].resting ? 0
+        : leadingProminence > 0 ? out.prominence[i] / leadingProminence : 1;
       live.setTargetGain(node.id, out.gains[i]);
-      live.setPresence(node.id, out.presence[i]);
+      live.setPresence(node.id, out.presence[i], spectralPriority);
     }
     if (selection.family === 'strips' && !reduced && time - lastSpaceTime >= .05 &&
         residents.length === selection.loops.length && !live.draining) {
@@ -1760,16 +1972,18 @@
       if (request.type === 'replace') {
         const index = request.index, previous = selection;
         const others = previous.loops.filter((_, at) => at !== index);
-        const cooling = library.items.filter(item => !succession.eligible(item.clip.id, time)).map(item => item.index);
+        const cooling = [];
+        pool().forEach((item, index) => {
+          if (!succession.eligible(item.clip?.id || item.sha256, time)) cooling.push(index);
+        });
         const [fresh] = moreLoops(others, 1, previous.family, [previous.loops[index], ...cooling], succession.random);
         if (fresh === undefined) {
           ecosystem.settle(request, false, time); ecologicalRequest = null; return;
         }
-        const next = {...previous, loops: previous.loops.map((value, at) => at === index ? fresh : value)};
+        const next = replaceSelectionItem(previous, index, fresh);
         selection = next; renderControls();
         launch({atLoopBoundary: true}).then(ok => {
           ecosystem.settle(request, ok, live.clock.simTime);
-          if (!ok && selection === next) { selection = previous; renderControls(); }
         }).finally(() => { if (ecologicalRequest === request) ecologicalRequest = null; });
       } else {
         live.setResting(request.id, request.type === 'rest');
@@ -1781,6 +1995,7 @@
   function renderActivity() {
     ui.effects.setAttribute('aria-pressed', String(filtersEnabled && filtersAvailable()));
     ui.effects.disabled = !filtersAvailable();
+    ui.filterTune.disabled = !filtersAvailable();
     ui.effects.title = reduced ? 'Filters paused for reduced motion' : !filtersAvailable() ?
       'Filters unavailable for this preview' : filtersEnabled ? 'Filters on' : 'Filters off';
     ui.activity.setAttribute('aria-label', evolving ? 'Hold changes' : 'Let it evolve');
@@ -1801,14 +2016,48 @@
     history.replaceState(null, '', `${root.location.pathname}?${params}`);
     renderActivity();
   });
+  const filterControls = [
+    ['attackSeconds', 'fx-attack', 1, ' s'], ['tail', 'fx-tail', 100, '%'],
+    ['gainDepth', 'fx-gain', 100, '%'], ['lowpassDepth', 'fx-lowpass', 100, '%'],
+    ['brightnessDepth', 'fx-brightness', 100, '%'], ['saturationDepth', 'fx-saturation', 100, '%'],
+    ['blurPx', 'fx-blur', 1, ' px'],
+  ];
+  function renderFilterSettings() {
+    for (const [key, id, scale, unit] of filterControls) {
+      const value = Number((effectSettings[key] * scale).toFixed(2));
+      $(`#${id}`).value = String(value); $(`#${id}-value`).textContent = `${value}${unit}`;
+    }
+    $('#fx-curve').value = effectSettings.curve;
+  }
+  function applyFilterSettings(patch) {
+    effectSettings = live.setEffectSettings(patch);
+    const query = effectSettingsSearch(root.location.search, effectSettings);
+    history.replaceState(null, '', `${root.location.pathname}${query ? `?${query}` : ''}`);
+    renderFilterSettings();
+  }
+  for (const [key, id, scale] of filterControls) {
+    $(`#${id}`).addEventListener('input', event => applyFilterSettings({[key]: Number(event.target.value) / scale}));
+  }
+  $('#fx-curve').addEventListener('change', event => applyFilterSettings({curve: event.target.value}));
+  $('#fx-reset').addEventListener('click', () => applyFilterSettings(root.SimvltaneaPresence.DEFAULT_SETTINGS));
+  $('#fx-close').addEventListener('click', () => ui.filterDialog.close());
+  ui.filterTune.addEventListener('click', () => {
+    if (!filtersAvailable()) return;
+    setAbout(false); renderFilterSettings(); ui.filterDialog.showModal();
+    ui.filterTune.setAttribute('aria-expanded', 'true'); wake();
+  });
+  ui.filterDialog.addEventListener('close', () => {
+    ui.filterTune.setAttribute('aria-expanded', 'false'); ui.filterTune.focus(); wake();
+  });
   ui.loopMode.addEventListener('click', () => {
     loopMode = loopMode === 'boomerang' ? 'forward' : 'boomerang';
     for (const job of library.inflight.values()) job.controller.abort();
     library.inflight.clear(); library.cache.clear(); library.broken.clear(); library.prefetch = []; library.next = null;
     library.items = library.clips.map((clip, index) => ({name: clip.id, index, clip, file: null, sha256: null}));
+    if (selection) selection = {...selection, retained: new Map()};
     const params = new URLSearchParams(root.location.search); params.set('loop', loopMode);
     history.replaceState(null, '', `${root.location.pathname}?${params}`);
-    renderActivity(); launch();
+    renderActivity(); launch({shareMix: true});
   });
 
   // ---- Controls -------------------------------------------------------------------
@@ -1888,7 +2137,7 @@
   // Every first gesture turns the sound on; the page itself never needs one to play.
   const firstGesture = event => {
     if (sound.unlocked && (!live.audio.context || live.audio.context.state === 'running')) return;
-    if (event.target.closest && event.target.closest('#speaker, #about, #help')) return;
+    if (event.target.closest && event.target.closest('#speaker, #about, #help, #filter-settings, #filter-tune')) return;
     if (event.type === 'keydown' && (event.ctrlKey || event.metaKey || event.altKey || event.key === 'Tab' ||
       event.key === 'Shift' || event.key === 'Escape')) return;
     if (event.type === 'keydown' && (event.key === 'm' || event.key === 'M')) return;  // M itself turns sound on
@@ -1918,6 +2167,7 @@
 
   const INTERACTIVE = 'button,input,select,textarea,a[href],[role="radio"],[role="slider"]';
   document.addEventListener('keydown', event => {
+    if (ui.filterDialog.open) return;
     if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
     const inControl = event.target.closest && event.target.closest(INTERACTIVE);
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
@@ -2005,7 +2255,8 @@
     renderControls();
     renderPreview();
     sync();
-    if (library.active) launch(); else recordBuiltins();
+    if (library.active) launch();
+    else { builtinRecording = recordBuiltins(); launch(); }
   });
 
   renderSound();
@@ -2025,7 +2276,7 @@
         next: library.next, requested: library.requested} : null,
       builtinsReady: builtins.filter(item => item.sha256).length,
       selection: selectedItems().map(item => item.name), style: selection ? selection.style : null,
-      sound: soundState(), volume: sound.volume, evolving, filters: filtersEnabled && filtersAvailable(), loopMode,
+      sound: soundState(), volume: sound.volume, evolving, filters: filtersEnabled && filtersAvailable(), effectSettings, loopMode,
       ecosystem: ecosystem.snapshot(), refusals: lastRefusals.slice(), toast: ui.toast.textContent,
       toastShown: ui.toast.classList.contains('on'), phase: studio.dataset.phase || 'preview',
       layoutFile: layout.own ? {name: layout.own.name, kind: layout.own.info.kind, layout: layout.own.info.name} : null,

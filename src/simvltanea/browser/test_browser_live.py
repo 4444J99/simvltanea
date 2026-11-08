@@ -418,6 +418,60 @@ class PersistentSessionTests(unittest.TestCase):
         self.assertGreaterEqual(age, .4)
         self.assertLess(age, .65, 'priming time leaked into the new resident lifetime')
 
+    def test_primed_standby_parks_during_seam_wait_without_touching_residents(self):
+        page = self.open()
+        page.evaluate('''() => {
+          const node=live.nodes.get('loop-1');window.outgoing=node.active;
+          window.sibling=live.nodes.get('loop-2').active;
+          window.incoming=node.decks.find(deck=>deck!==outgoing);
+          window.residentCalls=[];window.incomingSeeks=[];
+          for(const deck of [outgoing,sibling]) for(const name of ['play','pause','load']) {
+            const native=deck.media[name].bind(deck.media);
+            deck.media[name]=(...args)=>{residentCalls.push(name);return native(...args)};
+          }
+          const current=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'currentTime');
+          Object.defineProperty(incoming.media,'currentTime',{
+            get(){return current.get.call(this)},
+            set(value){incomingSeeks.push(value);current.set.call(this,value)}});
+          // Hold a future seam long enough to inspect the already-primed deck.
+          // The real freshness and promotion path resumes after this gate.
+          live.waitForSeam=()=>new Promise(resolve=>{window.releaseSeam=resolve});
+          window.change=live.reconcile({plan:planFor([2,1]),items:[items[2],items[1]],
+            playing:true,atLoopBoundary:true});
+        }''')
+        page.wait_for_function('Boolean(window.releaseSeam)')
+        before = page.evaluate('''() => ({paused:incoming.media.paused,
+          outgoing:outgoing.callbacks,sibling:sibling.callbacks,current:incoming.media.currentTime,
+          epoch:incoming.sourceEpoch,url:incoming.url,weight:incoming.weight,
+          permits:live.activeStandbys})''')
+        self.assertTrue(before['paused'], 'a hidden READY standby kept decoding throughout the seam wait')
+        self.assertEqual(before['weight'], 0)
+        self.assertEqual(before['permits'], 1)
+        page.wait_for_timeout(400)
+        during = page.evaluate('''() => ({paused:incoming.media.paused,
+          outgoing:outgoing.callbacks,sibling:sibling.callbacks,current:incoming.media.currentTime,
+          epoch:incoming.sourceEpoch,url:incoming.url,calls:residentCalls,seeks:incomingSeeks})''')
+        self.assertTrue(during['paused'])
+        self.assertGreater(during['outgoing'], before['outgoing'])
+        self.assertGreater(during['sibling'], before['sibling'])
+        self.assertEqual(during['current'], before['current'])
+        self.assertEqual(during['epoch'], before['epoch'])
+        self.assertEqual(during['url'], before['url'])
+        self.assertEqual(during['calls'], [])
+        self.assertEqual(during['seeks'], [])
+        page.evaluate('releaseSeam()')
+        self.assertTrue(page.evaluate('change'))
+        result = page.evaluate('''() => ({active:live.nodes.get('loop-1').active===incoming,
+          paused:incoming.media.paused,frames:incoming.callbacks,
+          sibling:live.nodes.get('loop-2').active===sibling,permits:live.activeStandbys,
+          seeks:incomingSeeks})''')
+        self.assertTrue(result['active'])
+        self.assertFalse(result['paused'])
+        self.assertGreaterEqual(result['frames'], 4)
+        self.assertTrue(result['sibling'])
+        self.assertEqual(result['permits'], 0)
+        self.assertEqual(result['seeks'], [])
+
     def test_frozen_outgoing_does_not_hold_the_preparation_permit_forever(self):
         page = self.open()
         page.evaluate('''() => {
@@ -458,8 +512,10 @@ class PersistentSessionTests(unittest.TestCase):
             }''')
             page.wait_for_function("live.nodes.get('loop-1').phase==='READY'")
             if action == 'pause':
+                page.evaluate("window.pausedResident=live.nodes.get('loop-1').media")
                 page.evaluate('live.pause()')
-                self.assertTrue(page.evaluate('change'))
+                self.assertFalse(page.evaluate('change'))
+                self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===pausedResident"))
                 self.assertTrue(page.evaluate("live.nodes.get('loop-1').media.paused"))
                 page.evaluate('setClips([0,1])')
             else:
@@ -467,6 +523,77 @@ class PersistentSessionTests(unittest.TestCase):
                 self.assertFalse(page.evaluate('change'))
             self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
         self.assertEqual(page.evaluate("live.events.filter(event=>event.type==='seam-fallback').length"), 0)
+
+    def test_stale_primed_successor_is_deferred_before_any_reveal(self):
+        page = self.open()
+        page.evaluate('''() => {
+          live.progressTimeoutMs=180;
+          const n=live.nodes.get('loop-1');window.previous={media:n.media,item:n.item,birth:n.birthTime};
+          const next=n.decks.find(d=>d!==n.active);window.incoming=next.media;window.revealed=false;
+          const prime=live.prime.bind(live);
+          live.prime=async(...args)=>{await prime(...args);args[0].media.pause();
+            args[0].media.play=()=>Promise.resolve();};
+          new MutationObserver(()=>{if(Number(incoming.style.opacity)>0)revealed=true;})
+            .observe(incoming,{attributes:true,attributeFilter:['style']});
+        }''')
+        self.assertFalse(page.evaluate('setClips([2,1])'))
+        result = page.evaluate('''() => {const n=live.nodes.get('loop-1');return {
+          revealed,identity:n.media===previous.media&&n.item===previous.item&&n.birthTime===previous.birth,
+          moving:!n.media.paused,empty:!incoming.hasAttribute('src'),permits:live.activeStandbys,
+          failures:live.lastFailure,deferred:live.events.filter(e=>e.type==='handoff-deferred').length};}''')
+        self.assertEqual(result, dict(revealed=False, identity=True, moving=True, empty=True,
+                                      permits=0, failures=None, deferred=1))
+
+    def test_fade_and_promotion_share_one_incoming_progress_deadline(self):
+        page = self.open()
+        page.evaluate('''() => {
+          live.progressTimeoutMs=500;live.crossfadeSec=.45;
+          const n=live.nodes.get('loop-1');window.previous={media:n.media,item:n.item,birth:n.birthTime};
+          const next=n.decks.find(d=>d!==n.active);window.incoming=next.media;
+          const play=incoming.play.bind(incoming);
+          incoming.play=()=>incoming.dataset.deck==='active'?Promise.resolve():play();
+          const stop=live.clock.subscribe(time=>{if(!live.fade||time-live.fade.began<.08)return;
+            stop();incoming.pause();window.frozenAt=performance.now();});
+          window.change=setClips([2,1]).then(ok=>{window.finishedAt=performance.now();return ok;});
+        }''')
+        self.assertFalse(page.evaluate('change'))
+        result = page.evaluate('''() => {const n=live.nodes.get('loop-1');return {
+          held:finishedAt-frozenAt,identity:n.media===previous.media&&n.item===previous.item&&n.birthTime===previous.birth,
+          moving:!n.media.paused,empty:!incoming.hasAttribute('src'),permits:live.activeStandbys,
+          waiters:!!(live.fade||live.promotion||live.handoff),failures:live.lastFailure,
+          deferred:live.events.filter(e=>e.type==='handoff-deferred').length};}''')
+        self.assertLess(result.pop('held'), 700, 'promotion reset the incoming progress deadline after the fade')
+        self.assertEqual(result, dict(identity=True, moving=True, empty=True, permits=0,
+                                      waiters=False, failures=None, deferred=1))
+
+    def test_edit_started_while_paused_admits_the_selected_paused_still(self):
+        page = self.open()
+        page.evaluate('live.pause()')
+        self.assertTrue(page.evaluate('live.reconcile({plan:planFor([2,1]),items:[items[2],items[1]],playing:false})'))
+        self.assertTrue(page.evaluate('''() => {const n=live.nodes.get('loop-1');return n.item===items[2]&&
+          n.active.item===items[2]&&n.media===n.active.media&&n.media.paused&&!live.running&&
+          !live.playingIntent&&live.activeStandbys===0;}'''))
+
+    def test_edit_started_paused_but_resumed_during_prime_requires_fresh_frames(self):
+        page = self.open()
+        page.evaluate('''() => {
+          live.pause();live.progressTimeoutMs=180;
+          window.previous=live.nodes.get('loop-1').media;window.revealed=false;
+          const prime=live.prime.bind(live);
+          live.prime=async(...args)=>{await prime(...args);window.incoming=args[0].media;
+            incoming.pause();incoming.play=()=>Promise.resolve();
+            new MutationObserver(()=>{if(Number(incoming.style.opacity)>0)revealed=true;})
+              .observe(incoming,{attributes:true,attributeFilter:['style']});
+            await new Promise(resolve=>{window.releasePrime=resolve});};
+          window.change=live.reconcile({plan:planFor([2,1]),items:[items[2],items[1]],playing:false});
+        }''')
+        page.wait_for_function('Boolean(window.releasePrime)')
+        page.evaluate('live.play();releasePrime()')
+        self.assertFalse(page.evaluate('change'))
+        self.assertFalse(page.evaluate('revealed'))
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===previous && !previous.paused && live.running"))
+        self.assertEqual(page.evaluate('live.activeStandbys'), 0)
+        self.assertIsNone(page.evaluate('live.lastFailure'))
 
     def test_territory_changes_framing_without_restarting_residents(self):
         page = self.open()
@@ -501,7 +628,7 @@ class PersistentSessionTests(unittest.TestCase):
         }''')
         page.evaluate('setClips([2,1])')
         self.assertFalse(page.evaluate("live.nodes.get('loop-1').media.paused"), 'primed frame never resumed after promotion')
-        self.assertEqual(page.evaluate('promotionCalls'), ['standby', 'active'])
+        self.assertEqual(page.evaluate('promotionCalls'), ['standby', 'standby', 'active'])
         self.assertEqual(page.evaluate('siblingCalls'), [])
         page.evaluate("window.presented=live.nodes.get('loop-1').callbacks")
         page.wait_for_function("live.nodes.get('loop-1').callbacks>presented+5")
@@ -681,6 +808,92 @@ class PersistentSessionTests(unittest.TestCase):
         self.assertFalse(page.evaluate('change'))
         self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===original && !original.paused"))
         self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
+    def test_immediate_resume_during_frame_verification_keeps_promoted_deck_moving(self):
+        page = self.open()
+        page.evaluate('''() => {
+          const node=live.nodes.get('loop-1'),next=node.decks.find(d=>d!==node.active).media;
+          const native=next.play.bind(next);let held=false;
+          next.play=()=>{if(next.dataset.deck==='active' && !held) {
+            held=true;next.pause();window.verifying=true;return Promise.resolve();}return native();};
+          window.change=setClips([2,1]);
+        }''')
+        page.wait_for_function('window.verifying && Boolean(live.promotion)')
+        page.evaluate('''async () => {live.pause();const resumed=live.play();await Promise.all([resumed,change]);}''')
+        self.assertFalse(page.evaluate("live.nodes.get('loop-1').media.paused"),
+                         'immediate resume omitted the provisional incoming deck')
+        before = page.evaluate("live.nodes.get('loop-1').callbacks")
+        page.wait_for_function("n=>live.nodes.get('loop-1').callbacks>n+2", arg=before, timeout=2000)
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
+    def test_finished_fade_keeps_incoming_audible_until_promotion_continuation(self):
+        page = self.open()
+        page.evaluate("document.addEventListener('click',()=>{window.unlocked=live.unlock();live.setSound({enabled:true,volume:.5})},{once:true})")
+        page.mouse.click(10, 10)
+        page.evaluate('unlocked')
+        page.evaluate("() => {live.crossfadeSec=.8;window.change=setClips([2,1]);}")
+        page.wait_for_function('Boolean(live.fade)')
+        edges = page.evaluate('''() => {
+          live.clock.pause();const fade=live.fade,media=fade.incoming.media;
+          const descriptor=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'muted'),edges=[];
+          Object.defineProperty(media,'muted',{get(){return descriptor.get.call(this)},set(value){
+            if(value!==descriptor.get.call(this))edges.push(value);descriptor.set.call(this,value);}});
+          // A paused clock needs a tick strictly past the endpoint: subtracting
+          // the fractional start can round an exact sum below full progress.
+          live.tick(fade.began+fade.duration+1/60);
+          // The ecology subscriber runs before replace() resumes its awaited fade.
+          live.setTargetGain(fade.node.id,.4);
+          return edges;
+        }''')
+        self.assertNotIn(True, edges, 'fade completion temporarily revoked incoming audio ownership')
+        self.assertFalse(page.evaluate('Boolean(live.fade)'), 'the frozen test clock never completed its fade')
+        page.evaluate('change')
+
+    def test_rejected_immediate_resume_rolls_back_unverified_successor(self):
+        page = self.open()
+        page.evaluate('''() => {
+          const node=live.nodes.get('loop-1');window.outgoing=node.media;
+          const next=node.decks.find(d=>d!==node.active).media,native=next.play.bind(next);let held=false;
+          next.play=()=>{if(next.dataset.deck!=='active')return native();
+            if(!held){held=true;next.pause();window.verifying=true;return Promise.resolve();}
+            return Promise.reject(new Error('resume refused'));};
+          window.change=setClips([2,1]);
+        }''')
+        page.wait_for_function('window.verifying && Boolean(live.promotion)')
+        page.evaluate('''async () => {live.pause();await live.play();}''')
+        self.assertFalse(page.evaluate('change'), 'resuming treated a pause-settled waiter as frame proof')
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===outgoing && !outgoing.paused"))
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
+    def test_deck_audio_lifecycle_announces_entry_before_commit_and_cleans_failed_entry(self):
+        page = self.open()
+        page.evaluate("document.addEventListener('click',()=>{window.unlocked=live.unlock();live.setSound({enabled:true,volume:.5})},{once:true})")
+        page.mouse.click(10, 10)
+        page.evaluate('unlocked')
+        page.evaluate('''() => {
+          window.deckEvents=[];
+          live.options.onDeckAudio=(deck,context)=>deckEvents.push({type:'entry',name:deck.item.name,
+            entered:deck.enteredAt!==null,bound:Boolean(deck.binding),sameContext:context===live.audio.context,
+            committed:[...live.nodes.values()].some(n=>n.active===deck)});
+          live.options.onDeckUnload=deck=>deckEvents.push({type:'unload',name:deck.item?.name});
+          live.crossfadeSec=.7;window.change=setClips([2,1]);
+        }''')
+        page.wait_for_function('Boolean(live.fade)')
+        entries = page.evaluate("deckEvents.filter(e=>e.type==='entry' && e.name==='clip-2')")
+        self.assertTrue(entries, 'generated audio has no per-deck entry hook during the visible fade')
+        self.assertTrue(all(e['entered'] and e['bound'] and e['sameContext'] for e in entries))
+        self.assertFalse(entries[0]['committed'])
+        page.evaluate('change')
+        self.assertIn(dict(type='unload', name='clip-0'), page.evaluate('deckEvents'))
+        page.evaluate('''() => {
+          deckEvents.length=0;const n=live.nodes.get('loop-1'),next=n.decks.find(d=>d!==n.active).media;
+          const native=next.play.bind(next);next.play=()=>next.dataset.deck==='active'
+            ? Promise.reject(new Error('promotion refused')) : native();
+        }''')
+        self.assertFalse(page.evaluate('setClips([3,1])'))
+        unloaded = page.evaluate("deckEvents.filter(e=>e.type==='unload').map(e=>e.name)")
+        self.assertEqual(unloaded, ['clip-3'])
+        self.assertEqual(page.evaluate("live.nodes.get('loop-1').item.name"), 'clip-2')
 
 
 if __name__ == '__main__':

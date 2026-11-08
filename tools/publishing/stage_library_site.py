@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Assemble a deployable studio site with the public demo library beside it.
 
-``stage_studio`` writes the five studio files; ``tools.media.build_public_demo``
+``stage_studio`` writes the declared Studio and Effects Lab files; ``tools.media.build_public_demo``
 writes ``manifest.json`` and ``clips/<id>.mp4``. This deploy helper copies both
 into one fresh directory, so the studio finds its library on the same origin::
 
     <site>/index.html  runtime.js  compiler.js  studio.js  layouts.json
+    <site>/lab.html  lab_model.js  lab_engine.js  lab_ui.js  lab_audio.js
+    <site>/lab_compiler.js  lab_layouts.js
     <site>/library/manifest.json
     <site>/library/clips/<id>.mp4
 
@@ -13,7 +15,7 @@ into one fresh directory, so the studio finds its library on the same origin::
         --library /path/to/public-demo --site var/site/deploy
 
 Everything is checked before a byte is written, and a refusal writes nothing:
-the studio output must hold exactly the five studio files; the library must hold
+the studio output must hold exactly the declared studio files; the library must hold
 only ``manifest.json`` and ``clips/*.mp4``, with a valid
 ``simvltanea.public-demo/1`` manifest; every clip must be listed, every listed
 forward/variant clip present, and each file's size and SHA-256 prefix must match
@@ -31,7 +33,7 @@ import shutil
 import sys
 from pathlib import Path
 
-STUDIO_FILES = ('index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json')
+from simvltanea.browser import STUDIO_FILES
 SCHEMA = 'simvltanea.public-demo/1'
 MANIFEST = 'manifest.json'
 CLIPS = 'clips'

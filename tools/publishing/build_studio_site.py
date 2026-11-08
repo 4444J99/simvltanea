@@ -20,7 +20,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from tools.paths import SITE_DIR
-from simvltanea.browser import stage_studio
+from simvltanea.browser import STUDIO_FILES, stage_studio
 from tools.publishing.stage_library_site import (LibrarySiteError, check_library, manifest_assets,
                                                  stage_library_site, validate_manifest)
 
@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     except (LibrarySiteError, OSError, URLError, ValueError) as error:
         print(f'refused: {error}', file=sys.stderr)
         return 2
-    print(f'site built: 5 studio files, {count} library clips')
+    print(f'site built: {len(STUDIO_FILES)} studio files, {count} library clips')
     return 0
 
 

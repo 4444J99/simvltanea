@@ -420,6 +420,16 @@ function applySlice(node) {
   }
 
   const cancelled = () => new DOMException('Selection superseded', 'AbortError');
+  class DeferredHandoffError extends Error {
+    constructor(reason, detail = {}) {
+      super(reason); this.name = 'DeferredHandoffError'; this.detail = detail;
+    }
+  }
+  const nativePlayFailure = error => {
+    if (error?.name !== 'AbortError') return error;
+    const failure = new Error(`Native playback rejected (AbortError): ${String(error.message || error)}`);
+    failure.cause = error; return failure;
+  };
 
   // Conservative interaction profile, not a claim about hardware decoder
   // capacity: touch laptops and tablets share the mobile four-foreground cap.
@@ -435,10 +445,10 @@ function applySlice(node) {
   // The permit spans priming AND the entire fade. Admission probes use this
   // same queue: background metadata loading cannot add a second standby.
   class PreparationGate {
-    constructor(changed) { this.active = 0; this.queue = []; this.changed = changed; }
-    acquire(signal) {
+    constructor(changed) { this.active = 0; this.queue = []; this.changed = changed; this.owner = null; }
+    acquire(signal, {urgent = false, onYield = null} = {}) {
       return new Promise((resolve, reject) => {
-        const job = {signal, resolve, reject, abort: null};
+        const job = {signal, resolve, reject, abort: null, urgent, onYield, yielding: false};
         job.abort = () => {
           const index = this.queue.indexOf(job);
           if (index >= 0) this.queue.splice(index, 1);
@@ -446,7 +456,14 @@ function applySlice(node) {
         };
         if (signal?.aborted) { reject(cancelled()); return; }
         signal?.addEventListener('abort', job.abort, {once: true});
-        this.queue.push(job); this.drain();
+        const ordinary = urgent ? this.queue.findIndex(queued => !queued.urgent) : -1;
+        if (ordinary < 0) this.queue.push(job); else this.queue.splice(ordinary, 0, job);
+        this.drain();
+        // Yield is cooperative: only an explicitly cancellable hidden owner
+        // may opt in. Its cleanup still owns the permit until release().
+        const owner = this.owner;
+        if (urgent && owner && !owner.urgent && !owner.yielding && owner.onYield)
+          owner.yielding = Boolean(owner.onYield());
       });
     }
     drain() {
@@ -454,11 +471,11 @@ function applySlice(node) {
       const job = this.queue.shift();
       job.signal?.removeEventListener('abort', job.abort);
       if (job.signal?.aborted) { job.reject(cancelled()); this.drain(); return; }
-      this.active = 1; this.changed(1);
+      this.active = 1; this.owner = job; this.changed(1);
       let released = false;
       job.resolve(() => {
         if (released) return;
-        released = true; this.active = 0; this.changed(0); this.drain();
+        released = true; this.active = 0; this.owner = null; this.changed(0); this.drain();
       });
     }
   }
@@ -469,6 +486,7 @@ function applySlice(node) {
       Object.defineProperty(this, 'maxForeground', {value: foregroundLimit(root), enumerable: true});
       this.crossfadeSec = options.crossfadeSec ?? 1.2;
       this.effectsEnabled = Boolean(options.effects) && !options.reducedMotion;
+      this.effectSettings = root.SimvltaneaPresence?.normalizeSettings(options.effectSettings) ?? null;
       this.primeTimeoutMs = options.primeTimeoutMs ?? 10000;
       this.progressTimeoutMs = options.progressTimeoutMs ?? 2000;
       this.nodes = new Map(); this.slots = new Map(); this.sources = new Map();
@@ -477,7 +495,7 @@ function applySlice(node) {
       this.frame = 0; this.generation = 0; this.orientation = null; this.orientationOverride = null;
       this.starting = false; this.initializing = false; this.restarting = false;
       this.playingIntent = false; this.revision = 0; this.pending = null; this.draining = false;
-      this.controller = null; this.fade = null; this.seam = null; this.promotion = null;
+      this.controller = null; this.fade = null; this.seam = null; this.promotion = null; this.handoff = null;
       this.territory = null; this.bindings = new WeakMap();
       this.audio = {context: null, mode: 'none', enabled: false, blocked: null, input: null};
       this.sound = {enabled: false, volume: .7}; this.master = null;
@@ -522,6 +540,13 @@ function applySlice(node) {
       }
       return {schema: 1, supported, maxGapMs: this.proofMaxGapMs,
         suspensionCount: this.proofSuspensionCount, retiredCount: this.proofRetiredCount,
+        nativeLoopSeek: {attempted: this.loopSeekProof?.attempted ?? 0,
+          recovered: this.loopSeekProof?.recovered ?? 0, rejected: this.loopSeekProof?.rejected ?? 0,
+          interrupted: this.loopSeekProof?.interrupted ?? 0, dropped: this.loopSeekProof?.dropped ?? 0,
+          receipts: includeTrace ? (this.loopSeekProof?.receipts || []).slice() : []},
+        nativeLoopRescue: Object.fromEntries(['queued', 'started', 'committed', 'cancelled', 'deferred', 'dropped']
+          .map(key => [key, this.loopRescueProof?.[key] ?? 0]).concat([
+            ['receipts', includeTrace ? (this.loopRescueProof?.receipts || []).slice() : []]])),
         retired: includeTrace ? this.proofRetired.slice() : []};
     }
     report(error, node = null) {
@@ -535,13 +560,18 @@ function applySlice(node) {
       try { this.options.onAudioNode?.(node, this.audio.context); }
       catch (error) { this.report(error, node); }
     }
+    notifyDeckAudio(deck) {
+      if (deck.enteredAt === null || !deck.binding || !deck.item) return;
+      try { this.options.onDeckAudio?.(deck, this.audio.context); }
+      catch (error) { this.report(error); }
+    }
     status() {
       this.stage.dataset.status = this.running ? 'playing' : this.ready ? 'paused' : 'loading';
       try { this.options.onChange?.(this); } catch (error) { this.report(error); }
     }
-    async withPreparation(task, {signal} = {}) {
+    async withPreparation(task, {signal, urgent = false, onYield = null} = {}) {
       if (this.disposed) throw cancelled();
-      const release = await this.gate.acquire(signal);
+      const release = await this.gate.acquire(signal, {urgent, onYield});
       try { if (this.disposed || signal?.aborted) throw cancelled(); return await task(); }
       finally { release(); }
     }
@@ -550,7 +580,7 @@ function applySlice(node) {
       Object.assign(box.style, {position: 'absolute', overflow: 'hidden', display: 'none'});
       const node = {id, ordinal, box, decks: [], active: null, promoting: null, media: null, item: null, audio: null,
         source: null, kind: 'video', busy: false, callbacks: 0, decoded: null, stallCount: 0,
-        targetGain: null, resting: false, phase: 'IDLE', span: null};
+        targetGain: null, resting: false, phase: 'IDLE', span: null, residentIdentity: null, nativeRescue: null};
       for (let i = 0; i < 2; i++) {
         const media = document.createElement('video');
         media.dataset.loopId = id; media.dataset.deck = 'standby';
@@ -560,19 +590,29 @@ function applySlice(node) {
         Object.assign(media.style, {position: 'absolute', inset: '0', width: '100%', height: '100%',
           objectFit: 'cover', opacity: '0', pointerEvents: 'none', transition: 'none'});
         const deck = {media, url: null, item: null, binding: null, weight: 0, frameId: null, callbacks: 0, decoded: null,
-          presence: 1, presenceTarget: null, enteredAt: null};
+          presence: 1, presenceTarget: null, spectralPriority: 1, enteredAt: null, sourceEpoch: 0, loopSeek: null};
         if (this.proof) {
           deck.progress = new FrameProgress(typeof media.requestVideoFrameCallback === 'function');
           deck.proofDeck = i;
         }
-        let frameEpoch = deck.progress?.epoch;
+        let frameEpoch = deck.progress?.epoch, frameSourceEpoch = deck.sourceEpoch;
         const watch = (wall, metadata) => {
           deck.callbacks++; deck.decoded = {mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames, wall};
           // A callback registered before src changed cannot certify the new
           // source. The next registration belongs to its current epoch.
           if (deck.progress && deck.progress.epoch === frameEpoch && media.currentSrc === deck.url)
             deck.progress?.observe(wall, metadata.mediaTime);
+          if (deck.sourceEpoch === frameSourceEpoch && media.currentSrc === deck.url) {
+            const seek = deck.loopSeek;
+            // The retained outgoing deck can recover while its slot is busy.
+            // Preserve that fact independently of the active guard's eligibility.
+            if (seek?.attempt && seek.epoch === deck.sourceEpoch && seek.url === deck.url &&
+                Number.isFinite(metadata.mediaTime) && metadata.mediaTime !== seek.attempt.decoded)
+              seek.attempt.progressed = true;
+            deck.handoff?.observe(wall, metadata.mediaTime);
+          }
           frameEpoch = deck.progress?.epoch;
+          frameSourceEpoch = deck.sourceEpoch;
           if (node.active === deck) { node.callbacks++; node.decoded = deck.decoded; }
           if (!this.disposed) deck.frameId = media.requestVideoFrameCallback(watch);
         };
@@ -597,6 +637,13 @@ function applySlice(node) {
       // incompatible slot identities before aborting any current transaction.
       if (new Set([...this.nodes.keys(), ...plan.tracks.map(track => track.id)]).size > this.maxForeground) {
         return Promise.reject(new Error('Reuse the existing panels within this device\'s live panel limit'));
+      }
+      // A decoder repair belongs to one resident, not to the global selection
+      // revision. A sibling edit must not cancel it; a new target intent must.
+      for (const node of this.nodes.values()) if (node.nativeRescue) {
+        const index = plan.tracks.findIndex(track => track.id === node.id);
+        if (index < 0 || items[index].sha256 !== node.item?.sha256 || plan.sources[index].id !== node.source)
+          this.cancelNativeRescue(node, 'selection-superseded');
       }
       this.revision++;
       this.controller?.abort();
@@ -633,7 +680,10 @@ function applySlice(node) {
                     more ? Math.min(.2, this.crossfadeSec) : this.crossfadeSec, request.atLoopBoundary);
                 } catch (error) {
                   if (error.name === 'AbortError') throw error;
-                  success = false; this.report(error, node);
+                  success = false;
+                  if (error instanceof DeferredHandoffError)
+                    this.record('handoff-deferred', node.id, {reason: error.message, ...error.detail});
+                  else this.report(error, node);
                 }
               } else {
                 node.source = source.id;
@@ -720,54 +770,243 @@ function applySlice(node) {
         if (signal.aborted) abort();
       });
     }
-    playPromoted(deck, signal) {
+    watchHandoff(node, incoming, outgoing, signal) {
+      const media = incoming.media, url = incoming.url, epoch = incoming.sourceEpoch;
+      const budget = Math.max(1, Math.min(800, this.progressTimeoutMs));
+      let timer = null, playTask = null, done = false, previous = incoming.decoded?.mediaTime;
+      const began = performance.now(), playGeneration = this.generation;
+      let lastAt = began, frames = 0, pausedAt = null, played = false, fresh = false, resolveReady, rejectReady;
+      const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+      // A later fade/promotion failure also rejects its own waiter. The initial
+      // freshness promise may already have resolved by then.
+      ready.catch(() => {});
+      const owned = () => !this.disposed && this.nodes.get(node.id) === node && node.active === outgoing &&
+        incoming.url === url && incoming.sourceEpoch === epoch && incoming.handoff === state;
+      const stop = () => {
+        if (done) return; done = true; clearTimeout(timer); clearTimeout(playTask);
+        signal.removeEventListener('abort', abort); media.removeEventListener('error', decodeError);
+        media.removeEventListener('timeupdate', fallback);
+        if (incoming.handoff === state) incoming.handoff = null;
+        if (this.handoff === state) this.handoff = null;
+      };
+      const fail = error => {
+        if (done) return;
+        state.error = error; stop(); rejectReady(error);
+        if (this.fade?.incoming === incoming && this.fade.handoff === state) this.fade.finish(error);
+        if (this.promotion?.deck === incoming && this.promotion.handoff === state) this.promotion.finish(error);
+      };
+      const defer = reason => {
+        if (media.error) { fail(new Error('Incoming clip could not be decoded')); return; }
+        fail(new DeferredHandoffError(reason,
+          {url, sourceEpoch: epoch, phase: state.phase, visible: state.visible,
+            noProgressMs: performance.now() - lastAt, waitedMs: performance.now() - began, budgetMs: budget}));
+      };
+      const abort = () => fail(cancelled());
+      const decodeError = () => { if (media.error) fail(new Error('Incoming clip could not be decoded')); };
+      const arm = () => {
+        clearTimeout(timer);
+        if (!done && pausedAt === null) timer = setTimeout(check,
+          Math.max(1, Math.min(lastAt + budget, fresh ? Infinity : began + budget) - performance.now()));
+      };
+      const check = () => {
+        if (done) return;
+        if (!owned() || signal.aborted) { abort(); return; }
+        if (media.error) { decodeError(); return; }
+        if (!this.running || root.document?.hidden) { state.pause(); return; }
+        if (!fresh && performance.now() - began >= budget) {
+          defer(played ? 'Incoming frames did not become ready' : 'Incoming play did not settle'); return;
+        }
+        if (performance.now() - lastAt >= budget) { defer('Incoming frames did not keep advancing'); return; }
+        arm();
+      };
+      const finishFresh = () => {
+        if (done || fresh) return;
+        if (!owned() || signal.aborted) { abort(); return; }
+        if (media.error) { decodeError(); return; }
+        if (!this.running || root.document?.hidden) { state.pause(); return; }
+        if (performance.now() - began >= budget) {
+          defer(played ? 'Incoming frames did not become ready' : 'Incoming play did not settle'); return;
+        }
+        if (played && frames >= 2 && !media.seeking && !media.paused) {
+          state.admission = {freshAfterWall: began, freshAfterChanges: state.freshAfterChanges,
+            admissionChanges: frames, admissionLastWall: lastAt, admissionDecoded: previous,
+            admissionSeeking: media.seeking};
+          fresh = true; resolveReady();
+        }
+      };
+      const state = {ready, visible: false, phase: 'freshness', error: null, stop,
+        freshAfterChanges: incoming.progress?.sourceChanges ?? null,
+        assert: () => { if (state.error) throw state.error; if (!owned()) throw cancelled(); },
+        timeout: reason => {
+          if (!owned()) { fail(cancelled()); return state.error || cancelled(); }
+          defer(reason); return state.error;
+        },
+        observe: (wall, decoded) => {
+          if (done || pausedAt !== null || !owned() || !Number.isFinite(decoded)) return;
+          if (media.error) { decodeError(); return; }
+          if (media.seeking || media.paused) frames = 0;
+          if (decoded === previous) return;
+          // Do not let a late callback erase an already-exceeded progress bound.
+          if (wall - lastAt >= budget) { defer('Incoming frames did not keep advancing'); return; }
+          previous = decoded; lastAt = Math.max(lastAt, wall);
+          if (!media.seeking && !media.paused) frames++;
+          finishFresh();
+        },
+        pause: () => {
+          if (done || pausedAt !== null) return;
+          if (!state.visible) { defer('Playback paused before fresh incoming frames'); return; }
+          pausedAt = performance.now(); clearTimeout(timer);
+        },
+        resume: () => {
+          if (done || pausedAt === null) return;
+          lastAt += performance.now() - pausedAt; pausedAt = null; arm();
+        }};
+      const fallback = () => {
+        if (media.currentSrc === url && media.readyState >= 2) state.observe(performance.now(), media.currentTime);
+      };
+      incoming.handoff = state; this.handoff = state;
+      signal.addEventListener('abort', abort, {once: true});
+      media.addEventListener('error', decodeError);
+      if (!media.requestVideoFrameCallback) media.addEventListener('timeupdate', fallback);
+      check();
+      // Let the first frame's native callbacks settle, then reassert playback
+      // once while hidden. This owns no new deadline and cannot revive a paused
+      // or superseded request. Visible promotion still plays on its own stack.
+      if (!done) playTask = setTimeout(() => {
+        playTask = null;
+        if (done || !owned() || state.visible || this.generation !== playGeneration ||
+            !this.running || root.document?.hidden) return;
+        try { Promise.resolve(media.play()).then(() => {
+          if (done || !owned()) return;
+          played = true; finishFresh();
+        }, error => { if (owned()) fail(nativePlayFailure(error)); }); }
+        catch (error) { fail(nativePlayFailure(error)); }
+      }, 0);
+      return state;
+    }
+    playPromoted(deck, signal, handoff = null) {
       // Some WebKit media pipelines present their primed frame but do not
       // advance after becoming visible until play() is requested again. Keep
       // this request on the promotion stack, with no intervening RAF.
       return new Promise((resolve, reject) => {
         const media = deck.media;
+        const url = deck.url, epoch = deck.sourceEpoch, generation = this.generation;
         let done = false, fulfilled = false, frames = 0, frame = null, previous = deck.decoded?.mediaTime;
-        const finish = error => {
+        const promotionAfterWall = performance.now(), promotionAfterChanges = deck.progress?.sourceChanges ?? null;
+        let promotionLastWall = null;
+        const finish = (error, verified = false) => {
           if (done) return; done = true; clearTimeout(timer);
           signal.removeEventListener('abort', abort);
           media.removeEventListener('timeupdate', fallback);
           if (frame !== null) media.cancelVideoFrameCallback?.(frame);
-          if (this.promotion?.deck === deck) this.promotion = null;
-          error ? reject(error) : resolve();
+          if (this.promotion === promotion) this.promotion = null;
+          error ? reject(error) : resolve(verified);
         };
         const abort = () => finish(cancelled());
-        const progress = current => {
-          if (current !== previous) { frames++; previous = current; }
-          if (fulfilled && frames >= 2) finish();
+        const owned = () => !signal.aborted && !this.disposed && this.generation === generation &&
+          deck.url === url && deck.sourceEpoch === epoch && media.currentSrc === url;
+        const verify = () => {
+          if (done) return;
+          if (!owned()) { abort(); return; }
+          if (media.error) { finish(new Error('Promoted clip could not be decoded')); return; }
+          if (media.seeking || media.paused) { frames = 0; return; }
+          if (fulfilled && frames >= 2) {
+            if (handoff) handoff.promotionProof = {promotionChanges: frames, promotionAfterWall,
+              promotionAfterChanges, promotionLastWall, promotionDecoded: previous,
+              promotionSeeking: media.seeking};
+            finish(null, true);
+          }
         };
-        const decoded = (_, metadata) => {
-          frame = null; progress(metadata.mediaTime);
+        const progress = (current, wall = performance.now()) => {
+          if (done) return;
+          if (!owned()) { abort(); return; }
+          if (!Number.isFinite(current) || media.seeking || media.paused) {
+            frames = 0;
+            if (Number.isFinite(current)) previous = current;
+            verify(); return;
+          }
+          if (current !== previous) { frames++; previous = current; promotionLastWall = wall; }
+          verify();
+        };
+        const decoded = (wall, metadata) => {
+          frame = null; progress(metadata.mediaTime, wall);
           if (!done) frame = media.requestVideoFrameCallback(decoded);
         };
         const fallback = () => { if (media.readyState >= 2) progress(media.currentTime); };
-        const timer = setTimeout(() => finish(new Error('Promoted clip did not present new frames in time')),
+        const timer = setTimeout(() => finish(handoff
+          ? handoff.timeout('Promoted clip did not present new frames in time')
+          : new Error('Promoted clip did not present new frames in time')),
           Math.min(this.primeTimeoutMs, this.progressTimeoutMs));
-        this.promotion = {deck, finish};
+        const promotion = this.promotion = {deck, finish, handoff};
         signal.addEventListener('abort', abort, {once: true});
         if (signal.aborted) { abort(); return; }
         if (media.requestVideoFrameCallback) frame = media.requestVideoFrameCallback(decoded);
         else { previous = media.currentTime; media.addEventListener('timeupdate', fallback); }
-        try { media.play().then(() => { fulfilled = true; if (frames >= 2) finish(); }, finish); }
-        catch (error) { finish(error); }
+        const rejected = error => finish(signal.aborted || this.disposed || this.generation !== generation ||
+          deck.url !== url || deck.sourceEpoch !== epoch ? cancelled() : nativePlayFailure(error));
+        try { media.play().then(() => { fulfilled = true; verify(); }, rejected); }
+        catch (error) { rejected(error); }
       });
     }
-    async replace(node, item, source, signal, duration, atLoopBoundary = false) {
+    async replace(node, item, source, signal, duration, atLoopBoundary = false, rescue = null) {
+      if (rescue) return this.replacePrepared(node, item, source, signal, duration, atLoopBoundary, rescue, {urgent: true});
+      const original = node.active, resident = node.item, residentSource = node.source;
+      const identity = node.residentIdentity, url = original?.url, epoch = original?.sourceEpoch;
+      const owned = () => !this.disposed && !signal.aborted && this.nodes.get(node.id) === node &&
+        node.item === resident && node.source === residentSource && node.residentIdentity === identity &&
+        ((node.active === original && original?.url === url && original?.sourceEpoch === epoch) ||
+          (identity && node.active?.residentIdentity === identity && node.media === node.active.media &&
+            node.active.residentSource?.url === node.active.url &&
+            node.active.residentSource?.epoch === node.active.sourceEpoch &&
+            node.active.media.currentSrc === node.active.url));
+      // A yielded hidden successor retries the same reconciliation intent.
+      // Never cancel the reconciliation controller or touch its resident.
+      while (true) {
+        if (!owned()) throw cancelled();
+        const controller = new AbortController();
+        let hidden = true, yielded = false;
+        const abort = () => controller.abort();
+        signal.addEventListener('abort', abort, {once: true});
+        const preparation = {
+          assert: () => { if (!owned()) throw cancelled(); },
+          reveal: () => { hidden = false; },
+          onYield: () => {
+            const outgoing = node.active;
+            if (!hidden || !outgoing || !owned() || controller.signal.aborted) return false;
+            yielded = true;
+            this.record('preparation-yielded', node.id, {reason: 'native-loop-rescue',
+              url: outgoing.url, sourceEpoch: outgoing.sourceEpoch});
+            controller.abort(); return true;
+          },
+        };
+        try {
+          return await this.replacePrepared(node, item, source, controller.signal, duration, atLoopBoundary, null, preparation);
+        } catch (error) {
+          if (!yielded || error.name !== 'AbortError' || !owned()) throw error;
+        } finally { signal.removeEventListener('abort', abort); }
+      }
+    }
+    async replacePrepared(node, item, source, signal, duration, atLoopBoundary, rescue, preparation) {
       await this.withPreparation(async () => {
         if (signal.aborted) throw cancelled();
+        preparation.assert?.();
+        rescue?.assert();
         const outgoing = node.active, incoming = node.decks.find(deck => deck !== outgoing);
         const previous = {active: node.active, media: node.media, item: node.item, source: node.source,
-          audio: node.audio, birthTime: node.birthTime, callbacks: node.callbacks, decoded: node.decoded};
+          audio: node.audio, birthTime: node.birthTime, callbacks: node.callbacks, decoded: node.decoded,
+          residentIdentity: node.residentIdentity};
+        const beganRunning = this.running;
+        let handoff = null;
         node.busy = true; node.phase = 'LOADING';
+        if (rescue) { rescue.incoming = incoming; this.recordNativeRescue('started', node.id, rescue.detail); }
         incoming.item = item; incoming.media.muted = true;
-        incoming.presence = this.effectsEnabled ? 0 : 1;
-        incoming.presenceTarget = null; incoming.enteredAt = null;
+        incoming.presence = rescue ? outgoing.presence : this.effectsEnabled ? 0 : 1;
+        incoming.presenceTarget = rescue ? outgoing.presenceTarget : null;
+        incoming.spectralPriority = rescue ? outgoing.spectralPriority : 1;
+        incoming.enteredAt = rescue ? outgoing.enteredAt : null;
         this.applyDeckEffects(incoming, true);
         incoming.url = URL.createObjectURL(item.file);
+        incoming.sourceEpoch++; incoming.loopSeek = null; incoming.residentIdentity = null; incoming.residentSource = null;
         incoming.progress?.assign(incoming.url, performance.now());
         incoming.media.src = incoming.url; incoming.media.load();
         node.box.style.display = '';
@@ -775,35 +1014,74 @@ function applySlice(node) {
         try {
           await this.prime(incoming, node, signal);
           if (signal.aborted) throw cancelled();
+          rescue?.assert();
           node.phase = 'READY';
           this.bind(incoming);
-          if (atLoopBoundary && outgoing) await this.waitForSeam(node, signal);
+          if (atLoopBoundary && outgoing) {
+            // A ready successor need not keep decoding throughout a future
+            // outgoing seam. Park only the hidden deck, without seeking it;
+            // the freshness gate below resumes it and verifies new frames.
+            if (this.running && !node.resting && node.media.currentTime >= .04) incoming.media.pause();
+            await this.waitForSeam(node, signal);
+          }
           if (signal.aborted) throw cancelled();
+          if (incoming.media.error) throw new Error('Incoming clip could not be decoded');
+          if (outgoing && (beganRunning || this.running)) {
+            if (!this.running) throw new DeferredHandoffError('Playback paused before fresh incoming frames',
+              {url: incoming.url, sourceEpoch: incoming.sourceEpoch, phase: 'freshness', visible: false});
+            handoff = this.watchHandoff(node, incoming, outgoing, signal);
+            await handoff.ready; handoff.assert();
+            rescue?.assert();
+            preparation.reveal?.();
+            handoff.visible = true; handoff.phase = 'fade';
+          }
+          preparation.reveal?.();
           // Priming can run for several native loops. The resident's entrance
           // begins when it is revealed, independently of the media playhead.
-          incoming.enteredAt = this.clock.simTime;
+          incoming.enteredAt = rescue ? outgoing.enteredAt : this.clock.simTime;
           // Visible incoming frames count throughout the fade and pending
           // promotion, while outgoing frames remain covered until retirement.
           incoming.progress?.setForeground(true, performance.now(), this.running);
-          incoming.presence = this.effectsEnabled ? 0 : 1;
-          incoming.presenceTarget = null;
+          incoming.presence = rescue ? outgoing.presence : this.effectsEnabled ? 0 : 1;
+          incoming.presenceTarget = rescue ? outgoing.presenceTarget : null;
           this.applyDeckEffects(incoming);
+          this.notifyDeckAudio(incoming);
           incoming.media.style.zIndex = '1';
           if (outgoing) outgoing.media.style.zIndex = '0';
           if (outgoing && this.running && !node.resting && duration > 0) {
+            const seek = outgoing.loopSeek, attempt = seek?.attempt;
+            // A native recovery request can fulfill without producing a frame.
+            // Once the successor has passed freshness, use the existing rapid
+            // fade instead of retaining that known frozen picture for 1.2 s.
+            if (handoff && attempt && attempt.generation === this.generation &&
+                seek.url === outgoing.url && seek.epoch === outgoing.sourceEpoch &&
+                outgoing.media.currentSrc === outgoing.url && outgoing.media.seeking &&
+                !outgoing.media.paused && !outgoing.media.error && !attempt.progressed &&
+                Number.isFinite(attempt.decoded) && duration > .2) {
+              this.record('handoff-expedited', node.id, {reason: 'outgoing-native-seek-stalled',
+                url: outgoing.url, sourceEpoch: outgoing.sourceEpoch, attemptedAt: attempt.time,
+                requestedDuration: duration, duration: .2});
+              duration = .2;
+            }
             node.phase = 'CROSSFADING';
             await new Promise((resolve, reject) => {
-              const abort = () => {
-                if (this.fade?.incoming === incoming) this.fade = null;
-                signal.removeEventListener('abort', abort); reject(cancelled());
+              let done = false;
+              const finish = error => {
+                if (done) return; done = true;
+                if (this.fade === fade) this.fade = null;
+                signal.removeEventListener('abort', abort);
+                error ? reject(error) : resolve();
               };
+              const abort = () => finish(cancelled());
               signal.addEventListener('abort', abort, {once: true});
-              this.fade = {node, outgoing, incoming, began: this.clock.simTime, duration,
-                finish: () => { signal.removeEventListener('abort', abort); resolve(); }};
+              const fade = this.fade = {node, outgoing, incoming, handoff, began: this.clock.simTime, duration, finish};
               incoming.media.muted = !this.sound.enabled || !this.audio.enabled;
             });
           }
           if (signal.aborted) throw cancelled();
+          handoff?.assert();
+          rescue?.assert();
+          if (handoff) handoff.phase = 'promotion';
           // Sound can unlock during the fade after the earlier bind attempt.
           // No audible resident may bypass the persistent master graph.
           this.bind(incoming);
@@ -813,37 +1091,71 @@ function applySlice(node) {
           if (!this.running) incoming.media.pause();
           incoming.media.muted = !incoming.binding || !this.sound.enabled || !this.audio.enabled;
           this.applyLayout(); this.updateAudio();
-          if (this.running) await this.playPromoted(incoming, signal);
+          // A pause settles the waiter without frame proof. If play resumes in
+          // the same task, verify again before committing the visible deck.
+          let verified = false;
+          while (this.running && !verified && !signal.aborted) verified = await this.playPromoted(incoming, signal, handoff);
           if (signal.aborted) throw cancelled();
+          handoff?.assert();
+          rescue?.assert();
           if (!this.running) incoming.media.pause();
           // Promotion is now committed. Until this point the outgoing decoder,
           // Blob URL and ecological identity remain authoritative. Publishing
           // provisional node.item would destroy its lifetime on a late refusal.
+          if (rescue) {
+            incoming.presence = outgoing.presence; incoming.presenceTarget = outgoing.presenceTarget;
+            incoming.spectralPriority = outgoing.spectralPriority;
+            this.applyDeckEffects(incoming);
+          }
           node.active = incoming; node.media = incoming.media; node.item = item; node.source = source;
-          node.birthTime = incoming.enteredAt;
+          node.birthTime = rescue ? previous.birthTime : incoming.enteredAt;
+          // Only a verified repair may transfer the logical resident identity
+          // to another decoder. Ordinary admissions always get a new identity.
+          node.residentIdentity = rescue ? previous.residentIdentity : {};
+          incoming.residentIdentity = node.residentIdentity;
+          // A queued ordinary intent may survive verified repairs of this
+          // logical resident. Bind that exception to the committed source,
+          // so a reloaded or reassigned deck cannot reuse a stale token.
+          incoming.residentSource = {url: incoming.url, epoch: incoming.sourceEpoch};
           node.audio = incoming.binding; node.callbacks = incoming.callbacks; node.decoded = incoming.decoded;
           node.promoting = null; node.phase = node.resting ? 'RESTING' : 'ACTIVE';
+          if (rescue) rescue.committed = true;
+          this.sources.set(source, {url: incoming.url, sha256: item.sha256});
           if (outgoing) this.unload(outgoing);
           this.applyLayout(); this.updateAudio();
           if (node.audio) this.notifyAudio(node);
-          this.record('resident', node.id);
+          if (rescue) this.recordNativeRescue('committed', node.id,
+            {...rescue.detail, successorUrl: incoming.url, successorEpoch: incoming.sourceEpoch,
+              successorDeck: node.decks.indexOf(incoming), ...handoff?.admission,
+              ...handoff?.promotionProof});
+          else this.record('resident', node.id);
         } catch (error) {
-          node.promoting = null;
-          Object.assign(node, previous);
+          handoff?.stop();
+          if (node.promoting === incoming) node.promoting = null;
           this.unload(incoming);
-          if (outgoing) {
-            outgoing.weight = 1; outgoing.media.style.opacity = '1'; outgoing.media.dataset.deck = 'active';
-            node.callbacks = outgoing.callbacks; node.decoded = outgoing.decoded;
+          // Reconciliation can remove this slot or update its source metadata
+          // while an abort is settling. Its authoritative resident was never
+          // changed before commit; restoring the old snapshot would resurrect
+          // a removed decoder or overwrite the newer accepted metadata.
+          if (!this.disposed && this.nodes.get(node.id) === node && node.active === outgoing) {
+            if (outgoing) {
+              outgoing.weight = 1; outgoing.media.style.opacity = '1'; outgoing.media.dataset.deck = 'active';
+              node.callbacks = outgoing.callbacks; node.decoded = outgoing.decoded;
+            }
+            else node.box.style.display = 'none';
+            node.phase = outgoing ? node.resting ? 'RESTING' : 'ACTIVE' : 'IDLE';
+            this.applyLayout(); this.updateAudio();
+            if (node.audio) this.notifyAudio(node);
           }
-          else node.box.style.display = 'none';
-          node.phase = outgoing ? node.resting ? 'RESTING' : 'ACTIVE' : 'IDLE';
-          this.applyLayout(); this.updateAudio();
-          if (node.audio) this.notifyAudio(node);
           throw error;
-        } finally { node.busy = false; }
-      }, {signal});
+        } finally { handoff?.stop(); node.busy = false; }
+      }, {signal, urgent: preparation.urgent, onYield: preparation.onYield});
     }
     unload(deck) {
+      this.interruptLoopSeek(deck, 'retired');
+      deck.loopSeek = null; deck.residentIdentity = null; deck.residentSource = null;
+      try { this.options.onDeckUnload?.(deck); }
+      catch (error) { this.report(error); }
       deck.weight = 0;
       if (deck.binding) {
         const now = this.audio.context.currentTime;
@@ -853,7 +1165,8 @@ function applySlice(node) {
         deck.binding.target = 0; deck.binding.cutoff = null;
       }
       deck.media.style.opacity = '0'; deck.media.dataset.deck = 'standby'; deck.media.muted = true;
-      deck.media.style.filter = ''; deck.presence = 1; deck.presenceTarget = null; deck.enteredAt = null;
+      deck.media.style.filter = ''; deck.presence = 1; deck.presenceTarget = null;
+      deck.spectralPriority = 1; deck.enteredAt = null;
       if (deck.url) {
         if (deck.progress) {
           const wall = performance.now(), nativeError = deck.media.error;
@@ -874,7 +1187,8 @@ function applySlice(node) {
     }
     bind(deck) {
       const context = this.audio.context;
-      if (!context || deck.binding) return deck.binding;
+      if (!context) return deck.binding;
+      if (deck.binding) { this.notifyDeckAudio(deck); return deck.binding; }
       let binding = this.bindings.get(deck.media);
       if (!binding) {
         const source = context.createMediaElementSource(deck.media), filter = context.createBiquadFilter();
@@ -884,7 +1198,7 @@ function applySlice(node) {
         gain.gain.value = 0; source.connect(filter); filter.connect(pan); pan.connect(gain); gain.connect(this.audio.input);
         binding = {source, filter, pan, gain, target: 0, cutoff: null}; this.bindings.set(deck.media, binding);
       }
-      deck.binding = binding; this.applyDeckEffects(deck, true); return binding;
+      deck.binding = binding; this.applyDeckEffects(deck, true); this.notifyDeckAudio(deck); return binding;
     }
     async unlock(context = null) {
       if (this.disposed) return false;
@@ -942,22 +1256,40 @@ function applySlice(node) {
         this.updateNodeAudio(node);
       }
     }
-    setPresence(id, value) {
+    setEffectSettings(settings) {
+      if (!root.SimvltaneaPresence) throw new Error('Clip presence filters are unavailable');
+      this.effectSettings = root.SimvltaneaPresence.normalizeSettings({...this.effectSettings, ...settings});
+      for (const node of this.nodes.values()) {
+        for (const deck of node.decks) if (this.effectsEnabled) this.applyDeckEffects(deck);
+        this.updateNodeAudio(node);
+      }
+      return this.effectSettings;
+    }
+    setPresence(id, value, spectralPriority = 1) {
       const node = this.nodes.get(id);
       if (!node?.active) return;
       const presence = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
       node.active.presence = node.active.presenceTarget = presence;
-      this.applyDeckEffects(node.active); this.updateNodeAudio(node);
+      node.active.spectralPriority = Number.isFinite(spectralPriority) ? Math.max(0, Math.min(1, spectralPriority)) : 0;
+      if (this.effectsEnabled) this.applyDeckEffects(node.active);
+      this.updateNodeAudio(node);
     }
     applyDeckEffects(deck, immediate = false) {
+      const settings = this.effectSettings || root.SimvltaneaPresence?.DEFAULT_SETTINGS;
       const targets = this.effectsEnabled && root.SimvltaneaPresence
-        ? root.SimvltaneaPresence.filterTargets(deck.presence, this.audio.context?.sampleRate) : null;
+        ? root.SimvltaneaPresence.filterTargets(deck.presence, this.audio.context?.sampleRate, settings, deck.spectralPriority) : null;
       const decimal = value => Number(value.toFixed(3));
-      const filter = targets ? `brightness(${decimal(targets.brightness)}) saturate(${decimal(targets.saturation)}) blur(${decimal(targets.blurPx)}px)` : '';
+      const filters = [];
+      if (targets) {
+        if (settings.brightnessDepth > 0) filters.push(`brightness(${decimal(targets.brightness)})`);
+        if (settings.saturationDepth > 0) filters.push(`saturate(${decimal(targets.saturation)})`);
+        if (settings.blurPx > 0) filters.push(`blur(${decimal(targets.blurPx)}px)`);
+      }
+      const filter = filters.join(' ');
       if (deck.media.style.filter !== filter) deck.media.style.filter = filter;
       if (!deck.binding) return;
       const binding = deck.binding;
-      const type = targets ? 'lowpass' : 'allpass';
+      const type = targets && settings.lowpassDepth > 0 ? 'lowpass' : 'allpass';
       if (binding.filter.type !== type) binding.filter.type = type;
       const cutoff = targets?.cutoffHz ?? Math.min(20000, this.audio.context.sampleRate * .45);
       if (immediate || binding.cutoff === null || binding.cutoff === undefined || Math.abs(binding.cutoff - cutoff) > .5) {
@@ -965,13 +1297,17 @@ function applySlice(node) {
         const now = this.audio.context.currentTime, frequency = binding.filter.frequency;
         if (immediate) {
           frequency.cancelScheduledValues(now); frequency.setValueAtTime(cutoff, now);
-        } else frequency.setTargetAtTime(cutoff, now, .08);
+        } else frequency.setTargetAtTime(cutoff, now, .015);
       }
     }
     setResting(id, resting) {
       const node = this.nodes.get(id);
       if (!node || node.resting === Boolean(resting)) return;
       node.resting = Boolean(resting); node.phase = node.resting ? 'RESTING' : 'ACTIVE';
+      if (node.resting) {
+        this.cancelNativeRescue(node, 'resting');
+        if (node.active) this.interruptLoopSeek(node.active, 'resting');
+      } else if (node.active?.loopSeek?.attempt?.interrupted) node.active.loopSeek.wakeFailedSeek = true;
       node.box.style.transition = 'opacity 400ms linear'; node.box.style.opacity = node.resting ? '.35' : '1';
       // Ecological rest changes prominence, not the native playback lifecycle.
       // Keeping this foreground loop running avoids a WebKit pause/wake edge.
@@ -986,7 +1322,9 @@ function applySlice(node) {
         if (!deck.binding || this.audio.context.state !== 'running') continue;
         // Presence is applied after mix normalization. Otherwise normalization
         // turns a lone receding voice back up to the full mix ceiling.
-        const target = gain * deck.weight * (this.effectsEnabled ? deck.presence : 1);
+        const modulation = this.effectsEnabled && root.SimvltaneaPresence
+          ? root.SimvltaneaPresence.filterTargets(deck.presence, this.audio.context.sampleRate, this.effectSettings).gain : 1;
+        const target = gain * deck.weight * modulation;
         if (Math.abs(deck.binding.target - target) > .00001) {
           deck.binding.target = target;
           deck.binding.gain.gain.setTargetAtTime(target, this.audio.context.currentTime, .015);
@@ -997,18 +1335,211 @@ function applySlice(node) {
       this.master?.setVolume(this.sound.volume, this.sound.enabled && this.running);
       for (const node of this.nodes.values()) this.updateNodeAudio(node);
     }
-    tick(time) {
+    recordLoopSeek(type, id, detail) {
+      this.record(type, id, detail);
+      if (!this.proof) return;
+      const proof = this.loopSeekProof ||= {attempted: 0, recovered: 0, rejected: 0, interrupted: 0,
+        dropped: 0, receipts: []};
+      const counter = {'native-loop-seek-recovery': 'attempted', 'native-loop-seek-recovered': 'recovered',
+        'native-loop-seek-play-rejected': 'rejected', 'native-loop-seek-interrupted': 'interrupted'}[type];
+      proof[counter]++;
+      proof.receipts.push({type, id, time: this.clock?.simTime, wall: performance.now(), ...detail});
+      if (proof.receipts.length > 16) { proof.receipts.shift(); proof.dropped++; }
+    }
+    interruptLoopSeek(deck, reason) {
+      const state = deck.loopSeek;
+      if (!state?.attempt || state.attempt.interrupted) return;
+      state.attempt.interrupted = true;
+      this.recordLoopSeek('native-loop-seek-interrupted', state.id,
+        {url: state.url, sourceEpoch: state.epoch, attemptedAt: state.attempt.time,
+          strategy: state.attempt.strategy, reason});
+    }
+    cancelNativeRescue(node, reason) {
+      const rescue = node.nativeRescue;
+      if (!rescue || rescue.committed || rescue.controller.signal.aborted) return;
+      this.recordNativeRescue('cancelled', node.id, {...rescue.detail, reason});
+      rescue.controller.abort();
+    }
+    nativeLoopRescuePolicy() {
+      return {enabled: this.options?.nativeLoopStandbyRescue !== false,
+        graceSimSec: .2, maximumFadeSec: .2, fadeSec: Math.min(.2, this.crossfadeSec)};
+    }
+    recordNativeRescue(phase, id, detail) {
+      const type = `native-loop-rescue-${phase}`;
+      this.record(type, id, detail);
+      if (!this.proof) return;
+      const proof = this.loopRescueProof ||= {queued: 0, started: 0, committed: 0,
+        cancelled: 0, deferred: 0, dropped: 0, receipts: []};
+      proof[phase]++;
+      proof.receipts.push({type, id, time: this.clock?.simTime, wall: performance.now(), ...detail});
+      if (proof.receipts.length > 16) { proof.receipts.shift(); proof.dropped++; }
+    }
+    rescueNativeLoop(node, deck, state, attempt) {
+      // One cached-source successor per failed seek. The shared preparation
+      // permit still owns loading, freshness, fade and promotion; never nest
+      // another permit around replace(). No logical selection is requested.
+      const policy = this.nativeLoopRescuePolicy();
+      if (!policy.enabled || attempt.rescueRequested ||
+          !deck.item?.file || !node.item || node.nativeRescue) return;
+      attempt.rescueRequested = true;
+      const controller = new AbortController(), item = node.item, source = node.source;
+      const url = deck.url, epoch = deck.sourceEpoch, generation = this.generation;
+      const owned = () => !controller.signal.aborted && !this.disposed && this.running && !root.document?.hidden &&
+        this.generation === generation && this.nodes.get(node.id) === node && node.active === deck &&
+        node.item === item && node.source === source && deck.url === url && deck.sourceEpoch === epoch &&
+        deck.media.currentSrc === url && deck.loopSeek === state && state.attempt === attempt &&
+        !attempt.interrupted && !node.resting && node.nativeRescue === rescue;
+      const rescue = node.nativeRescue = {controller, outgoing: deck, incoming: null,
+        detail: {url, sourceEpoch: epoch, deck: node.decks.indexOf(deck), attemptedAt: attempt.time,
+          strategy: attempt.strategy, item: item.clip?.id || item.name || item.sha256,
+          sha256: item.sha256, birth: node.birthTime},
+        assert: () => { if (!owned()) throw cancelled(); }};
+      this.recordNativeRescue('queued', node.id, rescue.detail);
+      this.replace(node, item, source, controller.signal, policy.fadeSec, false, rescue)
+        .catch(error => {
+          if (error.name === 'AbortError' && (controller.signal.aborted || !owned())) return;
+          if (error instanceof DeferredHandoffError)
+            this.recordNativeRescue('deferred', node.id, {...error.detail, ...rescue.detail, reason: error.message});
+          else this.report(nativePlayFailure(error), node);
+        }).finally(() => { if (node.nativeRescue === rescue) node.nativeRescue = null; });
+    }
+    recoverNativeLoop(node, time, dt) {
+      const deck = node.active, media = deck?.media;
+      if (!media || !deck.url || this.options?.nativeLoopSeekRecovery === false) return;
+      let state = deck.loopSeek;
+      if (!state || state.url !== deck.url || state.epoch !== deck.sourceEpoch) {
+        this.cancelNativeRescue(node, 'source-changed');
+        this.interruptLoopSeek(deck, 'source-changed');
+        state = deck.loopSeek = {id: node.id, url: deck.url, epoch: deck.sourceEpoch, generation: this.generation,
+          decoded: deck.decoded?.mediaTime, changes: 0, endSeen: false, seamCurrent: null,
+          stalled: 0, attempt: null, recoveryFrames: 0};
+      }
+      const current = media.currentTime, duration = media.duration, fps = Number(deck.item?.asset?.fps);
+      const foreground = this.nodes.get(node.id) === node && node.media === media;
+      // A sibling's awaited replacement keeps drain() open. Only this slot's
+      // transition may suspend recovery of its otherwise unchanged resident.
+      const eligible = this.running && !this.disposed && !root.document?.hidden &&
+        foreground && (!node.busy || node.nativeRescue?.outgoing === deck) && !node.resting && media.loop && !media.paused &&
+        media.readyState >= 3 && !media.error && media.currentSrc === state.url &&
+        Number.isFinite(duration) && duration > .1 && Number.isFinite(fps) && fps > 0 && 1 / fps < duration;
+      const changed = Number.isFinite(deck.decoded?.mediaTime) && state.decoded !== deck.decoded.mediaTime;
+      state.decoded = deck.decoded?.mediaTime;
+      // A retained source may advance while its ordinary successor is being
+      // prepared. Such progress invalidates the old failure even while busy.
+      if (changed) state.resumedFailedSeek = false;
+      if (!eligible || state.generation !== this.generation || state.wakeFailedSeek) {
+        this.cancelNativeRescue(node, 'inactive-or-suspended');
+        this.interruptLoopSeek(deck, 'inactive-or-suspended');
+        if (state.generation !== this.generation || state.wakeFailedSeek) {
+          // Resume or ecological wake owns a new operation. Carry only a previously attempted,
+          // still-frozen seek on this exact source, never unattempted seam
+          // history or an old queued controller. It must wait the normal stall
+          // allowance again before issuing a new pause/seek/play request.
+          // Preparation may outlive a resume or wake and then defer. Keep the
+          // proved cause until eligibility returns, including another resume;
+          // the old operation/controller itself is still discarded below.
+          state.resumedFailedSeek = Boolean((state.resumedFailedSeek ||
+            (state.attempt?.interrupted && state.decoded === state.attempt.decoded)) &&
+            media.seeking && !changed && current <= 1 / fps + .001);
+          state.attempt = null; state.wakeFailedSeek = false;
+        }
+        state.generation = this.generation; state.stalled = 0; state.endSeen = false; state.changes = 0;
+        state.recoveryFrames = 0; return;
+      }
+      if (state.attempt && media.seeking) state.recoveryFrames = 0;
+      if (changed) {
+        state.changes++; state.stalled = 0;
+        if (state.attempt && !media.seeking && current > .001) {
+          state.recoveryFrames++;
+          if (state.recoveryFrames >= 2) {
+            this.cancelNativeRescue(node, 'outgoing-recovered');
+            if (!state.attempt.interrupted) this.recordLoopSeek('native-loop-seek-recovered', node.id,
+              {url: state.url, sourceEpoch: state.epoch, attemptedAt: state.attempt.time,
+                strategy: state.attempt.strategy, decodedChanges: state.recoveryFrames,
+                current, decoded: state.decoded, seeking: media.seeking});
+            state.attempt = null; state.endSeen = false; state.recoveryFrames = 0;
+          }
+        }
+      }
+      if (state.attempt && !state.attempt.interrupted) {
+        // Give the native repair 200 ms of foreground simulation time to
+        // produce two nonseeking frames. This is an operation budget, not a
+        // proof threshold or a guarantee while another preparation owns the
+        // permit. A fulfilled play() alone never extends the allowance.
+        state.attempt.waited = (state.attempt.waited || 0) + Math.max(0, Math.min(.1, Number(dt) || 0));
+        if (state.attempt.waited + 1e-9 >= this.nativeLoopRescuePolicy().graceSimSec)
+          this.rescueNativeLoop(node, deck, state, state.attempt);
+      }
+      // Native currentTime reaches the seam even when the decoded texture is
+      // stale mid-clip. Require that source's observed end, never a generic
+      // quiet decoder or the first seek of a newly admitted source.
+      if (!media.seeking && current >= duration - 2 / fps && state.changes >= 2) {
+        state.endSeen = true; state.seamCurrent = current;
+      } else if (changed && !media.seeking && current > .001) state.endSeen = false;
+      const provenSeam = current <= .001 && state.endSeen && state.changes >= 2;
+      const resumedSeek = state.resumedFailedSeek && current <= 1 / fps + .001;
+      // WebKit can park at zero after an observed wrap while reporting
+      // seeking=false. That flag cannot veto the proved seam's stall; a
+      // resumed failed seek still requires its original seeking evidence.
+      if (!(provenSeam || (media.seeking && resumedSeek)) || state.attempt || changed) {
+        state.stalled = 0; return;
+      }
+      // Count foreground simulation time, not a single delayed host callback.
+      state.stalled += Math.max(0, Math.min(.1, Number(dt) || 0));
+      if (state.stalled + 1e-9 < .6) return;
+      const pauseBeforeSeek = this.options?.nativeLoopSeekPauseBeforeSeek !== false;
+      const strategy = pauseBeforeSeek ? 'pause-seek-play' : 'seek-play';
+      const attempt = state.attempt = {time, generation: this.generation, strategy,
+        decoded: state.decoded, progressed: false};
+      const detail = {url: state.url, sourceEpoch: state.epoch, current, seeking: media.seeking,
+        decoded: state.decoded, priorSeamCurrent: state.seamCurrent, duration,
+        stalledSimSec: state.stalled, target: 1 / fps, strategy, afterPause: null,
+        resumedFailedSeek: Boolean(resumedSeek)};
+      state.resumedFailedSeek = false;
+      const stillOwned = () => !this.disposed && this.nodes.get(node.id) === node && node.active === deck &&
+        deck.loopSeek === state && deck.url === state.url && deck.sourceEpoch === state.epoch &&
+        state.attempt === attempt && this.generation === attempt.generation && !attempt.interrupted;
+      const failed = error => {
+        if (stillOwned()) this.recordLoopSeek('native-loop-seek-play-rejected', node.id,
+          {url: state.url, sourceEpoch: state.epoch, strategy, message: String(error?.message || error)});
+      };
+      // Experimental target-only recovery. Keep the resident, URL, decoder and
+      // audio routing intact; a fulfilled play promise alone is not recovery.
+      const nativeState = () => ({paused: media.paused, current: media.currentTime, seeking: media.seeking});
+      let playing, operationError;
+      try {
+        if (pauseBeforeSeek) { media.pause(); detail.afterPause = nativeState(); }
+        media.currentTime = 1 / fps; detail.afterSeek = nativeState();
+        playing = media.play(); detail.afterPlay = nativeState();
+      } catch (error) { operationError = error; }
+      this.recordLoopSeek('native-loop-seek-recovery', node.id, detail);
+      if (operationError) failed(operationError);
+      else Promise.resolve(playing).then(() => {
+        if (stillOwned()) this.record('native-loop-seek-play-fulfilled', node.id,
+          {url: state.url, sourceEpoch: state.epoch, strategy, ...nativeState()});
+      }, failed);
+    }
+    tick(time, dt = 0) {
       this.frame = Math.floor(time * (this.plan?.fps || 24));
       // Incoming media has an independent entrance while the scheduler still
       // observes the outgoing resident. Never copy its closing filter state.
       for (const node of this.nodes.values()) {
+        this.recoverNativeLoop(node, time, dt);
+        const rescued = node.nativeRescue?.incoming;
+        if (rescued?.url && node.nativeRescue.outgoing === node.active) {
+          rescued.presence = node.active.presence; rescued.presenceTarget = node.active.presenceTarget;
+          rescued.spectralPriority = node.active.spectralPriority;
+          this.applyDeckEffects(rescued);
+        }
         let changed = false;
         for (const deck of node.decks) {
           if (deck.enteredAt === null || deck.presenceTarget !== null ||
               (deck !== node.active && deck !== this.fade?.incoming && deck !== node.promoting)) continue;
-          const attack = root.SimvltaneaPresence?.ATTACK_SECONDS ?? 1.2;
-          deck.presence = Math.max(0, Math.min(1, (time - deck.enteredAt) / attack));
-          this.applyDeckEffects(deck); changed = true;
+          deck.presence = root.SimvltaneaPresence
+            ? root.SimvltaneaPresence.entranceEnvelope(time - deck.enteredAt, this.effectSettings)
+            : Math.max(0, Math.min(1, (time - deck.enteredAt) / 1.2));
+          if (this.effectsEnabled) this.applyDeckEffects(deck);
+          changed = true;
         }
         if (changed) this.updateNodeAudio(node);
       }
@@ -1019,7 +1550,12 @@ function applySlice(node) {
         // black stage (25% at the midpoint). Keep the outgoing image opaque.
         fade.incoming.media.style.opacity = String(progress); fade.outgoing.media.style.opacity = '1';
         this.updateNodeAudio(fade.node);
-        if (progress === 1) { this.fade = null; fade.finish(); }
+        if (progress === 1) {
+          // The ecology subscriber still runs before replace() can continue its
+          // awaited fade. Keep audio ownership across that microtask boundary.
+          fade.node.promoting = fade.incoming;
+          this.fade = null; fade.finish();
+        }
       }
       if (this.proof && time - this.proofAt >= .25) {
         this.proofAt = time;
@@ -1031,6 +1567,9 @@ function applySlice(node) {
     suspend() {
       if (!this.running) return;
       this.running = false; this.generation++; this.clock.pause();
+      for (const node of this.nodes.values()) this.cancelNativeRescue(node, 'suspended');
+      this.handoff?.pause();
+      for (const node of this.slots.values()) for (const deck of node.decks) this.interruptLoopSeek(deck, 'suspended');
       if (this.proof) {
         this.proofSuspensionCount++;
         const wall = performance.now();
@@ -1050,6 +1589,7 @@ function applySlice(node) {
       this.playingIntent = true;
       if (this.running || document.hidden) return;
       this.running = true; this.generation++; this.clock.start();
+      this.handoff?.resume();
       if (this.proof) {
         const wall = performance.now();
         for (const node of this.slots.values()) for (const deck of node.decks) deck.progress?.setRunning(true, wall);
@@ -1132,7 +1672,7 @@ function applySlice(node) {
         finished: false, error: this.error, orientation: this.orientation, orientationOverride: this.orientationOverride,
         activeStandbys: this.activeStandbys, maxConcurrentStandbys: this.maxConcurrentStandbys,
         pending: Boolean(this.pending) || this.draining, lastFailure: this.lastFailure,
-        effects: this.effectsEnabled,
+        effects: this.effectsEnabled, effectSettings: this.effectSettings,
         audio: {mode: this.audio.mode, enabled: this.audio.enabled, contextState: this.audio.context?.state ?? null},
         loops: [...this.nodes.values()].map(node => ({id: node.id, source: node.source, kind: 'video',
           currentTime: node.media?.currentTime ?? 0, rate: 1, paused: node.media?.paused ?? true,

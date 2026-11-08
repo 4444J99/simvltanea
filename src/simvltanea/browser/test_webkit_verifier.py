@@ -77,12 +77,97 @@ for (const [index, decoded, callbacks] of [[87, .6, 101], [88, .7, 102]]) {
 Object.freeze(result.requestFailures);
 '''
 
+PRELUDE_TRACE_RECOVERY = TRACE_RECOVERY + r'''
+result.progressSchema = 1;
+result.prelude = {samples: [{...result.samples[100]}]};
+delete result.samples[100].decks;
+// The controlled prelude ends before the sustained observation window begins.
+for (const row of result.samples) row.wall += 20000;
+'''
+
+PRELUDE_SAMPLED_RECOVERY = RECOVERED_BLOB + r'''
+result.prelude = {samples: [87, 88].map(index => ({...result.samples[index]}))};
+delete result.samples[87].decks; delete result.samples[88].decks;
+for (const row of result.samples) row.wall += 20000;
+'''
+
 ABORTED_FETCH = r'''
 const fetchUrl = 'http://127.0.0.1/library/clip.mp4';
 result.events.push({type: 'asset-request-aborted', url: fetchUrl, wall: 12000});
 result.requestFailures = [Object.freeze({wall: 12100, phase: 'controls', url: fetchUrl,
   resourceType: 'fetch', failure: {errorText: 'cancelled'}})];
 Object.freeze(result.requestFailures);
+'''
+
+PARKED_BLOB = r'''
+// Timings default to the original held-source cancellation. Other two native
+// failures use the same observed ownership/parking/admission sequence below.
+const parkedCase = globalThis.parkedCase || {id: 'loop-2', before: 38178, error: 38504,
+  first: 38429, parked: 38642, lastPark: 42006, resume: 42157,
+  frames: [42163, 42196], visible: 42196, promoted: 43501};
+const parkedUrl = 'blob:http://127.0.0.1/parked-' + parkedCase.id;
+const oldUrl = 'blob:http://127.0.0.1/outgoing-' + parkedCase.id;
+const makeParkRow = (wall, phase, paused, visible, active, count, current) => {
+  const points = [{wall: parkedCase.first, mediaTime: 0, changes: 1},
+    {wall: parkedCase.frames[0], mediaTime: 1 / 30, changes: 2},
+    {wall: parkedCase.frames[1], mediaTime: 2 / 30, changes: 3}].slice(0, count);
+  const last = points.at(-1), progress = {schema: 1, supported: true, live: true,
+    url: parkedUrl, epoch: 1, changes: count, sourceChanges: count,
+    lastChangeWall: last?.wall ?? null, mediaTime: last?.mediaTime ?? null,
+    foreground: visible, running: visible, foregroundSince: visible ? parkedCase.visible : null,
+    lastForegroundChangeWall: visible ? parkedCase.visible : null,
+    maxGapMs: visible ? wall - parkedCase.visible : 0,
+    currentGapMs: visible ? wall - parkedCase.visible : 0,
+    lifetimeMaxGapMs: visible ? wall - parkedCase.visible : 0, trace: points};
+  const outgoing = {id: parkedCase.id, deck: 0, active: !active, populated: true,
+    src: oldUrl, currentSrc: oldUrl, paused: false, seeking: false, ready: 4,
+    current, duration: 6, decoded: current, callbacks: wall, nativeError: null,
+    progress: {schema: 1, supported: true, live: true, url: oldUrl, epoch: 1,
+      changes: wall, sourceChanges: wall, lastChangeWall: wall, mediaTime: current,
+      foreground: true, running: true, foregroundSince: 1, lastForegroundChangeWall: wall,
+      currentGapMs: 0, maxGapMs: 140, lifetimeMaxGapMs: 140}};
+  const incoming = {id: parkedCase.id, deck: 1, active, populated: true, src: parkedUrl,
+    currentSrc: count ? parkedUrl : '', paused, seeking: false, ready: count ? 4 : 0,
+    current: last?.mediaTime ?? 0, decoded: last?.mediaTime ?? null, callbacks: count + 1,
+    weight: visible ? active ? 1 : .1 : 0, muted: !visible, nativeError: null, progress};
+  const node = {id: parkedCase.id, deck: active ? 1 : 0, phase, busy: !active,
+    resting: false, paused: false, nativeError: null, current, decoded: current,
+    callbacks: wall, progress: active ? progress : outgoing.progress};
+  return {wall, running: true, hidden: false, audioState: 'running', lastFailure: null,
+    standbys: active ? 0 : 1, progressSummary: {suspensionCount: 0}, nodes: [node], decks: [outgoing, incoming]};
+};
+const parkRows = [makeParkRow(parkedCase.before, 'PRIMING', false, false, false, 0, .2)];
+for (let wall = parkedCase.parked; wall < parkedCase.lastPark; wall += 140)
+  parkRows.push(makeParkRow(wall, 'READY', true, false, false, 1, .4 + (wall - parkedCase.parked) / 1000));
+parkRows.push(makeParkRow(parkedCase.lastPark, 'READY', true, false, false, 1, 5.9));
+const hiddenResume = parkedCase.resume
+  ? makeParkRow(parkedCase.resume, 'READY', false, false, false,
+    1 + parkedCase.frames.filter(wall => wall <= parkedCase.resume).length, .01) : null;
+if (hiddenResume) parkRows.push(hiddenResume);
+parkRows.push(makeParkRow(parkedCase.visible + 50, 'CROSSFADING', false, true, false, 3, .02));
+const firstVisibleRow = parkRows.at(-1), resumeRow = hiddenResume || firstVisibleRow;
+parkRows.push(makeParkRow(parkedCase.visible + 700, 'CROSSFADING', false, true, false, 3, .2));
+parkRows.push(makeParkRow(parkedCase.promoted, 'ACTIVE', false, true, true, 3, .3));
+result.progressSchema = 1; result.samples = []; result.prelude = {samples: parkRows};
+result.requestFailures = [{wall: parkedCase.error, url: parkedUrl, method: 'GET',
+  resourceType: 'other', failure: {errorText: 'cancelled'}}];
+'''
+
+
+PARKED_THEN_RETIRED_BLOB = r'''
+// Native run 42457345385 held-source timings: the later ordinary retirement
+// must not invalidate a separately proven earlier preparation/admission.
+globalThis.parkedCase = {id: 'loop-4', before: 23522, error: 23548, first: 23507,
+  parked: 23693, lastPark: 25749, frames: [25928, 25959],
+  visible: 25959, promoted: 27349};
+''' + PARKED_BLOB + r'''
+parkRows[0] = makeParkRow(parkedCase.before, 'READY', true, false, false, 1, .2);
+const retiredAt = 118092;
+result.events.push({type: 'resource-retired', role: 'deck', id: parkedCase.id,
+  url: parkedUrl, wall: retiredAt, readyState: 0, paused: true});
+result.consoleErrors.push({wall: 118161, url: parkedUrl,
+  message: 'Failed to load resource: The operation couldn’t be completed. (WebKitBlobResource error 1.)'});
+parkRows.push({wall: 118200, nodes: [], decks: []});
 '''
 
 
@@ -204,6 +289,135 @@ result.consoleErrors = [{wall: 12100, url: retiredUrl, message: 'A real script e
         self.assertTrue(summary['pass'], summary)
         self.assertEqual(len(summary['resourceErrors']['expectedAborts']), 1)
         self.assertEqual(summary['resourceErrors']['expectedAborts'][0]['lagMs'], 100)
+
+    def test_hidden_preparation_cancellation_requires_verified_same_source_admission(self):
+        cases = (
+            {'id': 'loop-2', 'before': 38178, 'error': 38504, 'first': 38429,
+             'parked': 38642, 'lastPark': 42006, 'resume': 42157, 'frames': [42163, 42196],
+             'visible': 42196, 'promoted': 43501},
+            {'id': 'loop-4', 'before': 8938, 'error': 9133, 'first': 9138,
+             'parked': 9143, 'lastPark': 14861, 'frames': [14939, 14973],
+             'visible': 14973, 'promoted': 16352},
+            {'id': 'loop-3', 'before': 19270, 'error': 19527, 'first': 19455,
+             'parked': 19664, 'lastPark': 23322, 'resume': 23538, 'frames': [23506, 23541],
+             'visible': 23542, 'promoted': 24960},
+        )
+        for case in cases:
+            with self.subTest(case=case['id']):
+                summary = classify_resources('globalThis.parkedCase = ' + json.dumps(case) + ';\n' + PARKED_BLOB)
+                self.assertTrue(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['recoveredReads'], [])
+                proof = summary['resourceErrors']['admittedPreparations'][0]
+                self.assertEqual(proof['id'], case['id'])
+                self.assertEqual(proof['deck'], 1)
+                self.assertEqual(proof['epoch'], 1)
+                self.assertEqual([frame['wall'] for frame in proof['frames']], case['frames'])
+                self.assertEqual(proof['promotedAt'], case['promoted'])
+
+    def test_proven_later_retirement_preserves_prior_preparation_admission(self):
+        summary = classify_resources(PARKED_THEN_RETIRED_BLOB)
+        self.assertTrue(summary['pass'], summary)
+        errors = summary['resourceErrors']
+        self.assertEqual(errors['recoveredReads'], [])
+        self.assertEqual(errors['expectedRetirements'], [{
+            'kind': 'consoleErrors', 'index': 0, 'url': 'blob:http://127.0.0.1/parked-loop-4',
+            'wall': 118161, 'role': 'deck', 'id': 'loop-4', 'retiredAt': 118092, 'lagMs': 69,
+        }])
+        proof = errors['admittedPreparations'][0]
+        self.assertEqual((proof['id'], proof['deck'], proof['epoch']), ('loop-4', 1, 1))
+        self.assertEqual(proof['bracket'], [23522, 23693])
+        self.assertEqual(proof['lastParkedAt'], 25749)
+        self.assertEqual([frame['wall'] for frame in proof['frames']], [25928, 25959])
+        self.assertEqual((proof['foregroundAt'], proof['promotedAt']), (25959, 27349))
+
+    def test_unproven_retirement_console_error_still_blocks_admission(self):
+        mutations = (
+            'result.events.length = 0;',
+            "result.events[0].url = 'blob:other';",
+            'result.events[0].wall = 118162;',
+            'result.events[0].wall = null;',
+            'result.events[0].readyState = 4;',
+            'result.events[0].paused = false;',
+            "result.events[0].type = 'resident';",
+            "result.events[0].role = 'unknown';",
+            "result.consoleErrors[0].message = 'Fatal network failure';",
+            'result.consoleErrors[0].wall = parkedCase.error;',
+            "parkRows.at(-1).decks = [{populated: true, active: false, src: parkedUrl}];",
+            "parkRows.at(-1).decks = [{populated: true, active: true, src: '', currentSrc: parkedUrl}];",
+            "result.consoleErrors.push({...result.consoleErrors[0], wall: parkedCase.error});",
+            "result.consoleErrors.push({...result.consoleErrors[0], message: 'Fatal decoder failure'});",
+            "result.httpErrors.push({wall: parkedCase.error, url: parkedUrl, status: 500});",
+            "parkRows[2].decks[1].nativeError = {code: 3};",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                summary = classify_resources(PARKED_THEN_RETIRED_BLOB + mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
+
+    def test_hidden_preparation_requires_every_ownership_parking_and_admission_fact(self):
+        mutations = (
+            'parkRows[1].decks[1].active = true;',
+            'parkRows[1].decks[1].weight = .01;',
+            'parkRows[1].decks[1].muted = false;',
+            'parkRows[1].decks[1].paused = false;',
+            'parkRows[1].decks[1].seeking = true;',
+            'parkRows[1].decks[1].ready = 2;',
+            "parkRows[1].nodes[0].phase = 'ACTIVE';",
+            'parkRows[1].nodes[0].busy = false;',
+            'parkRows[1].nodes[0].resting = true;',
+            'parkRows[1].decks[1].progress.foregroundSince = 1;',
+            'parkRows[1].decks[1].progress.maxGapMs = 100;',
+            '''parkRows.unshift(structuredClone(parkRows[0]));
+parkRows[0].wall -= 140; parkRows[0].decks[1].progress.foregroundSince = 1;''',
+            'parkRows[2].running = false;',
+            'parkRows[2].hidden = true;',
+            "parkRows[2].audioState = 'suspended';",
+            'parkRows[2].progressSummary.suspensionCount = 1;',
+            "parkRows[2].lastFailure = 'native failure';",
+            'parkRows[2].standbys = 2;',
+            "parkRows[2].decks[1].src = 'blob:other';",
+            'parkRows[2].decks[1].progress.epoch = 2;',
+            'parkRows[2].decks[1].deck = 0;',
+            'parkRows[2].decks[1].nativeError = {code: 3};',
+            "parkRows[2].decks[0].progress.url = 'blob:other';",
+            'parkRows[2].decks[0].progress.epoch = 2;',
+            'resumeRow.decks[0].current = 6;',
+            'firstVisibleRow.decks[1].progress.foregroundSince = parkedCase.frames[0];',
+            'resumeRow.decks[1].paused = true;',
+            'resumeRow.decks[1].seeking = true;',
+            'parkRows.at(-1).decks[1].active = false;',
+            'parkRows.at(-1).decks[1].progress.epoch = 2;',
+            'parkRows.at(-1).decks[1].progress.foreground = false;',
+            'parkRows.at(-1).decks[1].progress.running = false;',
+            'parkRows.forEach(row => {row.decks[0].decoded = .1;});',
+            '''parkRows.filter(row => row.decks[1].progress.foreground).forEach(row => {
+  const p = row.decks[1].progress; p.trace.pop(); p.changes = p.sourceChanges = 2;
+  p.lastChangeWall = parkedCase.frames[0]; p.mediaTime = 1 / 30;
+});''',
+            'parkRows.splice(-2);',
+            'parkRows.splice(3, 12);',
+            'parkRows[0].wall -= 1000;',
+            'delete result.progressSchema;',
+            "result.requestFailures[0].failure.errorText = 'network failed';",
+            "result.requestFailures[0].resourceType = 'fetch';",
+            "result.requestFailures[0].method = 'POST';",
+            "result.consoleErrors.push({wall: parkedCase.error, url: parkedUrl, message: 'decode failure'});",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                summary = classify_resources(PARKED_BLOB + mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors'].get('admittedPreparations', []), [])
+
+    def test_hidden_resume_cannot_delay_visibility_beyond_its_evidence_deadline(self):
+        # Two early decoded frames cannot justify a later visibility boundary.
+        case = {'id': 'loop-2', 'before': 38178, 'error': 38504, 'first': 38429,
+                'parked': 38642, 'lastPark': 42006, 'resume': 42157,
+                'frames': [42163, 42196], 'visible': 43007, 'promoted': 44312}
+        summary = classify_resources('globalThis.parkedCase = ' + json.dumps(case) + ';\n' + PARKED_BLOB)
+        self.assertFalse(summary['pass'], summary)
+        self.assertEqual(summary['resourceErrors']['admittedPreparations'], [])
 
     def test_unknown_http_request_failure_cannot_use_abort_classification(self):
         for mutation in (
@@ -329,6 +543,58 @@ result.samples.slice(800).forEach(row => {row.progressSummary.suspensionCount = 
         self.assertEqual([frame['wall'] for frame in frames], [12200, 12400])
         self.assertEqual([frame['origin'] for frame in frames], ['callback-trace'] * 2)
 
+    def test_recorded_prelude_trace_proves_same_source_read_recovery(self):
+        summary = classify_resources(PRELUDE_TRACE_RECOVERY)
+        self.assertTrue(summary['pass'], summary)
+        frames = summary['resourceErrors']['recoveredReads'][0]['frames']
+        self.assertEqual([frame['wall'] for frame in frames], [12200, 12400])
+        self.assertEqual([frame['origin'] for frame in frames], ['callback-trace'] * 2)
+
+    def test_prelude_recovery_rejects_wrong_late_or_invalid_source_evidence(self):
+        for mutation in (
+            "result.prelude.samples[0].decks[0].currentSrc = 'blob:other';",
+            'callbackProof.trace[1].wall = 13200; callbackProof.lastChangeWall = 13200;',
+            'callbackProof.trace[1].mediaTime = .6; callbackProof.mediaTime = .6;',
+            'callbackProof.epoch = 0;',
+            'callbackProof.supported = false;',
+            'result.prelude.samples[0].decks[0].nativeError = {code: 3};',
+            '''result.samples[0].decks = [{...result.prelude.samples[0].decks[0],
+              progress: {...callbackProof, epoch: 2}}];''',
+        ):
+            with self.subTest(mutation=mutation):
+                summary = classify_resources(PRELUDE_TRACE_RECOVERY + mutation)
+                self.assertFalse(summary['pass'], summary)
+                self.assertEqual(summary['resourceErrors']['recoveredReads'], [])
+
+    def test_prelude_resource_samples_do_not_mutate_or_extend_sustained_analysis(self):
+        program = FIXTURE + PRELUDE_SAMPLED_RECOVERY + r'''
+const assert = require('node:assert/strict');
+const samples = result.samples, before = JSON.stringify(result);
+const summary = analyse(result);
+assert.equal(result.samples, samples);
+assert.equal(JSON.stringify(result), before);
+process.stdout.write(JSON.stringify(summary));
+'''
+        completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+                                   capture_output=True, text=True, timeout=15)
+        summary = json.loads(completed.stdout)
+        self.assertTrue(summary['pass'], summary)
+        self.assertEqual(summary['samples'], 1300)
+        frames = summary['resourceErrors']['recoveredReads'][0]['frames']
+        self.assertEqual([frame['wall'] for frame in frames], [12180, 12320])
+        self.assert_refused(PRELUDE_SAMPLED_RECOVERY + '''
+result.samples.slice(800, 840).forEach(row => {row.nodes[0].decoded = .5;});
+''', 'decodedProgress')
+        self.assert_refused(PRELUDE_SAMPLED_RECOVERY + 'result.elapsedMs = 1000;', 'fullDuration')
+
+    def test_prelude_readmission_cannot_be_hidden_by_retirement_classification(self):
+        summary = classify_resources(RETIRED_BLOB + '''
+result.prelude = {samples: [{wall: 12050, decks: [{active: true, populated: true,
+  src: retiredUrl, currentSrc: retiredUrl}]}]};
+''')
+        self.assertFalse(summary['pass'], summary)
+        self.assertEqual(summary['resourceErrors']['expectedRetirements'], [])
+
     def test_retired_bounded_trace_can_prove_same_source_recovery(self):
         summary = classify_resources(TRACE_RECOVERY + '''
 result.samples[100].decks = [];
@@ -400,6 +666,59 @@ const {proofJournal} = require(process.argv[1]);
     write(_, __, callback) {callback();}, final(callback) {callback(new Error('flush failed'));}}));
   await assert.rejects(closeFailure.close(), /flush failed/);
 })().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+        subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
+
+    def test_dense_prelude_metadata_is_bounded_and_reconstructs_all_raw_evidence(self):
+        program = r'''
+const assert = require('node:assert/strict');
+const {Writable} = require('node:stream');
+const {proofJournal, preludeJournalMetadata} = require(process.argv[1]);
+const rows = Array.from({length: 40}, (_, index) => ({wall: 1000 + index * 137,
+  incoming: {id: 'loop-3', deck: 1, item: 'clip', sha: 'pinned', callbacks: index + 3,
+    progress: {url: 'blob:incoming', epoch: 2, sourceChanges: index + 3}}, tracePayload: 'x'.repeat(35000)}));
+const prelude = {scope: 'fixture', samples: [{wall: 1}], before: {wall: 2},
+  incomingObservations: rows, siblingOverlap: rows.slice(2)};
+const before = JSON.stringify(prelude), legacy = {samples: prelude.samples.length,
+  incomingObservations: rows, siblingOverlap: rows.slice(2)};
+assert.ok(Buffer.byteLength(JSON.stringify(legacy)) > 2 * 1024 * 1024);
+(async () => {
+  const records = [], journal = proofJournal('', '', () => new Writable({write(chunk, _, done) {
+    records.push(JSON.parse(chunk)); done(); }}));
+  for (const row of rows) await journal.append('diagnostic-sibling-incoming', row);
+  await journal.append('diagnostic-prelude', preludeJournalMetadata(prelude)); await journal.close();
+  const metadata = records.at(-1).value, raw = records.slice(0, -1).map(record => record.value);
+  assert.equal(metadata.incomingObservations.journalType, 'diagnostic-sibling-incoming');
+  assert.equal(metadata.incomingObservations.count, 40);
+  assert.equal(metadata.siblingOverlap.source, 'incomingObservations');
+  assert.equal(metadata.siblingOverlap.count, 38);
+  assert.deepEqual(raw, rows);
+  assert.deepEqual(metadata.siblingOverlap.indices.map(index => raw[index]), prelude.siblingOverlap);
+  assert.equal(metadata.samples, 1);assert.deepEqual(metadata.before, {wall: 2});
+  assert.ok(Buffer.byteLength(JSON.stringify(records.at(-1))) < 10000);
+  assert.equal(JSON.stringify(prelude), before);
+  // The reference metadata must also work with deserialized final JSON.
+  assert.deepEqual(preludeJournalMetadata(JSON.parse(before)), metadata);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+        subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
+
+    def test_prelude_metadata_rejects_unwitnessed_or_changed_source_rows(self):
+        program = r'''
+const assert = require('node:assert/strict');
+const {preludeJournalMetadata} = require(process.argv[1]);
+const row = {wall: 100, incoming: {id: 'loop-3', deck: 1, item: 'clip', sha: 'hash',
+  callbacks: 4, progress: {url: 'blob:one', epoch: 2, sourceChanges: 3}}};
+const prelude = {samples: [], incomingObservations: [row], siblingOverlap: [row]};
+for (const change of [copy => {copy.incoming.progress.epoch++;}, copy => {copy.incoming.sha = 'other';},
+  copy => {copy.incoming.callbacks++;}, copy => {copy.wall++;}, copy => {copy.extra = 'not in raw';}]) {
+  const changed = structuredClone(row); change(changed);
+  assert.throws(() => preludeJournalMetadata({...prelude, siblingOverlap: [changed]}), /witnessed|match/);
+}
+assert.throws(() => preludeJournalMetadata({...prelude, siblingOverlap: [row, row]}), /order|duplicate/);
+assert.throws(() => preludeJournalMetadata({...prelude, incomingObservations: []}), /witnessed/);
+const ordinary = {samples: [{wall: 1}], before: {wall: 2}, after: {wall: 3}};
+assert.deepEqual(preludeJournalMetadata(ordinary), {samples: 1, before: {wall: 2}, after: {wall: 3}});
 '''
         subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
 

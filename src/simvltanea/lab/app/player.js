@@ -244,7 +244,9 @@ export class Player {
       if (!r) continue;
       for (let si = 0; si < 2; si++) {
         const s = p.slots[si];
-        if (!s.rec || (si !== p.active && !s.token)) continue;
+        // A cancelled load token also marks the still-visible outgoing fade.
+        // Keep fitting that deck until its normal retirement removes .on.
+        if (!s.rec || (si !== p.active && !s.token && !s.video.classList.contains('on'))) continue;
         const jx = axis === 'columns' ? jAmp : 0, jy = axis === 'rows' ? jAmp : 0;
         const key = `${p.k}:${s.rec.id}`;
         const ctx = { srcAspect: s.vw / s.vh, cellAspect: r.w / r.h, baseZoom: zoom, minZoom: coverZoom(s.vw, s.vh, r.w, r.h, jx, jy) };

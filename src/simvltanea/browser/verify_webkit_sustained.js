@@ -1,6 +1,6 @@
 /* Standalone macOS verification. Never loaded by Studio or substituted for its runtime.
  * NODE_PATH must point to an isolated playwright@1.65.0 installation.
- * Usage: node src/simvltanea/browser/verify_webkit_sustained.js SITE OUTPUT
+ * Usage: node src/simvltanea/browser/verify_webkit_sustained.js SITE OUTPUT [--held-source-diagnostic] [--seek-cohort-diagnostic]
  */
 'use strict';
 
@@ -17,8 +17,9 @@ const sha256 = file => crypto.createHash('sha256').update(fs.readFileSync(file))
 const save = (out, name, value) => fs.writeFileSync(path.join(out, name), JSON.stringify(value, null, 2) + '\n');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
-// Read-only observations: no init scripts, graph probes, pixel reads, retained
-// media references or prototype patches are installed in the sustained runs.
+// Read-only observations. The three original phases install no init scripts,
+// graph probes, pixel reads, retained media references or prototype patches.
+// The separately named seek-cohort experiment declares its setup adapter.
 function sample(includeTrace = false) {
   const runtime = globalThis.compositionRuntime, wall = performance.now();
   const decks = [...runtime.slots.values()].flatMap(node => node.decks.map((deck, index) => {
@@ -127,8 +128,123 @@ function traceFrames(result, url) {
     invalid, nativeFailure, ambiguous: owners.size > 1};
 }
 
+function admittedPreparation(result, error, expectedRetirements) {
+  // A hidden preparation can cancel an internal read just before being parked.
+  // This proves a later successful admission, never that pause caused the error.
+  // Generic active-source recovery retains its separate 1,000 ms deadline.
+  // Console records are classified first. A positively proven disposal of this
+  // URL does not invalidate its earlier admission; every other console error does.
+  if (result.progressSchema !== 1 || error.method !== 'GET' || error.resourceType !== 'other' ||
+      result.errors?.length || (result.consoleErrors || []).some((row, index) => row.url === error.url &&
+        !expectedRetirements.some(record => record.kind === 'consoleErrors' && record.index === index && record.url === row.url)) ||
+      (result.httpErrors || []).some(row => row.url === error.url)) return null;
+  const rows = result.samples, url = error.url;
+  const afterIndex = rows.findIndex(row => row.wall >= error.wall);
+  if (afterIndex < 1) return null;
+  const before = rows[afterIndex - 1], after = rows[afterIndex];
+  if (after.wall - before.wall > 1000 || before.wall > error.wall) return null;
+  const present = row => (row.decks || []).filter(deck => deck.populated && deck.src === url);
+  const first = present(after);
+  if (first.length !== 1) return null;
+  const identity = first[0], epoch = identity.progress?.epoch;
+  const context = row => {
+    const found = present(row), deck = found[0], progress = deck?.progress;
+    if (found.length !== 1 || deck.id !== identity.id || deck.deck !== identity.deck ||
+        progress?.url !== url || progress.epoch !== epoch || !validProgress(progress, row.wall) ||
+        deck.nativeError || row.running !== true || row.hidden !== false || row.audioState !== 'running' ||
+        row.lastFailure || row.progressSummary?.suspensionCount !== 0) return null;
+    const node = (row.nodes || []).find(node => node.id === identity.id);
+    if (!node || node.nativeError || node.paused || node.resting) return null;
+    return {row, deck, progress, node};
+  };
+  const hidden = state => state && !state.deck.active && state.deck.weight === 0 && state.deck.muted === true &&
+    state.row.standbys === 1 && state.node.busy === true && state.node.deck !== identity.deck &&
+    state.progress.foreground === false && state.progress.running === false &&
+    state.progress.foregroundSince === null && state.progress.lastForegroundChangeWall === null &&
+    state.progress.maxGapMs === 0 && state.progress.currentGapMs === 0;
+  const parked = state => hidden(state) && state.node.phase === 'READY' && state.deck.paused === true &&
+    state.deck.seeking === false && state.deck.ready >= 3 && state.deck.currentSrc === url &&
+    state.progress.sourceChanges >= 1;
+  const prior = context(before), initial = context(after);
+  if (!hidden(prior) || !['PRIMING', 'READY'].includes(prior.node.phase) || !parked(initial) ||
+      (prior.deck.currentSrc !== url && !(prior.node.phase === 'PRIMING' &&
+        prior.deck.currentSrc === '' && prior.progress.sourceChanges === 0))) return null;
+  // A previously visible source cannot be relabelled as a new preparation.
+  if (rows.slice(0, afterIndex).some(row => present(row).some(deck => deck.active || deck.weight > 0 ||
+      deck.progress?.foreground || deck.progress?.foregroundSince != null))) return null;
+  const outgoing = state => {
+    const deck = state.row.decks.find(deck => deck.id === identity.id && deck.deck === state.node.deck && deck.active);
+    return deck && deck.deck !== identity.deck && deck.populated && !deck.paused && !deck.nativeError &&
+      deck.src === deck.currentSrc && validProgress(deck.progress, state.row.wall, true) &&
+      deck.progress.url === deck.src ? deck : null;
+  };
+  const original = outgoing(prior);
+  if (!original) return null;
+  const sameOutgoing = state => {
+    const deck = outgoing(state);
+    return deck && deck.deck === original.deck && deck.src === original.src &&
+      deck.progress.epoch === original.progress.epoch ? deck : null;
+  };
+  let lastPark = initial, old = sameOutgoing(initial), moved = false, resumed, resumedIndex;
+  if (!old) return null;
+  for (let index = afterIndex + 1; index < rows.length; index++) {
+    if (rows[index].wall <= rows[index - 1].wall || rows[index].wall - rows[index - 1].wall > 1000) return null;
+    const state = context(rows[index]), resident = state && sameOutgoing(state);
+    if (!state || !resident) return null;
+    if (resident.progress.sourceChanges > old.progress.sourceChanges && resident.decoded !== old.decoded) moved = true;
+    if (!state.deck.paused) { resumed = state; resumedIndex = index; break; }
+    if (!parked(state) || state.progress.sourceChanges !== initial.progress.sourceChanges ||
+        state.progress.mediaTime !== initial.progress.mediaTime) return null;
+    lastPark = state; old = resident;
+  }
+  if (!resumed || !moved || resumed.deck.seeking || resumed.deck.ready < 3 || resumed.deck.currentSrc !== url ||
+      resumed.deck.active || resumed.node.busy !== true || !['READY', 'CROSSFADING'].includes(resumed.node.phase) ||
+      !(sameOutgoing(resumed).current + .05 < old.current)) return null;
+  // The first resumed observation may still be hidden while fresh frames are
+  // arriving. Preserve its seam witness, then require continuous owned evidence
+  // through the first visibility boundary within the same 1,000 ms budget.
+  let visible = resumed, visibleIndex = resumedIndex;
+  while (!visible.progress.foreground) {
+    if (!hidden(visible) || visible.deck.paused || visible.deck.seeking || visible.deck.ready < 3 ||
+        visible.row.wall - lastPark.row.wall > 1000 || ++visibleIndex >= rows.length ||
+        rows[visibleIndex].wall <= visible.row.wall || rows[visibleIndex].wall - visible.row.wall > 1000) return null;
+    visible = context(rows[visibleIndex]);
+    if (!visible || !sameOutgoing(visible)) return null;
+  }
+  const foregroundAt = visible.progress.foregroundSince, trace = traceFrames(result, url);
+  if (!Number.isFinite(foregroundAt) || foregroundAt <= lastPark.row.wall || foregroundAt > lastPark.row.wall + 1000 ||
+      foregroundAt > visible.row.wall ||
+      trace.invalid || trace.nativeFailure || trace.ambiguous) return null;
+  const points = [...new Map(trace.frames.filter(frame => frame.id === identity.id && frame.deck === identity.deck &&
+    frame.epoch === epoch && frame.wall > lastPark.row.wall && frame.wall <= lastPark.row.wall + 1000 &&
+    frame.wall <= foregroundAt && frame.changes > lastPark.progress.changes).map(frame => [frame.changes, frame])).values()]
+    .sort((a, b) => a.wall - b.wall);
+  const firstFrame = points[0], secondFrame = points.find(frame => firstFrame && frame.wall > firstFrame.wall &&
+    frame.changes > firstFrame.changes && frame.decoded !== firstFrame.decoded);
+  if (!secondFrame) return null;
+  for (let index = visibleIndex; index < rows.length; index++) {
+    if (index > visibleIndex && (rows[index].wall <= rows[index - 1].wall || rows[index].wall - rows[index - 1].wall > 1000)) return null;
+    const state = context(rows[index]);
+    if (!state || state.deck.paused || state.deck.seeking || state.deck.currentSrc !== url || state.deck.ready < 3 ||
+        state.progress.foregroundSince !== foregroundAt || !validProgress(state.progress, state.row.wall, true)) return null;
+    if (state.deck.active) {
+      if (state.node.deck !== identity.deck || state.node.busy || state.node.phase !== 'ACTIVE' ||
+          state.node.progress?.url !== url || state.node.progress?.epoch !== epoch) return null;
+      return {id: identity.id, deck: identity.deck, epoch, bracket: [before.wall, after.wall],
+        parkedAt: after.wall, lastParkedAt: lastPark.row.wall, foregroundAt, promotedAt: state.row.wall,
+        frames: [firstFrame, secondFrame], outgoing: {deck: original.deck, url: original.src, epoch: original.progress.epoch}};
+    }
+    if (!sameOutgoing(state) || !state.node.busy || !['READY', 'CROSSFADING'].includes(state.node.phase)) return null;
+  }
+  return null;
+}
+
 function classifyResourceErrors(result) {
-  const classified = {expectedRetirements: [], expectedAborts: [], recoveredReads: [], unexpected: []};
+  // Prelude reads belong to the same document and native source lifetimes.
+  // Include them only in resource evidence, never in sustained timing/progress.
+  const observations = [...(result.prelude?.samples || []), ...(result.samples || [])];
+  const evidence = {...result, samples: observations};
+  const classified = {expectedRetirements: [], expectedAborts: [], recoveredReads: [], admittedPreparations: [], unexpected: []};
   const nativeBlobError = /^The operation couldn[’']t be completed\. \(WebKitBlobResource error 1\.\)$/;
   for (const kind of ['consoleErrors', 'requestFailures']) {
     for (const [index, error] of (result[kind] || []).entries()) {
@@ -155,7 +271,7 @@ function classifyResourceErrors(result) {
         // not runner receipt latency, determine whether this is the retired read.
         // Reject re-admission anywhere after disposal, including after the error.
         // A cleared inactive deck may retain a stale native currentSrc value.
-        return !(result.samples || []).some(row => row.wall >= event.wall &&
+        return !observations.some(row => row.wall >= event.wall &&
           (row.decks || []).some(deck => deck.populated && (deck.src === url || (deck.active && deck.currentSrc === url))));
       });
       if (retired) {
@@ -168,14 +284,14 @@ function classifyResourceErrors(result) {
       // or a future retirement are insufficient. Console failures never qualify.
       if (blob && cancelled) {
         const frames = [], previous = new Map();
-        for (const row of result.samples || []) if (row.wall >= wall && row.wall <= wall + 1000) {
+        for (const row of observations) if (row.wall >= wall && row.wall <= wall + 1000) {
           for (const deck of row.decks || []) if (deck.src === url && deck.currentSrc === url) {
             if (result.progressSchema === 1 && (!validProgress(deck.progress, row.wall) || deck.progress.url !== url)) continue;
             frames.push({wall: row.wall, id: deck.id, deck: deck.deck, epoch: deck.progress?.epoch,
               decoded: deck.decoded, callbacks: deck.callbacks, nativeError: deck.nativeError});
           }
         }
-        const trace = traceFrames(result, url);
+        const trace = traceFrames(evidence, url);
         frames.push(...trace.frames.filter(frame => frame.wall >= wall && frame.wall <= wall + 1000));
         frames.sort((a, b) => a.wall - b.wall);
         if (!trace.invalid && !trace.nativeFailure && !trace.ambiguous && frames.length && frames.every(frame => !frame.nativeError)) {
@@ -194,6 +310,8 @@ function classifyResourceErrors(result) {
           if (proof) { classified.recoveredReads.push({...reference, frames: proof}); continue; }
         }
       }
+      const admitted = blob && cancelled && admittedPreparation(evidence, error, classified.expectedRetirements);
+      if (admitted) { classified.admittedPreparations.push({...reference, ...admitted}); continue; }
       classified.unexpected.push(reference);
     }
   }
@@ -275,7 +393,7 @@ function progressCoverage(result) {
 }
 
 function analyse(result) {
-  const trackers = new Map(), restTrackers = new Map(), births = new Set(), changedSlots = new Set(), holds = [];
+  const trackers = new Map(), restTrackers = new Map(), residents = new Map(), births = new Set(), changedSlots = new Set(), holds = [];
   const coverage = progressCoverage(result); let previousWall;
   const expectedSlots = (result.samples[0]?.nodes || []).map(node => node.id).sort().join(',');
   let jointMs = 0, decodedMs = 0, wraps = 0, populated = 0, playing = 0, standbys = 0;
@@ -297,7 +415,12 @@ function analyse(result) {
     for (const node of row.nodes) {
       seen.add(node.id);
       const identity = JSON.stringify([node.id, node.sha, node.deck, node.birth]);
-      births.add(identity);
+      // A cached-source decoder repair preserves the resident's lifetime.
+      // Keep physical frame ownership separate from logical succession.
+      const resident = JSON.stringify([node.id, node.item, node.sha, node.birth]);
+      births.add(resident);
+      if (residents.has(node.id) && residents.get(node.id) !== resident) changedSlots.add(node.id);
+      residents.set(node.id, resident);
       if (node.resting && row.running) {
         restingSamples++;
         if (node.paused) restingPaused++;
@@ -316,7 +439,6 @@ function analyse(result) {
       if (!Number.isFinite(node.current) || !Number.isFinite(node.decoded)) invalidMedia++;
       if (row.running && !node.resting && node.paused) unexpectedPaused++;
       const old = trackers.get(node.id);
-      if (old && old.identity !== identity) changedSlots.add(node.id);
       const eligible = row.running && !row.hidden && !node.paused;
       if (!old || old.identity !== identity || !eligible || !old.eligible || (unobserved && !native)) {
         trackers.set(node.id, {identity, eligible, current: node.current, decoded: node.decoded,
@@ -375,12 +497,16 @@ function analyse(result) {
     unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors, resourceErrors};
 }
 
-function staticServer(site) {
+function staticServer(site, manifestOverride = null) {
   const mime = {'.html': 'text/html', '.js': 'application/javascript', '.json': 'application/json', '.mp4': 'video/mp4'};
   return http.createServer((request, response) => {
     let file;
     try {
       const name = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
+      if (name === '/library/manifest.json' && manifestOverride) {
+        response.writeHead(200, {'Content-Type': 'application/json', 'Content-Length': manifestOverride.length});
+        response.end(manifestOverride); return;
+      }
       file = path.resolve(site, '.' + (name === '/' ? '/index.html' : name));
     } catch (_) { response.writeHead(400).end(); return; }
     if (!file.startsWith(site + path.sep)) { response.writeHead(403).end(); return; }
@@ -477,9 +603,37 @@ function proofJournal(out, name, createStream = fs.createWriteStream) {
   };
 }
 
-async function sustained(webkit, device, base, out, name, query) {
+function preludeJournalMetadata(prelude) {
+  const {samples, ...metadata} = prelude;
+  if (metadata.incomingObservations !== undefined || metadata.siblingOverlap !== undefined) {
+    const raw = metadata.incomingObservations, overlap = metadata.siblingOverlap;
+    assert(Array.isArray(raw) && Array.isArray(overlap), 'Diagnostic incoming evidence arrays are missing');
+    const identity = row => JSON.stringify([row?.wall, row?.incoming?.id, row?.incoming?.deck,
+      row?.incoming?.item, row?.incoming?.sha, row?.incoming?.progress?.url,
+      row?.incoming?.progress?.epoch, row?.incoming?.progress?.sourceChanges, row?.incoming?.callbacks]);
+    const observed = new Map(raw.map((row, index) => [identity(row), index]));
+    assert(observed.size === raw.length, 'Diagnostic incoming journal contains duplicate observations');
+    let previous = -1;
+    const indices = overlap.map(row => {
+      const index = observed.get(identity(row));
+      assert(index !== undefined, 'Qualified overlap is not witnessed in the incoming journal');
+      assert(index > previous, 'Qualified overlap journal order is duplicated or reversed');
+      assert(raw[index] === row || JSON.stringify(raw[index]) === JSON.stringify(row),
+        'Qualified overlap does not match the witnessed incoming observation');
+      previous = index; return index;
+    });
+    // Every full row already streams as its own bounded journal record and
+    // remains in final JSON. Keep source-checked references here instead of
+    // duplicating several megabytes of traces in one metadata record.
+    metadata.incomingObservations = {count: raw.length, journalType: 'diagnostic-sibling-incoming'};
+    metadata.siblingOverlap = {count: overlap.length, source: 'incomingObservations', indices};
+  }
+  return {...metadata, samples: samples.length};
+}
+
+async function sustained(webkit, device, base, out, name, query, diagnostic = null) {
   const result = {name, progressSchema: 1, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
-  let browser; const journal = proofJournal(out, name), errorOffsets = {};
+  let browser, page; const journal = proofJournal(out, name), errorOffsets = {};
   const journalErrors = async () => {
     for (const kind of ['errors', 'consoleErrors', 'httpErrors', 'requestFailures']) {
       for (let index = errorOffsets[kind] || 0; index < result[kind].length; index++)
@@ -490,14 +644,20 @@ async function sustained(webkit, device, base, out, name, query) {
   try {
     await journal.append('run', {name, progressSchema: result.progressSchema, requestedUrl: result.requestedUrl});
     browser = await webkit.launch({headless: true}); result.browserVersion = browser.version();
-    const context = await browser.newContext(device), page = await context.newPage();
+    const context = await browser.newContext(device); page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
+    if (diagnostic?.initialize) await diagnostic.initialize(page, result, diagnostic.options);
     const initialAt = performance.now();
     result.phase = 'navigation';
     await page.goto(result.requestedUrl, {waitUntil: 'domcontentloaded'}); await documentClock(page, result); await ready(page);
     result.initialSeconds = (performance.now() - initialAt) / 1000;
     result.phase = 'sound-unlock'; await click(page, '#speaker');
     await page.waitForFunction(() => compositionRuntime.audio.context?.state === 'running' && SimvltaneaStudio.snapshot().sound === 'on');
+    if (diagnostic) {
+      result.phase = 'controlled-diagnostic-prelude'; result.prelude = {};
+      await diagnostic.prepare(page, {sample, click, ready, pause, journal}, diagnostic.targets, result.prelude, diagnostic.options);
+      await journal.append('diagnostic-prelude', preludeJournalMetadata(result.prelude));
+    }
     result.actualUrl = page.url(); result.initialStudio = await page.evaluate(() => SimvltaneaStudio.snapshot());
     result.phase = 'sustained';
     const began = performance.now(); let nextCoarse = 0, nextReport = 20000;
@@ -525,13 +685,32 @@ async function sustained(webkit, device, base, out, name, query) {
     result.completed = true;
   } catch (error) { result.failure = String(error.stack || error); }
   finally {
+    if (diagnostic?.finalize && page) {
+      try {
+        await diagnostic.finalize(page, result);
+        result.events = await page.evaluate(() => compositionRuntime.events);
+        await journal.append('diagnostic-final', {strategyFinal: result.strategyFinal, events: result.events});
+      } catch (error) { result.finalizeFailure = String(error.stack || error); }
+    }
     result.phase = 'closing';
     try { if (browser) await browser.close(); } catch (error) { result.failure = String(error.stack || error); }
     try { await journalErrors(); } catch (error) { result.failure = String(error.stack || error); }
     try { await journal.close(); } catch (error) { result.failure = String(error.stack || error); }
   }
-  result.summary = analyse(result); save(out, name + '.json', result);
-  console.log(JSON.stringify({name, ...result.summary})); return result.summary;
+  result.summary = analyse(result);
+  if (diagnostic?.controlledVerdict) {
+    const coverage = diagnostic.coverage(result, diagnostic.targets);
+    coverage.interventions = diagnostic.interventions(result, diagnostic.targets);
+    coverage.checks.strategiesMatch = coverage.checks.strategiesMatch && coverage.interventions.pass && !result.finalizeFailure;
+    coverage.pass = Object.values(coverage.checks).every(value => value === true);
+    result.controlledCohort = diagnostic.controlledVerdict(result.summary, coverage);
+  } else if (diagnostic) {
+    result.summary.sourceCoverage = diagnostic.coverage(result, diagnostic.targets);
+    if (!result.summary.sourceCoverage.pass) { result.summary.pass = false; result.summary.verdict = 'FAIL'; }
+  }
+  save(out, name + '.json', result);
+  const reported = {...result.summary, ...(result.controlledCohort ? {controlledCohort: result.controlledCohort} : {})};
+  console.log(JSON.stringify({name, ...reported})); return reported;
 }
 
 async function audioProof(webkit, out) {
@@ -658,21 +837,27 @@ async function controls(webkit, device, base, out) {
 async function main() {
   const site = path.resolve(process.argv[2] || 'var/site/macos-webkit');
   const out = path.resolve(process.argv[3] || 'var/proofs/macos-webkit');
+  const extra = process.argv.slice(4), heldDiagnostic = extra.includes('--held-source-diagnostic');
+  const seekDiagnostic = extra.includes('--seek-cohort-diagnostic');
   fs.mkdirSync(out, {recursive: true});
   const receipt = {startedAtUtc: new Date().toISOString(), platform: process.platform, arch: process.arch,
     scope: 'macOS WebKit with iPhone viewport; Apple desktop media backend, not a physical iPhone or true-peak proof',
     durationPerBaselineMs: DURATION_MS, sampleIntervalMs: SAMPLE_MS, maximumHoldMs: MAX_HOLD_MS,
     observation: 'Sustained phases only read native/app metadata. Controls and audio probes run afterward in separate browsers.',
     budgetScope: 'Sampled session decks and application preparation leases, not measured hardware decoder pipelines'};
-  let server;
+  let server, diagnosticServer, seekServer;
   try {
     assert(process.platform === 'darwin', 'This verification requires macOS; no alternative backend is allowed');
+    assert(extra.every(arg => ['--held-source-diagnostic', '--seek-cohort-diagnostic'].includes(arg)), 'Unknown verification argument');
+    assert(!seekDiagnostic || heldDiagnostic, 'The paired experiment requires all three original phases');
     receipt.head = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
     receipt.gitStatus = execFileSync('git', ['status', '--short'], {encoding: 'utf8'});
     assert(!receipt.gitStatus, 'Checked-out source is dirty');
     receipt.os = execFileSync('sw_vers', {encoding: 'utf8'}).trim();
     receipt.stage = site;
-    receipt.sha256 = Object.fromEntries(['index.html', 'runtime.js', 'studio.js', 'compiler.js', 'layouts.json', 'library/manifest.json']
+    receipt.sha256 = Object.fromEntries(['index.html', 'runtime.js', 'studio.js', 'compiler.js', 'layouts.json',
+      'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js',
+      'lab_compiler.js', 'lab_layouts.js', 'library/manifest.json']
       .map(name => [name, sha256(path.join(site, name))]));
     receipt.audioSourceSha256 = sha256(path.join(__dirname, 'browser.audio.js'));
     receipt.libraryBuild = 'python3 -m tools.publishing.build_studio_site, checked-out pinned defaults';
@@ -692,8 +877,56 @@ async function main() {
     receipt.controls = await controls(webkit, device, base, out);
     receipt.audio = await audioProof(webkit, out);
     receipt.pass = receipt.seeded.pass && receipt.fresh.pass && receipt.regimeCoverage.pass && receipt.controls.pass && receipt.audio.pass;
+    if (heldDiagnostic) {
+      const diagnostic = require('./verify_webkit_held_sources.js');
+      assert(receipt.sha256['library/manifest.json'] === diagnostic.ORIGIN.sourceManifestSha256,
+        'Diagnostic source manifest differs from the archived failing run');
+      const fixture = diagnostic.buildManifest(JSON.parse(fs.readFileSync(path.join(site, 'library/manifest.json'), 'utf8')),
+        file => fs.readFileSync(path.join(site, 'library', file)));
+      save(out, 'held-source-manifest.json', fixture.manifest);
+      save(out, 'held-source-origin.json', {origin: diagnostic.ORIGIN, targets: fixture.targets, query: fixture.query,
+        helperSha256: sha256(path.join(__dirname, 'verify_webkit_held_sources.js')),
+        subsetSha256: sha256(path.join(out, 'held-source-manifest.json'))});
+      diagnosticServer = staticServer(site, fs.readFileSync(path.join(out, 'held-source-manifest.json')));
+      await new Promise(resolve => diagnosticServer.listen(0, '127.0.0.1', resolve));
+      const diagnosticBase = `http://127.0.0.1:${diagnosticServer.address().port}/`;
+      receipt.heldSources = await sustained(webkit, device, diagnosticBase, out, 'held-sources', fixture.query,
+        {...diagnostic, targets: fixture.targets});
+      receipt.pass = receipt.pass && receipt.heldSources.pass;
+    }
+    if (seekDiagnostic) {
+      const diagnostic = require('./verify_webkit_seek_cohort.js'), adapter = require('./verify_webkit_seek_adapter.js');
+      assert(receipt.sha256['library/manifest.json'] === diagnostic.ORIGIN.sourceManifestSha256,
+        'Seek cohort source manifest differs from the archived failing run');
+      const fixture = diagnostic.buildManifest(JSON.parse(fs.readFileSync(path.join(site, 'library/manifest.json'), 'utf8')),
+        file => fs.readFileSync(path.join(site, 'library', file)));
+      save(out, 'seek-cohort-manifest.json', fixture.manifest);
+      const manifestSha256 = sha256(path.join(out, 'seek-cohort-manifest.json'));
+      receipt.seekCohort = {origin: diagnostic.ORIGIN, targets: fixture.targets, query: fixture.query,
+        helperSha256: sha256(path.join(__dirname, 'verify_webkit_seek_cohort.js')),
+        adapterSha256: sha256(path.join(__dirname, 'verify_webkit_seek_adapter.js')),
+        subsetSha256: manifestSha256, durationPerArmMs: DURATION_MS, maximumHoldMs: MAX_HOLD_MS,
+        control: {path: 'seek-cohort-control.json', pauseBeforeSeek: false, required: false},
+        candidate: {path: 'seek-cohort-candidate.json', pauseBeforeSeek: true, required: true},
+        scope: 'Identical pinned source setup in Hold with the same production standby rescue enabled in both arms; '
+          + 'only nativeLoopSeekPauseBeforeSeek differs within that composed recovery path. '
+          + 'Control is diagnostic; candidate controlled verdict and all original phase verdicts are required. '
+          + 'Raw analyse verdicts remain visible; only natural succession is N/A for the separate controlled verdict.'};
+      save(out, 'seek-cohort-origin.json', receipt.seekCohort);
+      seekServer = staticServer(site, fs.readFileSync(path.join(out, 'seek-cohort-manifest.json')));
+      await new Promise(resolve => seekServer.listen(0, '127.0.0.1', resolve));
+      const seekBase = `http://127.0.0.1:${seekServer.address().port}/`;
+      for (const arm of ['control', 'candidate']) {
+        const options = {manifestSha256, pauseBeforeSeek: arm === 'candidate'};
+        receipt.seekCohort[arm].result = await sustained(webkit, device, seekBase, out, 'seek-cohort-' + arm, fixture.query,
+          {...diagnostic, ...adapter, targets: fixture.targets, options});
+      }
+      receipt.pass = receipt.pass && receipt.seekCohort.candidate.result.controlledCohort.pass;
+    }
   } catch (error) { receipt.pass = false; receipt.failure = String(error.stack || error); }
   finally {
+    if (seekServer) { seekServer.closeAllConnections(); await new Promise(resolve => seekServer.close(resolve)); }
+    if (diagnosticServer) { diagnosticServer.closeAllConnections(); await new Promise(resolve => diagnosticServer.close(resolve)); }
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
     receipt.finishedAtUtc = new Date().toISOString(); save(out, 'receipt.json', receipt);
     console.log(JSON.stringify({pass: receipt.pass, head: receipt.head, receipt: path.join(out, 'receipt.json')}));
@@ -702,4 +935,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = {analyse, classifyResourceErrors, proofJournal};
+module.exports = {analyse, classifyResourceErrors, proofJournal, preludeJournalMetadata, sample, staticServer, ready, click};

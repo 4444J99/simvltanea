@@ -74,6 +74,80 @@ def test_orientation_follows_viewport_and_resizes_live(make_lab):
         check_tiling(geo)
 
 
+def test_resize_refits_visible_outgoing_video_until_fade_retires(make_lab):
+    lab = make_lab((801, 800))
+    lab.open(values={"layout.panels": 6, "source.seed": 123,
+                     "timing.hold_min": 60, "timing.hold_max": 60,
+                     "framing.mode": "center", "zoom.manual": 1})
+    # Use a real portrait source so its old column fit cannot cover an 800px row.
+    lab.js("""async () => {
+      const player = __lab.player, panel = player.panels[3];
+      const ci = player.records.findIndex(r => r !== panel.rec && r.width < r.height);
+      player.loadClip(3, ci);
+      await new Promise(resolve => {
+        const check = () => panel.rec === player.records[ci]
+          ? resolve() : requestAnimationFrame(check);
+        check();
+      });
+    }""")
+    lab.page.wait_for_function("""() => __lab.player.panels[3].slots
+      .filter(s => s.video.classList.contains('on')).length === 1""")
+    lab.set("audio.fade", 3)
+    lab.settle()
+    lab.js("""async () => {
+      const player = __lab.player, panel = player.panels[3];
+      const outgoing = panel.slots[panel.active];
+      window.fadeResizeProof = {panel, outgoing, source: outgoing.video.currentSrc,
+        peers: player.panels.filter(p => p !== panel).map(p => ({p,
+          video: p.slots[p.active].video, source: p.slots[p.active].video.currentSrc}))};
+      const ci = player.records.findIndex(r => r !== panel.rec && r.width < r.height);
+      player.loadClip(3, ci);
+      await new Promise(resolve => {
+        const check = () => panel.slots[panel.active] !== outgoing
+          ? resolve() : requestAnimationFrame(check);
+        check();
+      });
+    }""")
+    lab.page.set_viewport_size({"width": 800, "height": 801})
+    lab.page.wait_for_function("""() => __lab.axis() === 'rows'
+      && __lab.player.W === 800 && __lab.player.H === 801""")
+    state = lab.js("""() => {
+      const {panel, outgoing, source, peers} = fadeResizeProof;
+      return {outgoingVisible: outgoing.video.classList.contains('on'),
+        cancelledLoad: outgoing.token === 0, stillResident: !!outgoing.rec,
+        sameSource: outgoing.video.currentSrc === source,
+        successorActive: panel.slots[panel.active] !== outgoing,
+        peersUnchanged: peers.every(({p, video, source}) =>
+          p.slots[p.active].video === video && video.currentSrc === source)};
+    }""")
+    assert all(state.values()), state
+    geo = lab.js(GEOMETRY_JS)
+    assert len(geo["panels"][3]["videos"]) == 2, geo["panels"][3]
+    print("Visible outgoing resize geometry:", geo["panels"][3])
+    check_tiling(geo)
+    assert len(lab.js("__lab.zoomInfo().panels")) == 6
+    # Pausing keeps both images visible; it must not opt either out of fitting.
+    lab.js("__lab.player.setPaused(true)")
+    lab.page.set_viewport_size({"width": 801, "height": 800})
+    lab.page.wait_for_function("() => __lab.axis() === 'columns' && __lab.player.W === 801")
+    paused_geo = lab.js(GEOMETRY_JS)
+    assert len(paused_geo["panels"][3]["videos"]) == 2
+    check_tiling(paused_geo)
+    lab.js("__lab.player.setPaused(false)")
+    # The normal fade deadline still retires the old source; later resizes must
+    # not keep writing geometry to that hidden, unloaded deck.
+    lab.page.wait_for_function("""() => {
+      const s = fadeResizeProof.outgoing;
+      return !s.rec && !s.video.classList.contains('on') && !s.video.hasAttribute('src');
+    }""")
+    retired_transform = lab.js("fadeResizeProof.outgoing.video.style.transform")
+    lab.page.set_viewport_size({"width": 1280, "height": 720})
+    lab.page.wait_for_function("() => __lab.axis() === 'columns' && __lab.player.W === 1280")
+    assert lab.js("fadeResizeProof.outgoing.video.style.transform") == retired_transform
+    check_tiling(lab.js(GEOMETRY_JS))
+    assert lab.errors == []
+
+
 def test_zoom_curve_and_cover(make_lab):
     # framing.mode=center is the zoom module on its own (derived windows add +-jitter around this curve: see test_framing.py)
     lab = make_lab((1280, 720))
