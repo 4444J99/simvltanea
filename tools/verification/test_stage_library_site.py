@@ -218,7 +218,7 @@ class StageLibrarySiteTests(unittest.TestCase):
         env = {'PYTHONPATH': f'{REPOSITORY}:{REPOSITORY / "src"}', 'PATH': '/usr/bin:/bin'}
         done = subprocess.run(command, capture_output=True, text=True, timeout=60, env=env, cwd=REPOSITORY)
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(done.stdout.strip(), 'site assembled: 5 studio files, 3 library clips')
+        self.assertEqual(done.stdout.strip(), f'site assembled: {len(STUDIO_FILES)} studio files, 3 library clips')
         again = subprocess.run(command, capture_output=True, text=True, timeout=60, env=env, cwd=REPOSITORY)
         self.assertEqual(again.returncode, 2)
         self.assertIn('refused: site must be absent or an empty directory', again.stderr)

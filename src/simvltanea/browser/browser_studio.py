@@ -10,6 +10,7 @@ compiles them in the browser. The families and the counts each offers come from
 builds. Files never leave the device. ``stage_studio(output)`` writes the flat, relative-URL site::
 
     index.html  runtime.js  compiler.js  studio.js  layouts.json
+    lab.html  lab_model.js  lab_engine.js  lab_ui.js  lab_audio.js
 
 A public clip library (``library/manifest.json`` and ``library/clips/``) is added
 beside these at deploy time by ``tools.publishing.stage_library_site``, never here.
@@ -29,10 +30,11 @@ import json
 from pathlib import Path
 
 from simvltanea.browser.layout_bundle import layout_bundle_v2
+from simvltanea.browser.browser_lab import LAB_FILES, lab_files
 
 HERE = Path(__file__).resolve().parent
 STUDIO_TITLE = 'SIMVLTANEA studio: loops on their own clocks'
-STUDIO_FILES = ('index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json')
+STUDIO_FILES = ('index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json', *LAB_FILES)
 
 STYLE = '''
 :root{color-scheme:dark;--bg:#0a0a0b;--fg:rgba(255,255,255,.88);--dim:rgba(255,255,255,.55);
@@ -81,6 +83,8 @@ button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.6
 #families button[aria-checked=true]{background:rgba(255,255,255,.17);color:#fff}
 #families button[aria-checked=false]{color:var(--dim)}
 #effects[aria-pressed=true]{background:rgba(255,255,255,.17);color:#fff}
+.lab-link{color:var(--fg);text-decoration:none;font-size:12px;padding:10px 12px;border-radius:999px;white-space:nowrap}
+.lab-link:hover{background:rgba(255,255,255,.1);color:#fff}
 #sound{display:flex;align-items:center}
 #volume{width:0;opacity:0;margin:0;height:44px;accent-color:#fff;cursor:pointer;
 transition:width 200ms var(--ease),opacity 200ms var(--ease),margin 200ms var(--ease)}
@@ -188,6 +192,7 @@ INDEX_HTML = '''<!doctype html>
 accept="video/*,.mov,.mp4,.m4v,.webm,.json,application/json">
 </div>
 <div id="corner" role="toolbar" aria-label="Page">
+<a class="lab-link" href="lab.html">Effects Lab</a>
 <button id="activity" type="button" aria-label="Hold changes" aria-pressed="false" title="Hold changes">∞</button>
 <button id="effects" type="button" aria-label="Filters" aria-pressed="true" title="Filters on">ƒx</button>
 <button id="loop-mode" type="button" aria-label="Play forward loops" title="Boomerang loops" hidden>↔</button>
@@ -225,13 +230,14 @@ def studio_files() -> dict[str, bytes]:
         'compiler.js': (HERE / 'browser.compiler.js').read_bytes(),
         'studio.js': (HERE / 'browser.studio.js').read_bytes(),
         'layouts.json': layouts.encode(),
+        **lab_files(),
     }
 
 
 def stage_studio(output: Path) -> None:
     """Write the flat studio into ``output``, creating it when absent.
 
-    Only the five studio files are ever written. A directory holding anything
+    Only the declared Studio and Effects Lab files are ever written. A directory holding anything
     else (including hidden files, subdirectories or symlinks) is refused before
     any byte is written, so staging cannot clobber or mix with foreign content.
     """
