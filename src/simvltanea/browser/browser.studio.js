@@ -1,3 +1,12 @@
+// Keep the application address in sync with the embedded Watch session.
+{
+  const originalReplace = history.replaceState.bind(history);
+  history.replaceState = function(...args) {
+    const result = originalReplace(...args);
+    if (window.parent !== window) window.parent.postMessage({type:'simvltanea:watch-url',search:location.search},location.origin);
+    return result;
+  };
+}
 /* SIMVLTANEA studio: loops on their own clocks, colliding by accident.
  *
  * A classic script without dependencies, staged as studio.js beside compiler.js,
