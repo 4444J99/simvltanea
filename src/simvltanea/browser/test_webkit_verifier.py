@@ -65,6 +65,30 @@ def classify(mutation: str = '') -> dict:
 
 
 class WebKitVerifierTests(unittest.TestCase):
+    def test_regression_coverage_requires_a_wrap_of_the_same_source_and_resident(self):
+        for nodes, expected in (
+            ([{'id': 'one', 'deck': 0, 'birth': 1, 'sha': 'target', 'current': .9},
+              {'id': 'one', 'deck': 0, 'birth': 1, 'sha': 'target', 'current': .1}], 1),
+            ([{'id': 'one', 'deck': 0, 'birth': 1, 'sha': 'other', 'current': .9},
+              {'id': 'one', 'deck': 0, 'birth': 1, 'sha': 'other', 'current': .1}], 0),
+            ([{'id': 'one', 'deck': 0, 'birth': 1, 'sha': 'target', 'current': .9},
+              {'id': 'one', 'deck': 0, 'birth': 2, 'sha': 'target', 'current': .1}], 0),
+            ([{'id': 'one', 'deck': 0, 'birth': 1, 'sha': 'target', 'current': .9},
+              {'id': 'two', 'deck': 0, 'birth': 1, 'sha': 'target', 'current': .1}], 0),
+        ):
+            with self.subTest(nodes=nodes):
+                program = r'''
+const api=require(process.argv[1]), supported=typeof api.sourceWrapCount==='function';
+process.stdout.write(JSON.stringify({supported,count:supported?
+  api.sourceWrapCount(JSON.parse(process.argv[2]),'target'):null}));
+'''
+                samples = [{'nodes': [node]} for node in nodes]
+                done = subprocess.run(['node', '-e', program, str(VERIFIER), json.dumps(samples)],
+                                      check=True, capture_output=True, text=True, timeout=15)
+                result = json.loads(done.stdout)
+                self.assertTrue(result['supported'], 'Source-specific regression coverage is unavailable')
+                self.assertEqual(result['count'], expected)
+
     def assert_refused(self, mutation: str, check: str) -> dict:
         summary = classify(mutation)
         self.assertFalse(summary['pass'], summary)

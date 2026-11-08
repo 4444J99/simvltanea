@@ -25,7 +25,8 @@ function sample() {
     return {id: node.id, deck: index, active: node.active === deck,
       populated: media.hasAttribute('src'), src: media.src, currentSrc: media.currentSrc,
       duration: media.duration, current: media.currentTime, decoded: deck.decoded?.mediaTime,
-      callbacks: deck.callbacks, paused: media.paused, seeking: media.seeking, ready: media.readyState,
+      callbacks: deck.callbacks, loopPlayRequests: deck.loopPlayRequests,
+      paused: media.paused, seeking: media.seeking, ready: media.readyState,
       muted: media.muted, weight: deck.weight, audio: deck.binding ? {
         target: deck.binding.target, gain: deck.binding.gain.gain.value,
         filterHz: deck.binding.filter.frequency.value, pan: deck.binding.pan.pan.value} : null,
@@ -37,6 +38,7 @@ function sample() {
   }));
   return {wall: performance.now(), epochMs: Date.now(), timeOrigin: performance.timeOrigin, simTime: runtime.clock.simTime,
     running: runtime.running, hidden: document.hidden, draining: runtime.draining,
+    reassertNativeLoops: runtime.reassertNativeLoops,
     lastFailure: runtime.lastFailure,
     foregroundLimit: runtime.maxForeground, standbys: runtime.activeStandbys,
     maxStandbys: runtime.maxConcurrentStandbys, audioState: runtime.audio.context?.state,
@@ -50,7 +52,8 @@ function sample() {
       phase: node.phase, busy: node.busy, resting: node.resting, targetGain: node.targetGain,
       geometry: node.geometry, rect: node.cell?.rect,
       current: node.media?.currentTime, decoded: node.decoded?.mediaTime,
-      callbacks: node.callbacks, paused: node.media?.paused, seeking: node.media?.seeking,
+      callbacks: node.callbacks, loopPlayRequests: node.active?.loopPlayRequests,
+      paused: node.media?.paused, seeking: node.media?.seeking,
       ready: node.media?.readyState, nativeError: node.media?.error ?
         {code: node.media.error.code, message: node.media.error.message} : null}))};
 }
@@ -208,6 +211,17 @@ function analyse(result) {
     restingSamples, maxResting, restingPaused, longestRestingJointHoldMs: restingJointMs,
     longestRestingDecodedHoldMs: restingDecodedMs, runtimeFailures: [...runtimeFailures],
     unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors, resourceErrors};
+}
+
+function sourceWrapCount(samples, sha) {
+  const previous = new Map(); let wraps = 0;
+  for (const row of samples) for (const node of row.nodes || []) {
+    if (node.sha !== sha || !Number.isFinite(node.current)) continue;
+    const identity = JSON.stringify([node.id, node.deck, node.birth]), last = previous.get(identity);
+    if (Number.isFinite(last) && node.current + .05 < last) wraps++;
+    previous.set(identity, node.current);
+  }
+  return wraps;
 }
 
 function staticServer(site) {
@@ -477,11 +491,21 @@ async function main() {
     const base = `http://127.0.0.1:${server.address().port}/`;
     receipt.seeded = await sustained(webkit, device, base, out, 'seeded', '?seed=528316659&proof=1');
     receipt.fresh = await sustained(webkit, device, base, out, 'fresh', '?proof=1');
+    // Replay the fresh composition that held clip 018f07526245 after wrapping.
+    receipt.regression = await sustained(webkit, device, base, out, 'regression', '?seed=2299191082&proof=1');
+    const regression = JSON.parse(fs.readFileSync(path.join(out, 'regression.json'), 'utf8'));
+    const targetSha = '7cdbe95e160472bb6c1f4e885c18c29bb57e0c39310e53d694a2bb84345ee294';
+    const targetWraps = sourceWrapCount(regression.samples, targetSha);
+    const targetRequests = regression.samples.some(row => row.reassertNativeLoops === true &&
+      row.nodes.some(node => node.sha === targetSha && node.loopPlayRequests > 0));
+    receipt.regressionCoverage = {sha: targetSha, wraps: targetWraps,
+      reassertionObserved: targetRequests, pass: targetWraps > 0 && targetRequests};
     const seenRegimes = [...new Set([...receipt.seeded.regimes, ...receipt.fresh.regimes])];
     receipt.regimeCoverage = {seen: seenRegimes, pass: REGIMES.every(regime => seenRegimes.includes(regime))};
     receipt.controls = await controls(webkit, device, base, out);
     receipt.audio = await audioProof(webkit, out);
-    receipt.pass = receipt.seeded.pass && receipt.fresh.pass && receipt.regimeCoverage.pass && receipt.controls.pass && receipt.audio.pass;
+    receipt.pass = receipt.seeded.pass && receipt.fresh.pass && receipt.regression.pass &&
+      receipt.regressionCoverage.pass && receipt.regimeCoverage.pass && receipt.controls.pass && receipt.audio.pass;
   } catch (error) { receipt.pass = false; receipt.failure = String(error.stack || error); }
   finally {
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
@@ -492,4 +516,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = {analyse};
+module.exports = {analyse, sourceWrapCount};

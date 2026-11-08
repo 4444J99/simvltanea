@@ -349,6 +349,13 @@ function applySlice(node) {
     return Number(navigator.maxTouchPoints) > 0 || coarse || mobile ? 4 : 12;
   }
 
+  function needsNativeLoopReplay(environment = root) {
+    const agent = environment.navigator?.userAgent || '';
+    // iOS Chrome/Firefox also use WebKit; desktop Chromium does not need this
+    // request and retains its existing no-reassertion behavior.
+    return /AppleWebKit\//.test(agent) && !/(?:Chrome|Chromium|Edg|OPR)\//.test(agent);
+  }
+
   // The permit spans priming AND the entire fade. Admission probes use this
   // same queue: background metadata loading cannot add a second standby.
   class PreparationGate {
@@ -385,6 +392,7 @@ function applySlice(node) {
       this.stage = stage; this.options = options;
       Object.defineProperty(this, 'maxForeground', {value: foregroundLimit(root), enumerable: true});
       this.crossfadeSec = options.crossfadeSec ?? 1.2;
+      this.reassertNativeLoops = Boolean(options.reassertNativeLoops ?? needsNativeLoopReplay(root));
       this.effectsEnabled = Boolean(options.effects) && !options.reducedMotion;
       this.effectSettings = root.SimvltaneaPresence?.normalizeSettings(options.effectSettings) ?? null;
       this.primeTimeoutMs = options.primeTimeoutMs ?? 10000;
@@ -453,6 +461,25 @@ function applySlice(node) {
       try { if (this.disposed || signal?.aborted) throw cancelled(); return await task(); }
       finally { release(); }
     }
+    observeDecodedFrame(node, deck, wall, metadata) {
+      const previous = deck.decoded?.mediaTime;
+      deck.callbacks++;
+      deck.decoded = {mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames, wall};
+      if (node.active === deck) { node.callbacks++; node.decoded = deck.decoded; }
+      if (!this.reassertNativeLoops || !Number.isFinite(previous) || metadata.mediaTime + .05 >= previous ||
+          this.disposed || !this.running || !deck.url || deck.media.paused ||
+          (node.active !== deck && this.fade?.incoming !== deck && node.promoting !== deck)) return;
+      // Reassert the already-running deck at a native loop boundary, as at
+      // promotion. Never seek, pause, rebuild its binding, or restart its age.
+      const url = deck.url;
+      deck.loopPlayRequests++;
+      const refused = error => {
+        if (this.running && !this.disposed && deck.url === url &&
+            (node.active === deck || this.fade?.incoming === deck || node.promoting === deck)) this.report(error, node);
+      };
+      try { return Promise.resolve(deck.media.play()).catch(refused); }
+      catch (error) { refused(error); }
+    }
     createSlot(id, ordinal) {
       const box = document.createElement('div'); box.className = 'loop'; box.dataset.loopId = id;
       Object.assign(box.style, {position: 'absolute', overflow: 'hidden', display: 'none'});
@@ -468,10 +495,9 @@ function applySlice(node) {
         Object.assign(media.style, {position: 'absolute', inset: '0', width: '100%', height: '100%',
           objectFit: 'cover', opacity: '0', pointerEvents: 'none', transition: 'none'});
         const deck = {media, url: null, item: null, binding: null, weight: 0, frameId: null, callbacks: 0, decoded: null,
-          presence: 1, presenceTarget: null, enteredAt: null};
+          presence: 1, presenceTarget: null, enteredAt: null, loopPlayRequests: 0};
         const watch = (wall, metadata) => {
-          deck.callbacks++; deck.decoded = {mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames, wall};
-          if (node.active === deck) { node.callbacks++; node.decoded = deck.decoded; }
+          this.observeDecodedFrame(node, deck, wall, metadata);
           if (!this.disposed) deck.frameId = media.requestVideoFrameCallback(watch);
         };
         if (media.requestVideoFrameCallback) deck.frameId = media.requestVideoFrameCallback(watch);
@@ -661,7 +687,7 @@ function applySlice(node) {
         const previous = {active: node.active, media: node.media, item: node.item, source: node.source,
           audio: node.audio, birthTime: node.birthTime, callbacks: node.callbacks, decoded: node.decoded};
         node.busy = true; node.phase = 'LOADING';
-        incoming.item = item; incoming.media.muted = true;
+        incoming.item = item; incoming.media.muted = true; incoming.loopPlayRequests = 0;
         incoming.presence = this.effectsEnabled ? 0 : 1;
         incoming.presenceTarget = null; incoming.enteredAt = null;
         this.applyDeckEffects(incoming, true);
@@ -1063,7 +1089,7 @@ function applySlice(node) {
       this.master?.dispose?.(); this.audio.context?.close().catch(() => {});
     }
   }
-  const api = {Session, MasterSimClock, foregroundLimit};
+  const api = {Session, MasterSimClock, foregroundLimit, needsNativeLoopReplay};
   root.SimvltaneaLive = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis === 'object' ? globalThis : this);
