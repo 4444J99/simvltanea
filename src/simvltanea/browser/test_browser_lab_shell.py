@@ -43,7 +43,7 @@ class EffectsLabShellTests(unittest.TestCase):
                     if tag == 'meta' and a.get('http-equiv') == 'Content-Security-Policy']
         self.assertEqual(len(policies), 1)
         policy = policies[0]
-        for directive in ["default-src 'none'", "script-src 'self'", "connect-src 'none'",
+        for directive in ["default-src 'none'", "script-src 'self'", 'connect-src https://upload.wikimedia.org',
                           'media-src blob:', "base-uri 'none'", "form-action 'none'"]:
             self.assertIn(directive, policy)
         for _, attrs in self.shell.elements:
@@ -56,12 +56,14 @@ class EffectsLabShellTests(unittest.TestCase):
         self.assertIn('video/*', media['accept'])
         self.assertIn('.mov', media['accept'])
 
-    def test_public_workspace_is_empty_and_only_offers_local_media(self):
+    def test_public_workspace_defaults_empty_without_supplied_clips(self):
         by_id = {a['id']: (tag, a) for tag, a in self.shell.elements if 'id' in a}
         self.assertIn('preview-empty', by_id)
         self.assertIn('timeline-empty', by_id)
         self.assertIn('timeline-import', by_id)
         self.assertIn('bin-import', by_id)
+        self.assertIn('open-public-media', by_id)
+        self.assertIn('public-media-dialog', by_id)
         self.assertNotIn('source-dialog', by_id)
         self.assertFalse(any('data-demo' in attrs for _, attrs in self.shell.elements))
         self.assertIn('00 clips / 08 slots', LAB_HTML)
@@ -91,7 +93,7 @@ class EffectsLabShellTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which('node'), 'Node.js is required')
 class EffectsLabUIContractTests(unittest.TestCase):
     def evaluate(self, expression):
-        script = f"const ui=require({json.dumps(str(MODULE))}); const m=global.SimvltaneaLabModel; console.log(JSON.stringify({expression}));"
+        script = f"const ui=require({json.dumps(str(MODULE))}); const m=global.SimvltaneaLabModel; (async()=>{{console.log(JSON.stringify(await ({expression})));}})().catch(error=>{{console.error(error);process.exit(1);}});"
         result = subprocess.run(['node', '-e', script], check=True, text=True, capture_output=True)
         return json.loads(result.stdout)
 
@@ -218,6 +220,78 @@ class EffectsLabUIContractTests(unittest.TestCase):
         self.assertEqual(value['fresh'], 'clip-3')
         self.assertEqual(value['invalid'], [True, True, True])
         self.assertEqual(value['legacy'], 1)
+
+    def test_public_catalog_is_fixed_and_rights_are_attached_to_each_source(self):
+        value = self.evaluate("""({frozen:Object.isFrozen(ui.PUBLIC_MEDIA)&&ui.PUBLIC_MEDIA.every(Object.isFrozen),
+          entries:ui.PUBLIC_MEDIA.map(s=>({id:s.id,kind:s.kind,origin:new URL(s.url).origin,source:s.sourceURL,
+            author:s.author,license:s.license,licenseURL:s.licenseURL,mime:s.mime})),unknown:ui.publicMedia('https://example.test/clip.mp4')})""")
+        self.assertTrue(value['frozen'])
+        self.assertEqual(len(value['entries']), 4)
+        self.assertEqual([c['id'] for c in value['entries']], ['rainy-night', 'flowing-stream', 'flowing-water-sound', 'compressor-motor'])
+        self.assertEqual([c['kind'] for c in value['entries']], ['video', 'video', 'audio', 'audio'])
+        self.assertEqual([c['author'] for c in value['entries']], ['Andy Li', 'Patjos.scot', 'Fg2', 'stephan'])
+        for entry in value['entries']:
+            self.assertEqual(entry['origin'], 'https://upload.wikimedia.org')
+            self.assertTrue(entry['source'].startswith('https://commons.wikimedia.org/wiki/File:'))
+            self.assertTrue(entry['licenseURL'].startswith('https://'))
+        self.assertEqual([c['license'] for c in value['entries'][:2]], ['CC0 1.0', 'CC0 1.0'])
+        self.assertTrue(all('author release' in c['license'] for c in value['entries'][2:]))
+        self.assertIsNone(value['unknown'])
+
+    def test_sample_reference_round_trip_retains_order_identity_and_no_url(self):
+        value = self.evaluate("""(()=>{const sample={id:'clip-4',name:'Rain',kind:'video',settings:m.normalizeSettings({timelineStart:7.25})};
+          const local={name:'mine.wav',kind:'audio',clipId:'clip-1',settings:m.normalizeSettings({audioLife:28})};
+          const snapshot={clips:[sample],volume:.4,muted:false,sequence:{enabled:false,interval:8}};
+          const sources=new Map([['clip-4',{sampleId:'rainy-night',url:'blob:secret',fileName:'rain.webm'}]]);
+          const slots=[{key:'pending-0',pending:local},{id:'clip-4'}];
+          const data=ui.sessionData(snapshot,sources,slots);return {text:JSON.stringify(data),parsed:ui.parseSession(data)};})()""")
+        self.assertNotIn('blob:', value['text'])
+        self.assertNotIn('https://', value['text'])
+        self.assertNotIn('url', value['parsed']['clips'][1])
+        self.assertEqual([c['clipId'] for c in value['parsed']['clips']], ['clip-1', 'clip-4'])
+        self.assertEqual(value['parsed']['clips'][1]['sampleId'], 'rainy-night')
+        self.assertEqual(value['parsed']['clips'][1]['settings']['timelineStart'], 7.25)
+        self.assertEqual(value['parsed']['clips'][0]['settings']['audioLife'], 28)
+
+    def test_unknown_or_mismatched_sample_references_are_rejected(self):
+        value = self.evaluate("""[{sampleId:'https://example.test/a.mp3',kind:'audio'},
+          {sampleId:'__proto__',kind:'video'},{sampleId:'rainy-night',kind:'audio'}].map(c=>{
+            try{ui.parseSession({format:ui.FORMAT,version:1,clips:[c]});return false;}catch(_){return true;}})""")
+        self.assertEqual(value, [True, True, True])
+
+    def test_public_download_omits_credentials_and_reuses_browser_cache(self):
+        value = self.evaluate("""(async()=>{
+          const calls=[],saved=new Map();const response={ok:true,status:200,type:'cors',blob:async()=>new Blob(['media']),clone(){return this;}};
+          const fetcher=async(url,options)=>{calls.push({url,options});return response;};
+          const storage={open:async()=>({match:async key=>saved.get(key),put:async(key,res)=>saved.set(key,res)})};
+          class TestFile{constructor(parts,name,options){this.name=name;this.type=options.type;this.size=parts[0].size;}}
+          const a=await ui.fetchPublicMedia('compressor-motor',fetcher,storage,TestFile);
+          const b=await ui.fetchPublicMedia('compressor-motor',fetcher,storage,TestFile);
+          return {calls,a,b,keys:Array.from(saved.keys())};})()""")
+        self.assertEqual(len(value['calls']), 1)
+        options = value['calls'][0]['options']
+        self.assertEqual(options['method'], 'GET')
+        self.assertEqual(options['credentials'], 'omit')
+        self.assertEqual(options['mode'], 'cors')
+        self.assertEqual(options['referrerPolicy'], 'no-referrer')
+        self.assertEqual(options['redirect'], 'error')
+        self.assertNotIn('body', options)
+        self.assertTrue(value['calls'][0]['url'].startswith('https://upload.wikimedia.org/'))
+        self.assertEqual(value['a']['type'], 'audio/mpeg')
+        self.assertEqual(value['a'], value['b'])
+        self.assertEqual(len(value['keys']), 1)
+
+    def test_unknown_public_id_never_fetches_and_http_errors_do_not_make_files(self):
+        value = self.evaluate("""(async()=>{let calls=0,files=0;class TestFile{constructor(){files++;}}
+          const fetcher=async()=>{calls++;return {ok:false,status:403,type:'cors'};};const errors=[];
+          for(const id of ['not-in-catalog','rainy-night']){try{await ui.fetchPublicMedia(id,fetcher,null,TestFile);}catch(e){errors.push(e.message);}}
+          let deleted='';await ui.clearPublicMediaCache({delete:async key=>{deleted=key;return true;}});
+          return {calls,files,errors,deleted};})()""")
+        self.assertEqual(value['calls'], 1)
+        self.assertEqual(value['files'], 0)
+        self.assertEqual(len(value['errors']), 2)
+        self.assertIn('403', value['errors'][1])
+        self.assertEqual(value['deleted'], 'independent-loop-compositor-effects-lab:public-media-v1')
 
     def test_phone_mov_and_audio_without_mime_are_recognized(self):
         value = self.evaluate("""[

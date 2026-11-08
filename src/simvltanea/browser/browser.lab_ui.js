@@ -5,6 +5,55 @@
   const FORMAT = 'independent-loop-compositor-effects-lab';
   const STORAGE_KEY = FORMAT + ':v1';
   const DEMOS = ['tide', 'prism', 'grain'];
+  const MEDIA_ORIGIN = 'https://upload.wikimedia.org';
+  const MEDIA_CACHE = FORMAT + ':public-media-v1';
+  const PUBLIC_MEDIA = Object.freeze([
+    {id: 'rainy-night', title: 'Rainy night in Sham Shui Po', author: 'Andy Li', license: 'CC0 1.0',
+      licenseURL: 'https://creativecommons.org/publicdomain/zero/1.0/deed.en',
+      sourceURL: 'https://commons.wikimedia.org/wiki/File:Rainy_night_in_Sham_Shui_Po.webm',
+      url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/3/36/Rainy_night_in_Sham_Shui_Po.webm/Rainy_night_in_Sham_Shui_Po.webm.480p.vp9.webm',
+      fileName: 'rainy-night-sham-shui-po.webm', kind: 'video', mime: 'video/webm', codecs: 'video/webm; codecs="vp9, opus"',
+      duration: 6.121, bytes: 201419, description: 'Rainy street footage with original location sound.', format: 'WebM · VP9 / Opus'},
+    {id: 'flowing-stream', title: 'Stream of flowing water', author: 'Patjos.scot', license: 'CC0 1.0',
+      licenseURL: 'https://creativecommons.org/publicdomain/zero/1.0/deed.en',
+      sourceURL: 'https://commons.wikimedia.org/wiki/File:StreamOfFlowingWater.webm',
+      url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/e/e0/StreamOfFlowingWater.webm/StreamOfFlowingWater.webm.480p.vp9.webm',
+      fileName: 'stream-of-flowing-water.webm', kind: 'video', mime: 'video/webm', codecs: 'video/webm; codecs="vp9, opus"',
+      duration: 55.756, bytes: 7646133, description: 'Flowing water footage with original location sound.', format: 'WebM · VP9 / Opus'},
+    {id: 'flowing-water-sound', title: 'Flowing water — field recording', author: 'Fg2', license: 'Public domain · author release',
+      licenseURL: 'https://commons.wikimedia.org/wiki/File:Flowing-water-100019.ogg#Licensing',
+      sourceURL: 'https://commons.wikimedia.org/wiki/File:Flowing-water-100019.ogg',
+      url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/2/26/Flowing-water-100019.ogg/Flowing-water-100019.ogg.mp3',
+      fileName: 'flowing-water-field-recording.mp3', kind: 'audio', mime: 'audio/mpeg', codecs: 'audio/mpeg',
+      duration: 18.899592, bytes: 489308, description: 'Found sound: flowing water. Audio only.', format: 'MP3 · stereo'},
+    {id: 'compressor-motor', title: 'Compressor motor — field recording', author: 'stephan', license: 'Public domain · author release',
+      licenseURL: 'https://commons.wikimedia.org/wiki/File:Compressor_motor.ogg#Licensing',
+      sourceURL: 'https://commons.wikimedia.org/wiki/File:Compressor_motor.ogg',
+      url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/d/db/Compressor_motor.ogg/Compressor_motor.ogg.mp3',
+      fileName: 'compressor-motor-field-recording.mp3', kind: 'audio', mime: 'audio/mpeg', codecs: 'audio/mpeg',
+      duration: 3.879184, bytes: 60364, description: 'Found sound: a running compressor motor. Audio only.', format: 'MP3 · stereo'}
+  ].map(Object.freeze));
+  function publicMedia(id) { return PUBLIC_MEDIA.find(item => item.id === id) || null; }
+  async function fetchPublicMedia(id, fetcher = root.fetch, storage = root.caches, FileClass = root.File) {
+    const sample = publicMedia(id);
+    if (!sample) throw new Error('Unknown public media source.');
+    if (new URL(sample.url).origin !== MEDIA_ORIGIN) throw new Error('Public media source is outside the allowed host.');
+    if (typeof fetcher !== 'function' || typeof FileClass !== 'function') throw new Error('This browser cannot download public media. Import a local file instead.');
+    let cache = null, response = null;
+    try { if (storage && storage.open) { cache = await storage.open(MEDIA_CACHE); response = await cache.match(sample.url); } } catch (_) { /* Downloads still work if browser storage is unavailable. */ }
+    if (!response) {
+      response = await fetcher.call(root, sample.url, {method: 'GET', credentials: 'omit', mode: 'cors', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer'});
+      if (!response.ok || response.type === 'opaque') throw new Error('Download failed for ' + sample.title + ' (' + response.status + '). Try again or use the source link.');
+      if (cache) { try { await cache.put(sample.url, response.clone()); } catch (_) { /* Memory reuse remains available. */ } }
+    }
+    const blob = await response.blob();
+    if (!blob.size) throw new Error('The downloaded media file is empty.');
+    return new FileClass([blob], sample.fileName, {type: sample.mime, lastModified: 0});
+  }
+  async function clearPublicMediaCache(storage = root.caches) {
+    if (!storage || !storage.delete) return true;
+    try { await storage.delete(MEDIA_CACHE); return true; } catch (_) { return false; }
+  }
   const title = value => String(value).replace(/(^|[- ])\w/g, s => s.toUpperCase().replace('-', ' '));
   const escape = value => String(value).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
   const clamp = (n, lo, hi, fallback) => Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : fallback;
@@ -35,6 +84,8 @@
         const source = sources instanceof Map ? sources.get(c.id) : (sources || {})[c.id];
         const result = {clipId: String(c.pending ? c.clipId || c.id : c.id), name: String(c.name || 'Untitled').slice(0, 200), kind: c.kind,
           settings: Model.normalizeSettings(c.settings)};
+        const sample = publicMedia(source && source.sampleId || c.sampleId);
+        if (sample && sample.kind === c.kind) result.sampleId = sample.id;
         if (c.kind !== 'demo') result.fileName = String(source && source.fileName || c.fileName || c.name).slice(0, 200);
         if (c.kind === 'demo') result.demo = source && DEMOS.includes(source.demo) ? source.demo : DEMOS.includes(c.demo) ? c.demo : 'tide';
         return result;
@@ -52,8 +103,9 @@
         if (typeof c.clipId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(c.clipId) || seenIds.has(c.clipId)) throw new Error('Project clip identities must be unique safe strings.');
         seenIds.add(c.clipId);
       }
+      if (c.sampleId !== undefined && (!publicMedia(c.sampleId) || publicMedia(c.sampleId).kind !== c.kind)) throw new Error('This project references an unknown or mismatched public media source.');
       if (c.kind === 'demo' && !DEMOS.includes(c.demo)) throw new Error('This session contains an unknown generated loop.');
-      return {...(c.clipId ? {clipId: c.clipId} : {}), name: String(c.name || (c.demo ? title(c.demo) : 'Local file')).slice(0, 200),
+      return {...(c.clipId ? {clipId: c.clipId} : {}), ...(c.sampleId ? {sampleId: c.sampleId} : {}), name: String(c.name || (c.demo ? title(c.demo) : 'Local file')).slice(0, 200),
         kind: c.kind, ...(c.kind === 'demo' ? {demo: c.demo} : {fileName: String(c.fileName || c.name || 'Local file').slice(0, 200)}), settings: Model.normalizeSettings(c.settings)};
     });
     return {format: FORMAT, version: 1, clips, transport: transportData(data.transport),
@@ -104,7 +156,7 @@
     }
     return {};
   }
-  const api = {FORMAT, STORAGE_KEY, sessionData, parseSession, selectedPatch, fileKind, envelopePath, slotEntries, alignEngineOrder, transportData, timelineEdit, availableClipId};
+  const api = {FORMAT, STORAGE_KEY, sessionData, parseSession, selectedPatch, fileKind, envelopePath, slotEntries, alignEngineOrder, transportData, timelineEdit, availableClipId, PUBLIC_MEDIA, MEDIA_ORIGIN, MEDIA_CACHE, publicMedia, fetchPublicMedia, clearPublicMediaCache};
   root.SimvltaneaLabUI = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (!root.document) return;
@@ -121,6 +173,7 @@
     let engine, selectedId = null, busy = false, hasPlayed = false;
     let layerSignature = '', inspectorSignature = '';
     let sources = new Map(), slots = [], assets = new Map(), assetSerial = 0;
+    const publicFiles = new Map();
     let zoom = 14, timelineSignature = '', timelineTicks = '', gesture = null;
     let mode = 'arrange';
     const GUTTER = 144;
@@ -190,7 +243,7 @@
       if (slot && slot.pending) { slot.pending.settings = Model.normalizeSettings(patch, slot.pending.settings); render(engine.snapshot()); }
       else engine.set(id, patch);
     }
-    function setSelected(id) { selectedId = id; inspectorSignature = ''; render(engine.snapshot()); }
+    function setSelected(id) { selectedId = id; inspectorSignature = ''; render(engine.snapshot()); const c = selected(); if (c && c.kind === 'audio' && $('tab-picture').getAttribute('aria-selected') === 'true') activateTab($('tab-sound')); }
     function newEngine() {
       engine = new root.SimvltaneaLabEngine.Engine($('lab-stage'), {onChange: render, onError: message => status(String(message), 'error')});
       api.engine = engine;
@@ -200,6 +253,7 @@
       document.querySelectorAll('[data-async], .settings-actions button').forEach(button => { button.disabled = value; });
       $('add-layer').disabled = value;
       $('bin-import').disabled = value; $('timeline-import').disabled = value;
+      document.querySelectorAll('[data-public-media]').forEach(button => { button.disabled = value || button.dataset.unsupported === 'true' || button.dataset.full === 'true'; });
     }
     async function run(action) {
       if (busy) return;
@@ -208,7 +262,7 @@
       finally { setBusy(false); render(engine.snapshot()); }
     }
     function clipPhase(c) {
-      if (c.pending) return 'Choose local file';
+      if (c.pending) return c.sampleId ? 'Download pending' : 'Choose local file';
       if (c.error) return 'Needs attention';
       if (c.kind === 'audio' && c.audio.active) return c.settings.hold ? 'Held sound' : 'Sound only';
       if (c.audio.active && !c.video.active) return 'Sound tail';
@@ -223,7 +277,7 @@
         layerSignature = signature;
         $('layer-list').innerHTML = front.length ? front.map((c, index) => {
           const src = sources.get(c.id); const thumb = c.kind === 'demo' ? (src && src.demo || 'tide') : c.kind;
-          return '<div class="layer' + (c.id === selectedId ? ' selected' : '') + (c.pending ? ' pending' : '') + '" data-layer="' + escape(c.id) + '"><button class="layer-select" data-action="' + (c.pending ? 'restore' : 'select') + '" aria-pressed="' + (c.id === selectedId) + '" aria-label="' + (c.pending ? 'Choose local file for layer ' : 'Select layer ') + (index + 1) + ': ' + escape(c.name) + '"><span class="thumb ' + thumb + '" aria-hidden="true"></span><span class="layer-copy"><span class="layer-name">' + escape(c.name) + '</span><span class="layer-status"><span class="layer-dot"></span><span data-layer-status>Ready</span></span></span></button><div class="layer-actions"><button class="launch" data-action="' + (c.pending ? 'restore' : 'launch') + '" aria-label="' + (c.pending ? 'Choose local file for ' : 'Launch ') + escape(c.name) + '" title="' + (c.pending ? 'Choose this local file again' : 'Restart this layer') + '">' + (c.pending ? 'Choose' : 'Launch') + '</button><button data-action="up" aria-label="Move ' + escape(c.name) + ' forward" title="Move forward"' + (index === 0 ? ' disabled' : '') + '>↑</button><button data-action="down" aria-label="Move ' + escape(c.name) + ' backward" title="Move backward"' + (index === front.length - 1 ? ' disabled' : '') + '>↓</button><button class="remove" data-action="remove" aria-label="Remove ' + escape(c.name) + '" title="Remove layer">×</button></div></div>';
+          return '<div class="layer' + (c.id === selectedId ? ' selected' : '') + (c.pending ? ' pending' : '') + '" data-layer="' + escape(c.id) + '"><button class="layer-select" data-action="' + (c.pending ? 'restore' : 'select') + '" aria-pressed="' + (c.id === selectedId) + '" aria-label="' + (c.pending ? (c.sampleId ? 'Retry public media for layer ' : 'Choose local file for layer ') : 'Select layer ') + (index + 1) + ': ' + escape(c.name) + '"><span class="thumb ' + thumb + '" aria-hidden="true"></span><span class="layer-copy"><span class="layer-name">' + escape(c.name) + '</span><span class="layer-status"><span class="layer-dot"></span><span data-layer-status>Ready</span></span></span></button><div class="layer-actions"><button class="launch" data-action="' + (c.pending ? 'restore' : 'launch') + '" aria-label="' + (c.pending ? (c.sampleId ? 'Retry public media for ' : 'Choose local file for ') : 'Launch ') + escape(c.name) + '" title="' + (c.pending ? (c.sampleId ? 'Retry public-media download' : 'Choose this local file again') : 'Restart this layer') + '">' + (c.pending ? (c.sampleId ? 'Retry' : 'Choose') : 'Launch') + '</button><button data-action="up" aria-label="Move ' + escape(c.name) + ' forward" title="Move forward"' + (index === 0 ? ' disabled' : '') + '>↑</button><button data-action="down" aria-label="Move ' + escape(c.name) + ' backward" title="Move backward"' + (index === front.length - 1 ? ' disabled' : '') + '>↓</button><button class="remove" data-action="remove" aria-label="Remove ' + escape(c.name) + '" title="Remove layer">×</button></div></div>';
         }).join('') : '<div class="empty-state">An open stage.<br>Add a generated loop or choose a local file to begin.</div>';
       }
       document.querySelectorAll('[data-layer]').forEach(row => {
@@ -236,7 +290,10 @@
     function renderInspector(c) {
       $('inspector-empty').hidden = !!c; $('inspector-body').hidden = !c;
       $('preset-select').disabled = !c;
-      $('selected-name').textContent = c ? c.name : 'No layer selected';
+      $('selected-name').textContent = c ? c.name : 'No clip selected';
+      const sample = c && publicMedia((sources.get(c.id) || {}).sampleId || c.sampleId);
+      $('source-credit').hidden = !sample;
+      if (sample) $('source-credit').innerHTML = escape(sample.title) + ' · ' + escape(sample.author) + '<br><a href="' + sample.licenseURL + '" target="_blank" rel="noopener noreferrer">' + escape(sample.license) + '</a> · <a href="' + sample.sourceURL + '" target="_blank" rel="noopener noreferrer">Source &amp; credits ↗</a>';
       $('selected-number').textContent = c ? String(slotEntries(engine.snapshot(), slots).slice().reverse().findIndex(x => x.id === c.id) + 1).padStart(2, '0') : '—';
       if (!c) { $('preset-description').textContent = 'Select an imported clip to shape its picture and sound.'; return; }
       const signature = c.id + JSON.stringify(c.settings) + JSON.stringify(c.capabilities);
@@ -319,11 +376,12 @@
         const c = front.find(item => item.id === row.dataset.track); if (!c) return;
         row.classList.toggle('selected', c.id === selectedId);
         const sourceDuration = c.video && c.video.duration || c.audio && c.audio.duration;
-        row.querySelector('.track-meta').textContent = c.pending ? 'Missing local media · choose file' : (c.kind === 'demo' ? 'Generated' : c.kind === 'audio' ? 'Audio' : 'Video') + (sourceDuration > 0 ? ' · ' + seconds(sourceDuration) + ' source' : ' · source duration unavailable');
+        row.querySelector('.track-meta').textContent = c.pending ? (c.sampleId ? 'Public media · download pending' : 'Missing local media · choose file') : (c.kind === 'demo' ? 'Generated' : c.kind === 'audio' ? 'Audio' : 'Video') + (sourceDuration > 0 ? ' · ' + seconds(sourceDuration) + ' source' : ' · source duration unavailable');
         const index = front.indexOf(c);
         row.querySelector('[data-track-action="up"]').disabled = index === 0;
         row.querySelector('[data-track-action="down"]').disabled = index === front.length - 1;
-        row.querySelector('[data-track-action="launch"]').textContent = c.pending ? '↥' : '▶';
+        row.querySelector('[data-track-action="launch"]').textContent = c.pending ? (c.sampleId ? '↻' : '↥') : '▶';
+        row.querySelector('[data-track-action="launch"]').title = c.pending ? (c.sampleId ? 'Retry public-media download' : 'Choose local file') : 'Play from this clip';
         row.querySelectorAll('.track-lane').forEach(lane => { lane.style.backgroundSize = (step * zoom) + 'px 100%'; });
         row.querySelectorAll('[data-clip]').forEach(clip => {
           const lane = clip.dataset.lane, s = c.settings, life = s[lane === 'video' ? 'videoLife' : 'audioLife'];
@@ -401,15 +459,23 @@
       status('Import your own footage or found sounds. Files stay local.');
     }
     async function replaceSession(data) {
-      engine.dispose(); sources = new Map(); slots = []; selectedId = null; hasPlayed = false; layerSignature = ''; inspectorSignature = '';
+      engine.dispose(); sources = new Map(); slots = data.clips.map((c, index) => ({key: 'pending-' + index, pending: c})); selectedId = null; hasPlayed = false; layerSignature = ''; inspectorSignature = '';
       newEngine(); engine.setMaster(data.master); engine.setSequence(data.sequence); setMode(data.transport.mode); if (engine.setTransport) engine.setTransport(data.transport);
-      for (const c of data.clips) {
-        if (c.kind === 'demo') await addDemo(c.demo, c.settings, c.name, c.clipId); else slots.push({key: 'pending-' + slots.length, pending: c});
+      const failures = [];
+      for (const slot of slots.slice()) {
+        const c = slot.pending;
+        if (c.kind === 'demo') {
+          const source = {name: c.name, kind: 'demo', demo: c.demo, id: c.clipId || availableClipId(engine.snapshot(), slots)};
+          const id = await engine.addClip(source, c.settings); sources.set(id, source); slots[slots.indexOf(slot)] = {id}; alignEngineOrder(engine, slots);
+        } else if (c.sampleId) {
+          try { await loadPublicMedia(c.sampleId, c.settings.timelineStart || 0, slot); }
+          catch (error) { failures.push(error.message || String(error)); }
+        }
       }
       selectedId = engine.snapshot().clips[0] ? engine.snapshot().clips[0].id : null;
-      const pendingFiles = slots.filter(slot => slot.pending).map(slot => slot.pending);
-      status(pendingFiles.length ? 'Settings loaded. Choose ' + pendingFiles.map(c => c.name).join(', ') + ' again to restore their local media.' : 'Session loaded. Press Play to begin.', 'success');
-      render(engine.snapshot());
+      const local = slots.filter(slot => slot.pending && !slot.pending.sampleId).map(slot => slot.pending);
+      status(failures.length ? 'Project opened; some public media could not download. ' + failures.join(' ') : local.length ? 'Project opened. Choose ' + local.map(c => c.fileName || c.name).join(', ') + ' again to restore local media.' : 'Project opened. Press Play to begin.', failures.length ? 'error' : 'success');
+      render(engine.snapshot()); renderBin();
     }
     function togglePlay() {
       if (!engine.snapshot().clips.length) { if (slots.some(slot => slot.pending)) $('media-input').click(); else openSources(); return; }
@@ -480,7 +546,7 @@
       const button = event.target.closest('[data-track-action]'); if (!button || busy) return;
       const id = button.closest('[data-track]').dataset.track, action = button.dataset.trackAction;
       setSelected(id);
-      if (action === 'launch') { const c = selected(); if (c.pending) $('media-input').click(); else run(() => engine.launch(id)); }
+      if (action === 'launch') { const c = selected(); if (c.pending) { const slot = slots.find(item => item.key === c.id); if (c.sampleId) run(() => loadPublicMedia(c.sampleId, c.settings.timelineStart || 0, slot)); else $('media-input').click(); } else run(() => engine.launch(id)); }
       if (action === 'remove') removeSelected();
       if (action === 'up' || action === 'down') {
         const index = slots.findIndex(slot => slot.id === id || slot.key === id), next = index + (action === 'up' ? 1 : -1);
@@ -495,7 +561,7 @@
     $('delete-clip').addEventListener('click', removeSelected);
 
     $('transport-play').addEventListener('click', togglePlay);
-    $('launch-selected').addEventListener('click', () => { const c = selected(); if (c && c.pending) $('media-input').click(); else if (c) run(() => engine.launch(c.id)); });
+    $('launch-selected').addEventListener('click', () => { const c = selected(); if (c && c.pending) { const slot = slots.find(item => item.key === c.id); if (c.sampleId) run(() => loadPublicMedia(c.sampleId, c.settings.timelineStart || 0, slot)); else $('media-input').click(); } else if (c) run(() => engine.launch(c.id)); });
     $('master-mute').addEventListener('click', () => engine.setMaster({muted: !engine.snapshot().muted}));
     $('master-volume').addEventListener('input', event => engine.setMaster({volume: Number(event.target.value)}));
     $('sequence-enabled').addEventListener('change', event => engine.setSequence({enabled: event.target.checked}));
@@ -516,7 +582,7 @@
       const id = row.dataset.layer, action = button.dataset.action;
       const slotIndex = slots.findIndex(slot => slot.id === id || slot.key === id);
       if (action === 'select') { setSelected(id); focusLayer(id); }
-      if (action === 'restore') { $('media-input').click(); return; }
+      if (action === 'restore') { const slot = slots[slotIndex]; if (slot && slot.pending.sampleId) run(() => loadPublicMedia(slot.pending.sampleId, slot.pending.settings.timelineStart || 0, slot)); else $('media-input').click(); return; }
       if (action === 'launch') { setSelected(id); setMode('perform'); run(() => engine.launch(id)); }
       if ((action === 'up' || action === 'down') && slotIndex >= 0) {
         const next = Math.max(0, Math.min(slots.length - 1, slotIndex + (action === 'up' ? 1 : -1)));
@@ -544,41 +610,45 @@
     function renderBin() {
       $('media-bin-list').innerHTML = assets.size ? Array.from(assets.values()).map(asset => '<button class="bin-asset" draggable="true" data-asset="' + asset.id + '" title="Add ' + escape(asset.name) + ' at the playhead"><span class="thumb ' + asset.kind + '" aria-hidden="true"></span><span><strong>' + escape(asset.name) + '</strong><small>' + (asset.duration > 0 ? seconds(asset.duration) + ' source' : 'Local ' + asset.kind) + '</small></span></button>').join('') : '<p class="bin-note">No local media imported.</p>';
     }
-    async function importFiles(files, at = engine.snapshot().time) {
+    async function importFiles(files, at = engine.snapshot().time, options = {}) {
+      const sample = options.sampleId ? publicMedia(options.sampleId) : null;
+      if (options.sampleId && !sample) throw new Error('Unknown public media source.');
       let imported = 0, binned = 0; const errors = [];
       for (const file of files) {
         const kind = fileKind(file); if (!kind) { errors.push(file.name + ': choose video or audio.'); continue; }
-        const key = [file.name, file.size, file.lastModified, kind].join('|');
+        if (sample && sample.kind !== kind) throw new Error('Downloaded media type does not match its catalog entry.');
+        const key = sample ? 'public:' + sample.id : [file.name, file.size, file.lastModified, kind].join('|');
         let asset = assets.get(key);
-        if (!asset) { asset = {id: 'asset-' + (++assetSerial), name: file.name, kind, file, duration: 0}; assets.set(key, asset); binned++; }
-        const matches = slots.filter(slot => slot.pending && (slot.pending.fileName || slot.pending.name) === file.name && slot.pending.kind === kind);
+        if (!asset) { asset = {id: 'asset-' + (++assetSerial), name: sample ? sample.title : file.name, kind, file, duration: 0, ...(sample ? {sampleId: sample.id} : {})}; assets.set(key, asset); binned++; }
+        const matches = options.restoreSlot ? [options.restoreSlot].filter(slot => slots.includes(slot) && slot.pending) : slots.filter(slot => slot.pending && (sample ? slot.pending.sampleId === sample.id : !slot.pending.sampleId && (slot.pending.fileName || slot.pending.name) === file.name) && slot.pending.kind === kind);
         const targets = matches.length ? matches : slots.length < Model.MAX_CLIPS ? [null] : [];
         if (!targets.length) { errors.push(file.name + ' added to Media; all ' + Model.MAX_CLIPS + ' timeline slots are occupied.'); continue; }
         for (const slot of targets) {
           const restore = slot && slot.pending;
           const url = URL.createObjectURL(file);
-          const source = {name: restore ? restore.name : file.name, kind, url, ownedURL: true, id: restore && restore.clipId || availableClipId(engine.snapshot(), slots)};
+          const source = {name: restore ? restore.name : sample ? sample.title : file.name, kind, url, ownedURL: true, id: restore && restore.clipId || availableClipId(engine.snapshot(), slots)};
           try {
             const id = await engine.addClip(source, restore ? restore.settings : {...Model.PRESETS.drift.settings, timelineStart: at, videoEnabled: kind !== 'audio'});
             const admitted = engine.snapshot().clips.find(c => c.id === id);
             const videoDuration = admitted.video.duration || admitted.audio.duration, audioDuration = admitted.audio.duration || admitted.video.duration;
             asset.duration = Math.max(videoDuration || 0, audioDuration || 0);
             if (!restore && asset.duration > 0) engine.set(id, {videoLife: kind === 'audio' ? .25 : videoDuration, audioLife: audioDuration});
-            sources.set(id, {name: source.name, fileName: file.name, kind, file, assetId: asset.id});
+            sources.set(id, {name: source.name, fileName: file.name, kind, file, assetId: asset.id, ...(sample ? {sampleId: sample.id} : {})});
             if (slot) slots[slots.indexOf(slot)] = {id}; else slots.push({id});
             alignEngineOrder(engine, slots); imported++; layerSignature = ''; setSelected(id);
-          } catch (error) { URL.revokeObjectURL(url); errors.push(file.name + ': ' + (error.message || 'This browser could not open the file.')); }
+          } catch (error) { URL.revokeObjectURL(url); errors.push(file.name + ': ' + (error.message || 'This browser could not open the file.')); if (options.throwOnError) throw error; }
         }
       }
       renderBin();
       status((imported ? imported + ' ' + (imported === 1 ? 'clip' : 'clips') + ' placed. ' : binned ? binned + ' sources in Media. ' : '') + errors.join(' '), errors.length ? 'error' : 'success');
+      return {imported, binned, errors};
     }
     $('media-input').addEventListener('change', event => {
       const files = Array.from(event.target.files || []); event.target.value = ''; if (files.length) run(() => importFiles(files));
     });
     $('media-bin-list').addEventListener('click', event => {
       const button = event.target.closest('[data-asset]'); if (!button) return;
-      const asset = Array.from(assets.values()).find(item => item.id === button.dataset.asset); if (asset) run(() => importFiles([asset.file]));
+      const asset = Array.from(assets.values()).find(item => item.id === button.dataset.asset); if (asset) run(() => importFiles([asset.file], engine.snapshot().time, {sampleId: asset.sampleId}));
     });
     $('media-bin-list').addEventListener('dragstart', event => { const button = event.target.closest('[data-asset]'); if (button) { event.dataTransfer.setData('application/x-ilc-source', button.dataset.asset); event.dataTransfer.effectAllowed = 'copy'; } });
     function droppedSource(event, at) {
@@ -586,7 +656,7 @@
       const files = Array.from(event.dataTransfer.files || []);
       if (files.length) { run(() => importFiles(files, at)); return; }
       const source = event.dataTransfer.getData('application/x-ilc-source');
-      const asset = Array.from(assets.values()).find(item => item.id === source); if (asset) run(() => importFiles([asset.file], at));
+      const asset = Array.from(assets.values()).find(item => item.id === source); if (asset) run(() => importFiles([asset.file], at, {sampleId: asset.sampleId}));
     }
     $('timeline-scroll').addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
     $('timeline-scroll').addEventListener('drop', event => { let time = timelineTime(event.clientX); if ($('timeline-snap').checked) time = Math.round(time * 4) / 4; droppedSource(event, time); });
@@ -594,6 +664,38 @@
     $('media-drop').addEventListener('dragleave', event => { if (!$('media-drop').contains(event.relatedTarget)) $('media-drop').classList.remove('drag-over'); });
     app.addEventListener('dragover', event => { if (Array.from(event.dataTransfer.types || []).includes('Files')) event.preventDefault(); });
     app.addEventListener('drop', event => droppedSource(event, engine.snapshot().time));
+    function renderPublicPicker() {
+      $('public-media-list').innerHTML = PUBLIC_MEDIA.map(sample => {
+        const media = document.createElement(sample.kind === 'video' ? 'video' : 'audio');
+        const supported = !!media.canPlayType(sample.codecs);
+        const full = slots.length >= Model.MAX_CLIPS && !slots.some(slot => slot.pending && slot.pending.sampleId === sample.id);
+        const size = sample.bytes >= 1000000 ? (sample.bytes / 1000000).toFixed(1) + ' MB' : Math.round(sample.bytes / 1000) + ' kB';
+        return '<article class="public-media-card"><div class="public-media-top"><span class="public-media-type">' + (sample.kind === 'video' ? 'VIDEO + LOCATION SOUND' : 'FOUND SOUND') + '</span><span>' + sample.duration.toFixed(1) + ' s · ' + size + '</span></div><h3>' + escape(sample.title) + '</h3><p>' + escape(sample.description) + '</p><div class="public-media-credit">' + escape(sample.author) + ' · <a href="' + sample.licenseURL + '" target="_blank" rel="noopener noreferrer">' + escape(sample.license) + '</a><br><a href="' + sample.sourceURL + '" target="_blank" rel="noopener noreferrer">Wikimedia Commons source &amp; credits ↗</a></div><div class="public-media-action"><span>' + escape(sample.format) + '</span><button data-public-media="' + sample.id + '" data-unsupported="' + !supported + '" data-full="' + full + '"' + (!supported || full ? ' disabled' : '') + '>Add to timeline</button></div>' + (!supported ? '<p class="public-media-warning">This browser reports no support for this format. The source page has other downloads.</p>' : full ? '<p class="public-media-warning">All eight clip slots are occupied. Remove a clip to add this source.</p>' : '') + '</article>';
+      }).join('');
+    }
+    async function loadPublicMedia(sampleId, at = engine.snapshot().time, restoreSlot = null) {
+      const sample = publicMedia(sampleId); if (!sample) throw new Error('Unknown public media source.');
+      if (slots.length >= Model.MAX_CLIPS && !slots.some(slot => slot.pending && slot.pending.sampleId === sampleId)) throw new Error('All eight clip slots are occupied. Remove a clip before adding public media.');
+      status('Loading ' + sample.title + ' from Wikimedia Commons…');
+      $('public-media-status').textContent = 'Loading ' + sample.title + '…';
+      let file = publicFiles.get(sampleId);
+      try {
+        if (!file) { file = await fetchPublicMedia(sampleId); publicFiles.set(sampleId, file); }
+        const result = await importFiles([file], at, {sampleId, restoreSlot, throwOnError: true});
+        if (!result.imported) throw new Error(result.errors.join(' ') || 'No timeline clip was added.');
+        renderPublicPicker();
+        $('public-media-status').textContent = sample.title + ' added at ' + seconds(at) + '.';
+        status(sample.title + ' added at ' + seconds(at) + (engine.snapshot().playing ? '.' : '. Press Play to hear or see it.'), 'success');
+      } catch (error) { $('public-media-status').textContent = 'Could not load ' + sample.title + ': ' + (error.message || error); throw error; }
+    }
+    function openPublicPicker() { renderPublicPicker(); $('public-media-dialog').showModal(); }
+    function closePublicPicker() { $('public-media-dialog').close(); $('open-public-media').focus(); }
+    $('open-public-media').addEventListener('click', openPublicPicker);
+    $('bin-public-media').addEventListener('click', openPublicPicker);
+    $('close-public-media').addEventListener('click', closePublicPicker);
+    $('public-media-dialog').addEventListener('click', event => { if (event.target === $('public-media-dialog')) closePublicPicker(); });
+    $('public-media-dialog').addEventListener('close', () => $('open-public-media').focus());
+    $('public-media-list').addEventListener('click', event => { const button = event.target.closest('[data-public-media]'); if (button && !button.disabled) run(() => loadPublicMedia(button.dataset.publicMedia)); });
     function duplicateSelected() {
       const c = selected(); if (!c || slots.length >= Model.MAX_CLIPS || busy) return;
       const settings = {...c.settings, timelineStart: Math.min(3600, (c.settings.timelineStart || 0) + 1)};
@@ -633,11 +735,11 @@
     });
     $('reset-session').addEventListener('click', () => run(async () => {
       engine.dispose(); sources = new Map(); slots = []; selectedId = null; hasPlayed = false; layerSignature = ''; inspectorSignature = '';
-      assets.clear(); newEngine(); await defaults(); status('Empty project ready. Import your own footage or found sounds.', 'success');
+      assets.clear(); publicFiles.clear(); const cleared = await clearPublicMediaCache(); newEngine(); await defaults(); $('public-media-status').textContent = ''; status(cleared ? 'Empty project ready. Import your footage or choose public media.' : 'Empty project ready. This browser could not clear its public-media download cache.', cleared ? 'success' : 'error');
     }).then(() => $('transport-play').focus()));
     document.addEventListener('keydown', event => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd' && !/^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName)) { event.preventDefault(); duplicateSelected(); return; }
-      if (event.altKey || event.ctrlKey || event.metaKey || event.repeat || busy || /^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName) || event.target.isContentEditable) return;
+      if (event.altKey || event.ctrlKey || event.metaKey || event.repeat || busy || $('public-media-dialog').open || /^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName) || event.target.isContentEditable) return;
       if (event.code === 'Space') { if (event.target.closest('button, a')) return; event.preventDefault(); togglePlay(); }
       else if (/^[1-8]$/.test(event.key)) { const c = slotEntries(engine.snapshot(), slots).slice().reverse()[Number(event.key) - 1]; if (c && !c.pending) setSelected(c.id); }
       else if (event.key.toLowerCase() === 'l' && selectedId) run(() => engine.launch(selectedId));

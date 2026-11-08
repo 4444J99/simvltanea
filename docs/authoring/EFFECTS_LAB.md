@@ -4,8 +4,9 @@ Effects Lab is a browser editing workspace for **Independent Loop Compositor**.
 It combines a media bin, composition preview, arrangement timeline, clip
 inspector, and a separate performance view. Open it from the **Effects Lab** link
 in Studio, or directly at `lab.html` in a staged compositor site. The page opens
-on an empty timeline, ready for your footage and found sounds. No supplied
-pictures, synthesized sounds, or sample clips are inserted.
+on an empty timeline, ready for your footage and found sounds. No clips are
+inserted automatically. An optional **Public media** picker offers recorded
+footage and found sounds with their source and rights records.
 
 The earlier [dataset Lab](LAB.md) still explores strip layout, framing, pool
 selection, and source metadata. This workspace focuses on overlapping picture
@@ -29,8 +30,9 @@ is supported; no picture or musical structure is required.
    vertically to change picture opacity or sound level.
 
 **Reset** clears the arrangement and the current page's media bin, returning to
-an empty project. It does not replace your material with examples or overwrite
-the separately saved project.
+an empty project. It also clears the public-media cache used by this workspace;
+if browser storage cannot be cleared, the interface reports that failure. Reset
+does not overwrite the separately saved project.
 
 The timeline has one row per clip pair, with distinct **Picture** and **Sound**
 lanes. Up to **eight pairs** can occupy the project, including unresolved local
@@ -110,8 +112,8 @@ scheduled playback semantics. Ruler scrubbing explicitly uses Arrange mode.
 
 Use **Import media**, the add-media button, or drop video/audio onto the workspace.
 Dropping a source onto the timeline places it at that time; clicking a source in
-the bin places it at the playhead. The media bin contains only files you have
-imported into the current page.
+the bin places it at the playhead. The media bin contains files you imported
+or explicitly chose from the optional public-media catalog.
 
 Imported files stay in the current page's media bin and can be reused after a
 clip is deleted. Native clips initially use their actual source durations for
@@ -123,6 +125,39 @@ Media is read through local object URLs and is not uploaded. Each duplicate
 local clip receives a separate owned URL so deleting one does not invalidate
 another. Browser codec support determines which files can be decoded; an
 unsupported import reports an error without replacing existing clips.
+
+## Optional public media
+
+Open **Public media** in the top bar, including on small screens, or use the
+media-bin shortcut. The fixed catalog contains two recordings with picture and
+original location sound, plus two audio-only field recordings. Each card shows
+the creator, reuse terms, source page, delivered format, approximate duration,
+and download size. The selected clip's inspector retains the source and rights
+links after it has been added.
+
+Choose **Add to timeline** to download that source and place it at the current
+playhead. Adding a source does not start playback when the transport is stopped,
+and it does not interrupt an already running composition. Audio-only sources
+open the Sound inspector when Picture was selected. These files enter the same
+native-media path and use the same timeline, blending, filtering, and repeat
+controls as local imports.
+
+The delivered videos are VP9/Opus WebM; the audio recordings are MP3. The picker
+disables a format when the browser reports that it cannot play it, and reports
+actual download or decoding errors. The source page remains available for other
+download variants. It does not claim universal Safari or physical iPhone support.
+
+See [public-media sources and verification](EFFECTS_LAB_OPEN_MEDIA.md) for the
+four original creator/rights records, exact delivered variants, and bounded
+browser evidence. The two audio recordings have author public-domain releases;
+they are not labelled CC0. Credit links remain useful provenance even where the
+stated reuse terms do not require attribution.
+
+Downloads use a fixed Wikimedia host and catalog allowlist, with credentials
+omitted. The workspace accepts no arbitrary remote media URL from a project
+file. Your own files are never uploaded. Downloaded Files are reused during the
+page session and stored in this workspace's browser cache when storage is
+available. Reset clears both reuse stores without adding any sample material.
 
 ## Picture, sound, and timing effects
 
@@ -185,8 +220,9 @@ that project. **Export JSON** and **Import JSON** move the settings between page
 or devices. Restoring a project opens it paused.
 
 The JSON describes arranged clips, their settings and layer order, source names,
-stable clip identities, transport mode, and loop range. It contains neither media
-bytes nor blob URLs. It does not record a rendered composition, the active
+stable clip identities, transport mode, and loop range. Public-media clips also
+retain a known catalog `sampleId`. The JSON contains no media bytes, blob URLs,
+or remote download URLs. It does not record a rendered composition, the active
 playhead position, or a durable copy of the entire source bin.
 
 Local files must be selected again after a reload. Unresolved files remain as
@@ -195,6 +231,13 @@ and identities. They can be edited, reordered, removed, or saved again before
 reselection. Choosing the matching file name and media type restores its saved
 position. A file name is a restoration aid, not verification that the file's
 contents are unchanged.
+
+Public-media clips restore from the fixed catalog automatically, using the
+browser cache or downloading again. Their stable identities, settings, start
+times, and stack positions are retained. If a download fails, its saved slot
+remains visible as **Public media · download pending** with a retry control;
+restoration continues for the other clips. Local-file slots still require
+reselection and are labelled separately.
 
 Stable clip identities retain deterministic repeat decisions and comb phase
 through reordering and restoration. New clips reserve identities belonging to
