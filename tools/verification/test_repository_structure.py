@@ -220,6 +220,52 @@ class RepositoryStructureTests(unittest.TestCase):
             self.write(self.root, path)
             self.assert_violation(self.root, path)
 
+    def test_engineered_iteration_archives_accept_only_registered_source_inputs(self):
+        allowed = (
+            'archive/engineered-iterations/README.md',
+            'archive/engineered-iterations/early/source-provenance.json',
+            'archive/engineered-iterations/early/authored-loops/browser_runtime.js',
+            'archive/engineered-iterations/early/seamed-slices/browser_runtime.js',
+            'archive/engineered-iterations/early/spatial-audio/browser_runtime.js',
+            'archive/engineered-iterations/early/viewport-composition/browser_runtime.js',
+            'archive/engineered-iterations/studio-authored/manifest.json',
+            'archive/engineered-iterations/studio-authored/README.md',
+            'archive/engineered-iterations/studio-authored/source/pyproject.toml',
+            'archive/engineered-iterations/studio-strips/source/examples/layout-presets/strips.json',
+            'archive/engineered-iterations/studio-instant/source/src/simvltanea/browser/browser_studio.py',
+            'archive/engineered-iterations/studio-library/source/src/simvltanea/browser/browser.studio.js',
+            'archive/engineered-iterations/modular-lab/source/src/simvltanea/lab/app/index.html',
+            'archive/engineered-iterations/modular-continuous/source/src/simvltanea/lab/app/lab.css',
+            'archive/engineered-iterations/modular-preload/source/src/simvltanea/lab/app/player.js',
+            'archive/engineered-iterations/modular-integrated/manifest.json',
+        )
+        rejected = (
+            'archive/engineered-iterations/loose.py',
+            'archive/engineered-iterations/early/authored-loops/plan.json',
+            'archive/engineered-iterations/early/unregistered/browser_runtime.js',
+            'archive/engineered-iterations/unregistered/source/src/engine.py',
+            'archive/engineered-iterations/studio-authored/index.html',
+            'archive/engineered-iterations/studio-authored/source/private.mp4',
+            'archive/engineered-iterations/studio-authored/source/var/site/index.html',
+            'archive/engineered-iterations/studio-authored/source/src/data/clips.json',
+            'archive/engineered-iterations/studio-authored/source/src/site/runtime.js',
+            'archive/engineered-iterations/studio-authored/source/src/__pycache__/engine.pyc',
+            'archive/engineered-iterations/modular-lab/source/src/simvltanea/lab/media/video.mp4',
+            'archive/engineered-iterations/modular-lab/source/src/simvltanea/lab/data/clips.json',
+            'archive/engineered-iterations/modular-lab/source/src/simvltanea/lab/app/bundle.zip',
+            'archive/chatgpt/unapproved/source.py',
+        )
+        for path in allowed + rejected:
+            self.write(self.root, path)
+        self.git(self.root, 'add', '--all', '--force')
+        reported = dict(structure.verify_structure(self.root))
+        for path in allowed:
+            with self.subTest(allowed=path):
+                self.assertNotIn(path, reported)
+        for path in rejected:
+            with self.subTest(rejected=path):
+                self.assertIn(path, reported)
+
     def test_required_files_cannot_be_deleted_or_removed_from_the_index(self):
         for operation in ("unstaged", "staged", "index-only"):
             with self.subTest(operation=operation):

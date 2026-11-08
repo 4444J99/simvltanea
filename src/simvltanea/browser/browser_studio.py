@@ -9,8 +9,10 @@ compiles them in the browser. The families and the counts each offers come from
 ``layouts.json``, the ``simvltanea.layout-bundle/2`` that ``layout_bundle_v2()``
 builds. Files never leave the device. ``stage_studio(output)`` writes the flat, relative-URL site::
 
-    index.html  runtime.js  compiler.js  studio.js  layouts.json
-    lab.html  lab_model.js  lab_engine.js  lab_ui.js  lab_audio.js
+    index.html  shell.js  watch.html  iterations.html
+    engineered-iterations.json  iterations.json
+    runtime.js  compiler.js  studio.js  layouts.json
+    workspace.html  lab.html  lab_model.js  lab_engine.js  lab_ui.js  lab_audio.js
     lab_compiler.js  lab_layouts.js
 
 A public clip library (``library/manifest.json`` and ``library/clips/``) is added
@@ -35,7 +37,9 @@ from simvltanea.browser.browser_lab import LAB_FILES, lab_files
 
 HERE = Path(__file__).resolve().parent
 STUDIO_TITLE = 'SIMVLTANEA studio: loops on their own clocks'
-STUDIO_FILES = ('shell.js', 'watch.html', 'iterations.json', 'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json', *LAB_FILES)
+STUDIO_FILES = ('shell.js', 'watch.html', 'iterations.html', 'engineered-iterations.json',
+                'iterations.json', 'index.html', 'runtime.js', 'compiler.js',
+                'studio.js', 'layouts.json', *LAB_FILES)
 
 STYLE = '''
 :root{color-scheme:dark;--bg:#0a0a0b;--fg:rgba(255,255,255,.88);--dim:rgba(255,255,255,.55);
@@ -259,7 +263,9 @@ aria-controls="filter-settings" aria-expanded="false" title="Filter settings">â˜
 '''
 
 
-from simvltanea.browser.browser_shell import SHELL_HTML, SHELL_JS, ITERATIONS_JSON
+from simvltanea.browser.browser_shell import (
+    ENGINEERED_ITERATIONS_JSON, ITERATIONS_HTML, ITERATIONS_JSON, SHELL_HTML, SHELL_JS,
+)
 
 
 class StudioStagingError(ValueError):
@@ -273,6 +279,8 @@ def studio_files() -> dict[str, bytes]:
         'index.html': SHELL_HTML.encode(),
         'watch.html': INDEX_HTML.encode(),
         'shell.js': SHELL_JS.encode(),
+        'iterations.html': ITERATIONS_HTML.encode(),
+        'engineered-iterations.json': ENGINEERED_ITERATIONS_JSON.encode(),
         'iterations.json': ITERATIONS_JSON.encode(),
         'runtime.js': b'\n'.join((HERE / name).read_bytes() for name in
                                 ('browser.audio.js', 'browser.presence.js', 'browser.ecosystem.js', 'browser.live.js')),

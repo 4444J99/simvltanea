@@ -124,7 +124,7 @@ class FilterControlsBrowserTests(unittest.TestCase):
         context.route('**/*', route)
         page = context.new_page()
         page.on('pageerror', lambda error: errors.append(str(error)))
-        page.goto('https://studio.test/' + query)
+        page.goto('https://studio.test/watch.html' + query)
         wait_for(page, f"window.compositionRuntime?.ready && compositionRuntime.nodes.size==={count} && !compositionRuntime.draining", timeout=20000)
         self.addCleanup(lambda: self.assertEqual(errors, []))
         return page, requests

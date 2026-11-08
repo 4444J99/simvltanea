@@ -256,7 +256,8 @@ class StageStudioTests(unittest.TestCase):
         output = self.temp / 'nested' / 'studio'
         stage_studio(output)
         self.assertEqual(sorted(path.name for path in output.iterdir()), sorted(STUDIO_FILES))
-        self.assertEqual(set(STUDIO_FILES), {'shell.js', 'watch.html', 'iterations.json', 'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json',
+        self.assertEqual(set(STUDIO_FILES), {'shell.js', 'watch.html', 'iterations.html', 'engineered-iterations.json',
+                                           'iterations.json', 'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json',
                                            'workspace.html', 'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js',
                                            'lab_compiler.js', 'lab_layouts.js'})
         self.assertTrue(all(path.is_file() and not path.is_symlink() for path in output.iterdir()))
@@ -315,7 +316,7 @@ class StageStudioTests(unittest.TestCase):
     def test_staged_text_is_public_safe_and_relative(self):
         output = self.temp / 'public'
         stage_studio(output)
-        # Only the Lab's fixed public catalog and its CSP may use HTTPS.
+        # Only the fixed public media and historical deployment catalogs may use HTTPS.
         # Keep exact URLs, rather than permitting arbitrary paths on these hosts.
         lab_https_urls = {
             'lab.html': {'https://upload.wikimedia.org'},
@@ -336,6 +337,18 @@ class StageStudioTests(unittest.TestCase):
                 'https://upload.wikimedia.org/wikipedia/commons/transcoded/d/db/Compressor_motor.ogg/Compressor_motor.ogg.mp3',
             },
         }
+        iteration_urls = {
+            'https://c1054351.loop-compositor-studio.pages.dev/',
+            'https://33af4610.loop-compositor-studio.pages.dev/',
+            'https://0fe8f773.loop-compositor-studio.pages.dev/',
+            'https://3d678bfa.loop-compositor-studio.pages.dev/lab.html',
+            'https://16d63a9f.loop-compositor-studio.pages.dev/lab.html',
+            'https://fafae868.loop-compositor-studio.pages.dev/lab.html',
+            'https://6061fab7.loop-compositor-studio.pages.dev/lab.html',
+            'https://bf6d702a.loop-compositor-studio.pages.dev/workspace.html',
+        }
+        for name in ('index.html', 'iterations.html', 'engineered-iterations.json'):
+            lab_https_urls[name] = iteration_urls
         for path in output.iterdir():
             text = path.read_text(encoding='utf-8')
             with self.subTest(file=path.name):
@@ -565,7 +578,8 @@ class StudioBrowserTests(unittest.TestCase):
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.origin = f'http://127.0.0.1:{cls.server.server_port}'
-        cls.url = f'{cls.origin}/{SUBPATH}/'
+        # The application root owns navigation; exercise the Studio itself here.
+        cls.url = f'{cls.origin}/{SUBPATH}/watch.html'
         cls.pw = sync_playwright().start()
         cls.browser = cls.pw.chromium.launch(executable_path=browser_executable(), headless=True,
                                              args=['--no-sandbox', '--disable-dev-shm-usage'])
@@ -1463,7 +1477,7 @@ class StudioLibraryTests(unittest.TestCase):
         page.on('console', lambda message: page.logs.append(message.text))
         if init_script is not None:
             page.add_init_script(init_script)
-        page.goto(f'{self.origin}/{site}/{query}')
+        page.goto(f'{self.origin}/{site}/watch.html{query}')
         page.wait_for_function('() => window.SimvltaneaStudio && window.SimvltaneaStudio.snapshot && '
                                'window.compositionRuntime && SimvltaneaStudio.snapshot().seed !== null')
         self.addCleanup(lambda: self.assertEqual(page.errors, []))

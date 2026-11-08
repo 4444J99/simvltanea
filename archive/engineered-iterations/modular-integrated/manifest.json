@@ -1,0 +1,68 @@
+{
+  "schema": "simvltanea.engineered-source/1",
+  "slug": "modular-integrated",
+  "kind": "lab",
+  "revision": "d6b61b72fc197455837c0fd824a9bfd0dcfafb55",
+  "files": [
+    {
+      "path": "src/simvltanea/lab/app/engine.js",
+      "sha256": "b2d4db2e15ee1a18a7248fe8296677f4fa40f32f87de6d2c735a00e8a4a428c9",
+      "git_blob": "d3a23aa6cc52b9d06277321d06f8ba7fe49ec6e5"
+    },
+    {
+      "path": "src/simvltanea/lab/app/framing.js",
+      "sha256": "a5545edf66a38278d29c4c3a9e1a1caa943874ae34dc6a83c9614ac0625d769b",
+      "git_blob": "66a608a02483d7adbe6b22f16cb311678b1441be"
+    },
+    {
+      "path": "src/simvltanea/lab/app/index.html",
+      "sha256": "4496369baed4147be3f09d54a44489a6eb6dcef3cb729983842bc099dc551a8f",
+      "git_blob": "c49cb03c37dd8f96658f6891f68c047123bee071"
+    },
+    {
+      "path": "src/simvltanea/lab/app/lab.css",
+      "sha256": "7a802a030f47e5a3a4f202222f4a9c0432608b78baa31bda92f9b5d2096ed123",
+      "git_blob": "81db6d3266a36018ab2904ba28baaacb54d165b9"
+    },
+    {
+      "path": "src/simvltanea/lab/app/layout.js",
+      "sha256": "977bc6fa22c576874dc56f4305661edf67787f9445895415f7bdb1e44ff6d883",
+      "git_blob": "ccf192c6d90d81cb216ccca852bf6f6e33d083fd"
+    },
+    {
+      "path": "src/simvltanea/lab/app/main.js",
+      "sha256": "68cbfbd614dc44ffc4df292b28148b39d4b21f1298ecb1c40689eabe00e2f013",
+      "git_blob": "dfceaceb5a7584557f6c49b771e2e5f211540958"
+    },
+    {
+      "path": "src/simvltanea/lab/app/params.js",
+      "sha256": "248402b3286c17f6b9689ec44ec1b72e6a18cc65763d35e14fddd02259f75fdc",
+      "git_blob": "6abe279162ac74b5a00f65ec8a0122d98b504971"
+    },
+    {
+      "path": "src/simvltanea/lab/app/player.js",
+      "sha256": "56fc8ec585e2cf3d37125ca62951ac3f30c89cd734b26c7eac36c07fde66768a",
+      "git_blob": "04fa8a7cc50b26fbace6b6d9e8b6de62bf5bf6ea"
+    },
+    {
+      "path": "src/simvltanea/lab/app/presets.js",
+      "sha256": "4ff3e8b6655c51f753430b1e982e78f09d3a962c78e3f78547b543e7366b6641",
+      "git_blob": "b6abd53b7b070438f5958447195c97b8c214caa9"
+    },
+    {
+      "path": "src/simvltanea/lab/app/speech.js",
+      "sha256": "adebaa0eb0f17579e9224eeaed3fe7b6b02ef48871775a5199aa52cde69ada5f",
+      "git_blob": "73e44c18e60cbd85dc1d940990efb6834cdf8307"
+    },
+    {
+      "path": "src/simvltanea/lab/app/store.js",
+      "sha256": "cbb717a5f0f85cbab4d1aa646f72ca5c228c4e2805213890a86a45e0bb5313b4",
+      "git_blob": "96c7b43c5653fe9671acb2cf2932e179b6ebfb0a"
+    },
+    {
+      "path": "src/simvltanea/lab/app/ui.js",
+      "sha256": "86be96fda8f9977e8d025cee0317008cc911bf7489b164847814caefc28d7708",
+      "git_blob": "c272c868ba5993b3320d6f668587c032f19ec8b6"
+    }
+  ]
+}

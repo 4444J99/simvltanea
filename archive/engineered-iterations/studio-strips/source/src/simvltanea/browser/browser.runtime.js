@@ -1,0 +1,1580 @@
+/* Native-media proof. Schema v1 remains silent; v1.1 audio requires a gesture.
+ * Resize mutates geometry and spatial pan only, never source playback state.
+ * Source/event/clock decisions are compiled by composition.py, not duplicated here.
+ * All boundary seeks, loads and decoded-frame callbacks remain inspectable.
+ */
+'use strict';
+const number = value => {
+  if ((typeof value !== 'string' && typeof value !== 'number') ||
+      !/^-?\d+(?:\/\d+)?$/.test(String(value))) throw new Error('Invalid compiled rational');
+  const parts = String(value).split('/').map(Number);
+  const result = parts.length === 1 ? parts[0] : parts[0] / parts[1];
+  if (!Number.isFinite(result)) throw new Error('Invalid compiled rational');
+  return result;
+};
+const stage = document.querySelector('#stage');
+const runtime = window.compositionRuntime = {
+  ready: false, running: false, finished: false, error: null, frame: 0,
+  events: [], maxEvents: 256, nodes: new Map(), sources: new Map(), plan: null, origin: 0,
+  orientation: null, orientationOverride: null, layoutIndex: 0, position: 0, generation: 0, starting: false,
+  initEpoch: 0, initController: null, transitions: new Set(), pauseIntent: false, initializing: false, retryable: false, assetError: null, disposed: false,
+  restarting: null, restartIntent: false,
+  audio: {mode:'none', context:null, enabled:false, buffer:null, source:null, gain:null, interrupted:false},
+};
+function record(type, id, details = {}) {
+  const cap = Number.isInteger(runtime.maxEvents) && runtime.maxEvents > 0 ? runtime.maxEvents : 256;
+  runtime.events.push({type, id, frame: runtime.frame, wall: performance.now(), ...details});
+  if (runtime.events.length > cap) {
+    runtime.events.splice(0, runtime.events.length - cap);
+  }
+}
+function setStatus(status,message) {
+  stage.dataset.status=status;
+  const label=document.querySelector('#runtime-status');
+  if(label) label.textContent=message;
+}
+const FINISHED_TEXT = 'Composition finished. Click or press Space to play again.';
+const RESTART_QUEUED_TEXT = 'Composition finished. Restarting as soon as media is ready…';
+/* A queued restart (see restartFinished) ends when it is performed or when the
+ * user starts, pauses or disposes the page another way. If it never ran, the
+ * status goes back to the truthful finished text. */
+function cancelRestartIntent() {
+  if (!runtime.restartIntent) return;
+  runtime.restartIntent = false;
+  if (runtime.finished && !runtime.error && !runtime.disposed) setStatus('finished', FINISHED_TEXT);
+}
+function fail(error, isAsset = false) {
+  if (runtime.disposed) return;
+  runtime.error = String(error); runtime.running = false; runtime.ready = false;
+  runtime.restartIntent = false;
+  if (isAsset || /Media (?:failure|timeout|decode|integrity)|Missing media|Cannot load compiled plan/.test(String(error))) {
+    runtime.retryable = true;
+    runtime.assetError = {message: String(error), retryable: true};
+    record('asset-load-failed', null, {message: String(error), retryable: true});
+  }
+  for (const node of runtime.nodes.values()) node.media?.pause?.();
+  stopSoundtrack();
+  if (runtime.audio.context) runtime.audio.context.suspend().catch(() => {});
+  setStatus('error',`Playback stopped: ${String(error)}`);
+  record('error', null, {message: String(error)});
+}
+function compositionTime() {
+  if (!runtime.running) return runtime.position;
+  return runtime.audio.context ? runtime.audio.context.currentTime-runtime.origin :
+    (performance.now()-runtime.origin)/1000;
+}
+function stopSoundtrack() {
+  if (!runtime.audio.source) return;
+  runtime.audio.source.onended = null;
+  try { runtime.audio.source.stop(); } catch (_) { /* already ended */ }
+  runtime.audio.source.disconnect(); runtime.audio.source = null;
+}
+function holdParameter(param, now) {
+  if (param.cancelAndHoldAtTime) param.cancelAndHoldAtTime(now);
+  else { const value=param.value; param.cancelScheduledValues(now); param.setValueAtTime(value,now); }
+}
+function connectLoopAudio(node) {
+  if (runtime.audio.mode !== 'spatial_loops' || node.kind !== 'video' || node.audio) return;
+  const context=runtime.audio.context;
+  const source=context.createMediaElementSource(node.media);
+  const pan=context.createStereoPanner(), gain=context.createGain();
+  gain.gain.value=0;
+  source.connect(pan); pan.connect(gain); gain.connect(context.destination);
+  node.audio={source,pan,gain};
+}
+function scheduleLoopGain(node) {
+  if (!node.audio) return;
+  const config=runtime.plan.audio, context=runtime.audio.context, now=context.currentTime;
+  const param=node.audio.gain.gain;
+  const gain=number(config.master_volume)*number(config.per_loop[node.id].gain);
+  holdParameter(param,now);
+  param.setValueAtTime(node.span.held || !runtime.running ? 0 : gain,now);
+  if (!runtime.running || node.span.held) return;
+  // A native paused video emits no samples. Anticipate the authored hold by
+  // fading its final 50ms, reaching zero exactly when its image freezes.
+  const held=node.spans.slice(node.index+1).find(span=>span.held);
+  if (held) {
+    const until=held.frame/runtime.plan.fps-compositionTime();
+    if (until>0) {
+      if (until<.05) param.setValueAtTime(gain*until/.05,now);
+      else param.setValueAtTime(gain,now+until-.05);
+      param.linearRampToValueAtTime(0,now+until);
+    }
+  }
+  param.setValueAtTime(0,runtime.origin+runtime.plan.frames/runtime.plan.fps);
+}
+function updatePan(node, cell, orientation, orientationChanged) {
+  if (!node.audio) return;
+  const [x,,width]=cell.rect.map(number);
+  const target=runtime.plan.audio.spatial_panning && orientation==='landscape' ? 2*(x+width/2)-1 : 0;
+  if (node.audio.panTarget===target) return;
+  node.audio.panTarget=target;
+  const now=runtime.audio.context.currentTime, param=node.audio.pan.pan;
+  holdParameter(param,now);
+  if (orientationChanged) param.linearRampToValueAtTime(target,now+.2);
+  else param.setValueAtTime(target,now);
+  record('audio-pan',node.id,{target,seconds:orientationChanged ? .2 : 0});
+}
+function startSoundtrack() {
+  if (runtime.audio.mode!=='soundtrack') return;
+  stopSoundtrack();
+  const {context,buffer,gain}=runtime.audio, config=runtime.plan.audio;
+  const now=context.currentTime, time=compositionTime(), duration=buffer.duration;
+  const end=Math.min(runtime.plan.frames/runtime.plan.fps,config.loop ? Infinity : duration);
+  const param=gain.gain, volume=number(config.volume);
+  const fadeIn=number(config.fade_in_seconds), fadeOut=number(config.fade_out_seconds);
+  const level=t=>volume*Math.max(0,Math.min(1,fadeIn ? t/fadeIn : 1,
+    fadeOut ? (end-t)/fadeOut : 1));
+  holdParameter(param,now); param.setValueAtTime(level(time),now);
+  if (time>=end) return;
+  // Envelope=min(fade-in,unity,fade-out), including overlapping fades.
+  const points=[fadeIn,end-fadeOut,end];
+  if (fadeIn+fadeOut>0) points.push(end*fadeIn/(fadeIn+fadeOut));
+  [...new Set(points)].filter(t=>t>time && t<=end).sort((a,b)=>a-b)
+    .forEach(t=>param.linearRampToValueAtTime(level(t),now+t-time));
+  const source=context.createBufferSource(); source.buffer=buffer;
+  source.loop=config.loop; source.loopStart=0; source.loopEnd=duration;
+  source.connect(gain); source.start(now,config.loop ? time%duration : time);
+  source.stop(now+end-time); runtime.audio.source=source;
+  source.onended=()=>{
+    if (runtime.audio.source===source) {
+      source.disconnect(); runtime.audio.source=null; record('soundtrack-ended',null);
+    }
+  };
+  record('soundtrack-start',null,{time,offset:config.loop ? time%duration : time});
+}
+function assertActive(epoch) {
+  if (runtime.disposed || epoch !== runtime.initEpoch) throw new DOMException('Lifecycle cancelled', 'AbortError');
+}
+function waitFor(media, event, action) {
+  const signal = runtime.initController?.signal;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => finish(new Error(`Media timeout: ${event}`)), 10000);
+    const aborted = () => finish(new DOMException('Lifecycle cancelled', 'AbortError'));
+    const good = () => finish();
+    const bad = () => finish(new Error('Media decode failed'));
+    function finish(error) {
+      clearTimeout(timer); signal?.removeEventListener('abort', aborted); media.removeEventListener(event, good);
+      media.removeEventListener('error', bad); error ? reject(error) : resolve();
+    }
+    if (signal?.aborted) { aborted(); return; }
+    signal?.addEventListener('abort', aborted, {once:true});
+    media.addEventListener(event, good, {once: true});
+    media.addEventListener('error', bad, {once: true});
+    try { action(); } catch (error) { finish(error); }
+  });
+}
+function frameProbe(node) {
+  const media=node.media, epoch=runtime.initEpoch;
+  if (!media || typeof media.requestVideoFrameCallback !== 'function') return;
+  media.requestVideoFrameCallback((now, metadata) => {
+    if (runtime.disposed || epoch !== runtime.initEpoch || node.media !== media) return;
+    node.decoded = {wall: now, mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames};
+    node.callbacks += 1;
+    if (media.isConnected) frameProbe(node);
+  });
+}
+function setCssProp(style, prop, val) {
+  if (!style) return;
+  if (typeof style.setProperty === 'function') {
+    style.setProperty(prop, val);
+  } else {
+    style[prop] = val;
+  }
+}
+function removeCssProp(style, prop) {
+  if (!style) return;
+  if (typeof style.removeProperty === 'function') {
+    style.removeProperty(prop);
+  } else {
+    delete style[prop];
+  }
+}
+
+function resolveSliceRect(node) {
+  return (node.span && (node.span.slice_rect || node.span.sliceRect)) ||
+                  node.slice_rect || node.sliceRect ||
+                  (node.cell && (node.cell.slice_rect || node.cell.sliceRect)) ||
+                  (node.item && (node.item.slice_rect || node.item.sliceRect || node.item.viewport));
+
+}
+function sliceValues(raw) {
+  const coordinate = value => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    return number(value);
+  };
+  if (Array.isArray(raw)) {
+    if (raw.length !== 4) throw new Error('Invalid slice rectangle');
+    return raw.map(coordinate);
+  }
+  return [raw.x ?? 0, raw.y ?? 0, raw.width ?? raw.w ?? 1, raw.height ?? raw.h ?? 1].map(coordinate);
+}
+function isPartialSlice(raw) {
+  if (!raw) return false;
+  const [x,y,w,h] = sliceValues(raw);
+  return !(Math.abs(x)<1e-5 && Math.abs(y)<1e-5 && Math.abs(w-1)<1e-5 && Math.abs(h-1)<1e-5);
+}
+/* Full-bleed raster (docs/plans/2026-11-05-full-bleed-layout-presets.md).
+ * Exact rationals decide coverage and name shared edges; floats only place pixels. */
+const EDGE_EPSILON = 1e-12;
+const OPPOSITE_SIDE = {top:'bottom', bottom:'top', left:'right', right:'left'};
+const SIDE_CORNERS = {top:['TopLeft','TopRight'], bottom:['BottomLeft','BottomRight'],
+  left:['TopLeft','BottomLeft'], right:['TopRight','BottomRight']};
+const CORNERS = ['TopLeft','TopRight','BottomRight','BottomLeft'];
+const OVERLAP_PX_MAX = 8, STRIPS_MAX_CELLS = 12;
+/* A cropped media element is sized to cover its target box plus this margin (CSS px)
+ * on every side, so independent 1/64 px LayoutUnit rounding of its percentage
+ * position and size can never leave a sliver of the box uncovered. */
+const COVER_GUARD = 1/8;
+function exactReduce(n, d) {
+  if (d === 0n) throw new Error('Invalid compiled rational');
+  if (d < 0n) { n = -n; d = -d; }
+  let a = n < 0n ? -n : n, b = d;
+  while (b) [a, b] = [b, a % b];
+  return a ? [n / a, d / a] : [0n, 1n];
+}
+function exact(value) {
+  const text = String(value);
+  if ((typeof value !== 'string' && typeof value !== 'number') || !/^-?\d+(?:\/\d+)?$/.test(text))
+    throw new Error('Invalid compiled rational');
+  const [p, q = '1'] = text.split('/');
+  return exactReduce(BigInt(p), BigInt(q));
+}
+const exactAdd = ([a, b], [c, d]) => exactReduce(a*d + c*b, b*d);
+const exactMul = ([a, b], [c, d]) => exactReduce(a*c, b*d);
+const exactCmp = ([a, b], [c, d]) => { const l = a*d, r = c*b; return l < r ? -1 : l > r ? 1 : 0; };
+const exactText = ([n, d]) => d === 1n ? String(n) : `${n}/${d}`;
+const exactFloat = ([n, d]) => Number(n) / Number(d);
+/* Shared edges in draw order, the same output as Python
+ * simvltanea.authoring.adjacency: side `edge` of cell `a` lies on the opposite side
+ * of the later cell `b` (equal within 1e-12) over the positive-length `span`. */
+function adjacency(cells) {
+  if (!Array.isArray(cells)) throw new Error('cells must be an array');
+  const boxes = cells.map((cell, index) => {
+    if (!cell || !Array.isArray(cell.rect) || cell.rect.length !== 4)
+      throw new Error(`cell ${index}: rect must be [x,y,width,height]`);
+    const [x, y, w, h] = cell.rect.map(exact), x2 = exactAdd(x, w), y2 = exactAdd(y, h);
+    return {x, y, x2, y2, f:[x, y, x2, y2].map(exactFloat)};
+  });
+  const near = (p, q) => Math.abs(p - q) <= EDGE_EPSILON;
+  const larger = (p, q) => exactCmp(p, q) >= 0 ? p : q, smaller = (p, q) => exactCmp(p, q) <= 0 ? p : q;
+  const result = [];
+  boxes.forEach((A, i) => {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const B = boxes[j];
+      const horizontal = [larger(A.x, B.x), smaller(A.x2, B.x2)], vertical = [larger(A.y, B.y), smaller(A.y2, B.y2)];
+      for (const [edge, touches, span] of [['bottom', near(A.f[3], B.f[1]), horizontal],
+        ['top', near(A.f[1], B.f[3]), horizontal], ['right', near(A.f[2], B.f[0]), vertical],
+        ['left', near(A.f[0], B.f[2]), vertical]]) {
+        if (touches && exactFloat(span[1]) - exactFloat(span[0]) > EDGE_EPSILON)
+          result.push({a:i, b:j, edge, span:span.map(exactText)});
+      }
+    }
+  });
+  return result;
+}
+/* Per-cell raster decisions for one layout at one stage size and pixel ratio.
+ * Bleed: a side shared with later neighbours grows `overlap_px` device px (plus
+ * ceil(radius) when corners are rounded) underneath them, clamped to half of the
+ * thinnest such neighbour's pixel extent. A side that also touches an earlier cell
+ * does not grow: it would paint over that cell. As in the export
+ * (render_triptych.presentation_placements), a side grows only when the nominal
+ * boxes of the later cells cover the whole bleed strip, and a grown corner square
+ * must be covered too, so the bleed never changes a visible pixel. Corners on a
+ * side shared with an earlier neighbour are rounded; all others stay square.
+ * Layouts without `presentation` get no bleed and no rounding, exactly as before. */
+const COVERAGE_EPSILON = 1e-9;
+function bleedRegion([x, y, w, h], side, amount) {
+  if (side === 'bottom') return [x, y + h, w, amount];
+  if (side === 'top') return [x, y - amount, w, amount];
+  if (side === 'right') return [x + w, y, amount, h];
+  return [x - amount, y, amount, h];
+}
+/* True when `boxes` (pairwise disjoint, device px) cover `region`. */
+function coveredBy([x, y, w, h], boxes) {
+  let area = 0;
+  for (const [bx, by, bw, bh] of boxes) {
+    const dx = Math.min(x + w, bx + bw) - Math.max(x, bx), dy = Math.min(y + h, by + bh) - Math.max(y, by);
+    if (dx > 0 && dy > 0) area += dx * dy;
+  }
+  return area >= w * h - COVERAGE_EPSILON * Math.max(1, w * h);
+}
+function rasterLayout(layout, width, height, ratio) {
+  const cells = layout.cells.map(() => ({grow:{top:0, right:0, bottom:0, left:0}, rounded:new Set(), radius:0}));
+  const presentation = layout.presentation;
+  if (!presentation) return {cells, radius:0};
+  const radiusFraction = number(presentation.corner_radius);
+  const radius = radiusFraction * Math.min(width, height);
+  const overlap = presentation.overlap_px;
+  const edges = adjacency(layout.cells);
+  const touchesEarlier = new Set(edges.map(edge => `${edge.b}:${OPPOSITE_SIDE[edge.edge]}`));
+  const rects = layout.cells.map(cell => cell.rect.map(number));
+  const boxes = rects.map(([x, y, w, h]) => [x * width * ratio, y * height * ratio, w * width * ratio, h * height * ratio]);
+  const extentOf = (b, edge) => edge === 'top' || edge === 'bottom' ? boxes[b][3] : boxes[b][2];
+  // Each side's bleed is capped at half of its thinnest later neighbour (device px).
+  const caps = new Map(), later = new Map();
+  for (const {a, b, edge} of edges) {
+    const key = `${a}:${edge}`;
+    caps.set(key, Math.min(caps.has(key) ? caps.get(key) : Infinity, extentOf(b, edge) / 2));
+    later.set(key, [...(later.get(key) || []), b]);
+  }
+  /* The backing under a rounded corner is the earlier neighbour's bleed, capped as above, so a cell
+   * next to a thin cell can only be backed behind a smaller radius: reduce it to what every backing
+   * covers (overlap + radius must fit under each cap). Otherwise the cutout shows background. */
+  const effective = layout.cells.map(() => radius);
+  if (radius > 0) {
+    for (const {a, b, edge} of edges) {
+      effective[b] = Math.min(effective[b], Math.max(0, caps.get(`${a}:${edge}`) - overlap) / ratio);
+    }
+  }
+  const device = layout.cells.map(() => ({}));
+  for (const [key, neighbours] of later) {
+    const want = overlap + Math.max(...neighbours.map(b => effective[b] > 0 ? Math.ceil(effective[b] * ratio - 1e-9) : 0));
+    const amount = Math.min(want, caps.get(key));
+    if (!(amount > 0) || touchesEarlier.has(key)) continue;
+    const [index, side] = key.split(':');
+    const a = Number(index);
+    if (coveredBy(bleedRegion(boxes[a], side, amount), boxes.slice(a + 1))) device[a][side] = amount;
+  }
+  device.forEach((sides, index) => {
+    // A grown corner square (two perpendicular grown sides) must be hidden too.
+    const [x, y, w, h] = boxes[index];
+    for (const vertical of ['top', 'bottom']) {
+      for (const horizontal of ['left', 'right']) {
+        if (!(vertical in sides && horizontal in sides)) continue;
+        const corner = [horizontal === 'left' ? x - sides[horizontal] : x + w,
+          vertical === 'top' ? y - sides[vertical] : y + h, sides[horizontal], sides[vertical]];
+        if (!coveredBy(corner, boxes.slice(index + 1))) delete sides[horizontal];
+      }
+    }
+    for (const [side, amount] of Object.entries(sides)) cells[index].grow[side] = amount / ratio;
+  });
+  /* Earlier cells are final here: a bleed that was dropped (the side or a corner square is not under
+   * later cells) or never grown (the side touches an even earlier cell) backs no corner, so each cell's
+   * radius shrinks to what every earlier neighbour's granted bleed covers, and it is rounded only if
+   * something is left. This mirrors the export's presentation_placements. */
+  if (radius > 0) {
+    layout.cells.forEach((_, b) => {
+      const shared = edges.filter(edge => edge.b === b);
+      if (!shared.length) return;
+      const backed = Math.min(...shared.map(({a, edge}) => Math.max(0, (device[a][edge] || 0) - overlap) / ratio));
+      const final = Math.min(effective[b], backed);
+      if (final > 0) {
+        cells[b].radius = final;
+        cells[b].rounded = new Set(shared.map(({edge}) => OPPOSITE_SIDE[edge]));
+      }
+    });
+  }
+  return {cells, radius};
+}
+/* Lateral jitter as overscan: the media target is the unchanged cell stretched by
+ * 1+2J along the strip and shifted by the resolved offset, so it always contains
+ * the cell. A cell spanning the full canvas width runs along x, one spanning the
+ * full height along y; one spanning both (one strip) follows the orientation:
+ * portrait x, landscape y. Any other cell uses its longer side in pixels (x when
+ * width >= height), as render_triptych._jitter_axis does. J and the offset are
+ * fractions of the drawn cell box along that axis; a strip bleeds only across, so
+ * that is the canvas extent. */
+function overscanFor(cell, layout, orientation, width, height) {
+  const jitter = layout.presentation ? number(layout.presentation.lateral_jitter) : 0;
+  if (!(jitter > 0) || cell.lateral_offset === undefined) return null;
+  const [, , w, h] = cell.rect.map(number);
+  const fullWidth = Math.abs(w - 1) <= EDGE_EPSILON, fullHeight = Math.abs(h - 1) <= EDGE_EPSILON;
+  const axis = fullWidth && !fullHeight ? 'x' : fullHeight && !fullWidth ? 'y' :
+    fullWidth && fullHeight ? (orientation === 'portrait' ? 'x' : 'y') : w * width >= h * height ? 'x' : 'y';
+  return {axis, jitter, offset:number(cell.lateral_offset)};
+}
+function mediaTarget(geometry) {
+  const target = {x:0, y:0, w:geometry.width, h:geometry.height};
+  const overscan = geometry.overscan;
+  if (overscan) {
+    const {axis, jitter, offset} = overscan;
+    if (axis === 'x') { target.x = (offset - jitter) * geometry.width; target.w = (1 + 2*jitter) * geometry.width; }
+    else { target.y = (offset - jitter) * geometry.height; target.h = (1 + 2*jitter) * geometry.height; }
+  }
+  return target;
+}
+function boxGeometry(node) {
+  if (node.geometry) return node.geometry;
+  const rect = node.box?.getBoundingClientRect?.();
+  return rect && rect.width > 0 && rect.height > 0 ? {width:rect.width, height:rect.height, overscan:null} : null;
+}
+const percent = (value, total) => `${100 * value / total}%`;
+/* Place the media element inside its cell box. Without a slice the element is the
+ * box (or its jitter overscan) and CSS object-fit does the fitting. With a slice
+ * the renderer's semantics apply: crop the source to the slice window, then fit
+ * that window to the box with the cell's fit, positioned by the cell focal point.
+ * The element is the whole source at the window's scale, so its aspect is the
+ * source aspect (no stretch). `origin` overrides the slice origin (panel driver). */
+function placeMedia(node, origin) {
+  const media = node.media;
+  if (!media) return;
+  const rawRect = resolveSliceRect(node);
+  const geometry = boxGeometry(node);
+  if (!isPartialSlice(rawRect)) {
+    if (!geometry || !geometry.overscan) {
+      Object.assign(media.style, {width:'100%', height:'100%', left:'0', top:'0', marginLeft:'0', marginTop:'0',
+        position:'', transform:'', clipPath:'', visibility:''});
+      return;
+    }
+    const target = mediaTarget(geometry), guard = COVER_GUARD;
+    Object.assign(media.style, {position:'absolute', left:percent(target.x - guard, geometry.width),
+      top:percent(target.y - guard, geometry.height), width:percent(target.w + 2*guard, geometry.width),
+      height:percent(target.h + 2*guard, geometry.height), marginLeft:'0', marginTop:'0', transform:'',
+      clipPath:'', visibility:''});
+    return;
+  }
+  const [sliceX, sliceY, sw, sh] = sliceValues(rawRect);
+  const [sx, sy] = origin ?? [sliceX, sliceY];
+  const sourceWidth = media.videoWidth || media.naturalWidth || 0;
+  const sourceHeight = media.videoHeight || media.naturalHeight || 0;
+  if (!geometry || !(sourceWidth > 0 && sourceHeight > 0)) {
+    // Size unknown until the media decodes; never show an unfitted full frame.
+    Object.assign(media.style, {visibility:'hidden'});
+    return;
+  }
+  const fit = node.cell?.fit ?? 'cover';
+  const [fx, fy] = (node.cell?.focal ?? ['1/2', '1/2']).map(number);
+  const target = mediaTarget(geometry);
+  const guard = fit === 'cover' ? COVER_GUARD : 0;
+  const tw = target.w + 2*guard, th = target.h + 2*guard;
+  const windowWidth = sw * sourceWidth, windowHeight = sh * sourceHeight;
+  const scale = (fit === 'cover' ? Math.max : Math.min)(tw / windowWidth, th / windowHeight);
+  const windowLeft = target.x - guard + (tw - windowWidth*scale) * fx;
+  const windowTop = target.y - guard + (th - windowHeight*scale) * fy;
+  Object.assign(media.style, {
+    position:'absolute',
+    left:percent(windowLeft - sx*sourceWidth*scale, geometry.width),
+    top:percent(windowTop - sy*sourceHeight*scale, geometry.height),
+    width:percent(sourceWidth*scale, geometry.width), height:percent(sourceHeight*scale, geometry.height),
+    marginLeft:'0', marginTop:'0', transform:'', visibility:'',
+    // The element's aspect equals the source's; cover only absorbs sub-pixel rounding.
+    objectFit:'cover', objectPosition:'50% 50%',
+    // Contain shows only the window, letterboxed by the box background like the renderer's pad.
+    clipPath: fit === 'cover' ? '' :
+      `inset(${100*sy}% ${100*(1-sx-sw)}% ${100*(1-sy-sh)}% ${100*sx}%)`,
+  });
+}
+function applySlice(node) {
+  const rawRect = resolveSliceRect(node);
+  const clear = element => {
+    if (!element) return;
+    if (element.dataset) delete element.dataset.sliceRect;
+    for (const prop of ['--slice-x', '--slice-y', '--slice-w', '--slice-h']) removeCssProp(element.style, prop);
+  };
+  if (!isPartialSlice(rawRect)) {
+    clear(node.box); clear(node.media);
+    placeMedia(node);
+    return;
+  }
+  const [sx,sy,sw,sh] = sliceValues(rawRect);
+  const rectStr = `${sx},${sy},${sw},${sh}`;
+  for (const element of [node.box, node.media]) {
+    if (!element) continue;
+    if (!element.dataset) element.dataset = {};
+    element.dataset.sliceRect = rectStr;
+    setCssProp(element.style, '--slice-x', String(sx));
+    setCssProp(element.style, '--slice-y', String(sy));
+    setCssProp(element.style, '--slice-w', String(sw));
+    setCssProp(element.style, '--slice-h', String(sh));
+  }
+  placeMedia(node);
+}
+function renderSeams() {
+  // Clear old seam overlays
+  [...stage.querySelectorAll('.seam')].forEach(el=>el.remove());
+  const seam = runtime.plan && runtime.plan.seam;
+  if (!seam || !seam.enabled) return;
+  const {width, height} = stage.getBoundingClientRect();
+  if (width<=0||height<=0) return;
+  const seamW = Math.max(4, Math.round(number(seam.width) * width));
+  const seamH = Math.max(4, Math.round(number(seam.width) * height));
+  const sigma = seam.sigma ? number(seam.sigma) * Math.min(width,height) : 6;
+  const layout = runtime.plan.layout_keyframes[runtime.layoutIndex].layouts[runtime.orientation];
+  if (!layout) return;
+  const cells = layout.cells.map(c=>({loop:c.loop, rect:c.rect.map(number)}));
+  for (let i=0;i<cells.length;i++) for(let j=i+1;j<cells.length;j++){
+    const a=cells[i], b=cells[j];
+    const [ax,ay,aw,ah]=a.rect, [bx,by,bw,bh]=b.rect;
+    const axpx=ax*width, aypx=ay*height, awpx=aw*width, ahpx=ah*height;
+    const bxpx=bx*width, bypx=by*height, bwpx=bw*width, bhpx=bh*height;
+    const vertOverlap = Math.min(aypx+ahpx, bypx+bhpx) - Math.max(aypx, bypx);
+    const horizOverlap = Math.min(axpx+awpx, bxpx+bwpx) - Math.max(axpx, bxpx);
+    let el=null;
+    if (vertOverlap>0 && Math.abs((axpx+awpx)-bxpx)<=seamW*2) {
+      const x=(axpx+awpx+bxpx)/2;
+      el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${x-seamW/2}px`, top:`${Math.max(aypx,bypx)}px`, width:`${seamW}px`, height:`${vertOverlap}px`, position:'absolute', background:'rgba(0,0,0,0)', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, WebkitBackdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter: seam.mode==='morph'?`blur(${Math.max(2,sigma/3)}px) contrast(1.05)`:`blur(${Math.max(2,sigma/2)}px)`, pointerEvents:'none', zIndex:'10', mixBlendMode: seam.mode==='morph'?'screen':'normal', opacity: seam.mode==='feather'?'0.95':'0.85'});
+    } else if (vertOverlap>0 && Math.abs((bxpx+bwpx)-axpx)<=seamW*2) {
+      const x=(bxpx+bwpx+axpx)/2;
+      el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${x-seamW/2}px`, top:`${Math.max(aypx,bypx)}px`, width:`${seamW}px`, height:`${vertOverlap}px`, position:'absolute', background:'rgba(0,0,0,0)', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, WebkitBackdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter:`blur(${Math.max(2,sigma/2)}px)`, pointerEvents:'none', zIndex:'10'});
+    } else if (horizOverlap>0 && Math.abs((aypx+ahpx)-bypx)<=seamH*2) {
+      const y=(aypx+ahpx+bypx)/2;
+      el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${Math.max(axpx,bxpx)}px`, top:`${y-seamH/2}px`, width:`${horizOverlap}px`, height:`${seamH}px`, position:'absolute', background:'rgba(0,0,0,0)', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, WebkitBackdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter:`blur(${Math.max(2,sigma/2)}px)`, pointerEvents:'none', zIndex:'10'});
+    } else if (horizOverlap>0 && Math.abs((bypx+bhpx)-aypx)<=seamH*2) {
+      const y=(bypx+bhpx+aypx)/2;
+      el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${Math.max(axpx,bxpx)}px`, top:`${y-seamH/2}px`, width:`${horizOverlap}px`, height:`${seamH}px`, position:'absolute', background:'rgba(0,0,0,0)', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, WebkitBackdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter:`blur(${Math.max(2,sigma/2)}px)`, pointerEvents:'none', zIndex:'10'});
+    }
+    if (el) stage.append(el);
+  }
+  // Fallback N=2 gap case
+  if (stage.querySelectorAll('.seam').length===0 && cells.length===2) {
+    const a=cells[0], b=cells[1];
+    const ax=ax=>ax*width, ay=ay=>ay*height; // dummy to avoid lint
+    if (Math.abs(a.rect[0]-b.rect[0])<0.01 && a.rect[1]!==b.rect[1]) {
+      const y=(a.rect[1]+a.rect[3]+b.rect[1])/2*height;
+      const el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${Math.max(a.rect[0],b.rect[0])*width}px`, top:`${y-seamH/2}px`, width:`${Math.min(a.rect[2],b.rect[2])*width}px`, height:`${seamH}px`, position:'absolute', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter:`blur(${Math.max(2,sigma/2)}px)`, zIndex:'10', pointerEvents:'none'});
+      stage.append(el);
+    } else if (Math.abs(a.rect[1]-b.rect[1])<0.01 && a.rect[0]!==b.rect[0]) {
+      const x=(a.rect[0]+a.rect[2]+b.rect[0])/2*width;
+      const el=document.createElement('div'); el.className='seam';
+      Object.assign(el.style,{left:`${x-seamW/2}px`, top:`${a.rect[1]*height}px`, width:`${seamW}px`, height:`${a.rect[3]*height}px`, position:'absolute', backdropFilter:`blur(${Math.max(2,sigma/2)}px)`, filter:`blur(${Math.max(2,sigma/2)}px)`, zIndex:'10', pointerEvents:'none'});
+      stage.append(el);
+    }
+  }
+}
+/* Shared-engine consumer.
+ *
+ * `SimvltaneaSharedEngineAdapter` compiles this composition's panel layout into a
+ * choreography score and evaluates it with the shared module's
+ * evaluateSpatialScore. The result is the per-panel viewing orientation, applied
+ * to each panel's focal point. That is a real rendered effect: the panel framing
+ * moves as the score sweeps.
+ *
+ * The module is shared with time-moment-brief and injected by build_preview after
+ * digest verification. This file holds no copy and re-derives no timeline math.
+ * Playback never depends on it: it only moves the panel framing. When the build
+ * declared the engine absent (`__sharedEngineUnavailable`, a path-free note), the
+ * page stays ready and shows that note on a secondary line. A staged engine that
+ * then fails to load is still reported as an error in the status line rather than
+ * silently leaving every panel centred, which would look like a working build. */
+let panelDriver = null;
+let renderedSharedEngine = {time:null, poses:[], loops:[]};
+function installPanelDriver(layout) {
+  const adapter = window.SimvltaneaSharedEngineAdapter;
+  if (!adapter) {
+    runtime.sharedEngineOptional = typeof window.__sharedEngineUnavailable === 'string';
+    runtime.sharedEngineError = runtime.sharedEngineOptional
+      ? window.__sharedEngineUnavailable.trim() : 'shared-engine adapter did not load';
+    return false;
+  }
+  runtime.sharedEngineOptional = false;
+  try {
+    panelDriver = adapter.createPanelDriver(window.SharedEngine, {
+      panels: layout.cells.length,
+      duration: runtime.plan.frames / runtime.plan.fps,
+      sweep: 0.35,
+      elevation: 0.12,
+    });
+    runtime.sharedEngineBuild = window.__sharedEngineReceipt
+      ? 'shared-engine@time-moment-brief/' + window.__sharedEngineReceipt.release : null;
+    runtime.sharedEnginePanels = panelDriver.score.blocks.length;
+    runtime.sharedEngineError = null;
+    return true;
+  } catch (error) {
+    runtime.sharedEngineError = String(error.message);
+    setStatus('error', 'Shared engine unavailable: ' + error.message);
+    return false;
+  }
+}
+function showEngineNote(message) {
+  let note = document.querySelector('#runtime-note');
+  if (!note) {
+    note = document.createElement('p');
+    note.id = 'runtime-note';
+    (document.body || document.documentElement).append(note);
+  }
+  note.textContent = message;
+}
+function applyPanelOrientation(seconds) {
+  if (!panelDriver) return;
+  const layout = runtime.plan.layout_keyframes[runtime.layoutIndex].layouts[runtime.orientation];
+  if (!layout) return;
+  const poses = panelDriver.evaluate(seconds);
+  const indices = new Map(runtime.plan.tracks.map((track, index) => [track.id, index]));
+  renderedSharedEngine = {time:seconds, poses:poses.map(pose=>({...pose})),
+    loops:runtime.plan.tracks.map(track=>track.id)};
+  layout.cells.forEach((cell) => {
+    const node = runtime.nodes.get(cell.loop);
+    if (!node || !node.media) return;
+    const pose = poses[indices.get(cell.loop)];
+    const rawRect = resolveSliceRect(node);
+    if (isPartialSlice(rawRect)) {
+      const [sx,sy,sw,sh] = sliceValues(rawRect);
+        const x = Math.max(0, Math.min(1-sw, sx - pose.azimuth/(2*Math.PI)));
+        const y = Math.max(0, Math.min(1-sh, sy - pose.elevation/(2*Math.PI)));
+        placeMedia(node, [x, y]);
+        setCssProp(node.media.style, '--slice-x', String(x));
+        setCssProp(node.media.style, '--slice-y', String(y));
+        if (node.box) {
+          setCssProp(node.box.style, '--slice-x', String(x));
+          setCssProp(node.box.style, '--slice-y', String(y));
+        }
+        return;
+    }
+    /* Azimuth is the score's horizontal sweep; the panel's own focal point is
+     * the centre it returns to, so the sweep moves the frame around it rather
+     * than replacing the composition's declared framing. */
+    const focal = cell.focal.map((value, axis) => {
+      const centre = number(value);
+      const offset = axis === 0 ? pose.azimuth : pose.elevation;
+      return Math.max(0, Math.min(1, centre - offset / (2 * Math.PI)));
+    });
+    node.media.style.objectPosition = focal.map(v => `${v * 100}%`).join(' ');
+  });
+}
+
+function applyLayout() {
+  if (!runtime.plan || runtime.nodes.size !== runtime.plan.tracks.length) return;
+  const {width, height} = stage.getBoundingClientRect();
+  if (width <= 0 || height <= 0) return;
+  const orientation = runtime.orientationOverride ?? (width >= height ? 'landscape' : 'portrait');
+  const orientationChanged=runtime.orientation!==null && runtime.orientation!==orientation;
+  const layout = runtime.plan.layout_keyframes[runtime.layoutIndex].layouts[orientation];
+  runtime.orientation = orientation;
+  /* The panel score is derived from the panel count, so a layout keyframe that
+   * changes the panel count needs a new driver. Rebuilt only on a change: a
+   * resize that keeps the count must not reset the sweep. */
+  if (layout && (!panelDriver || panelDriver.score.blocks.length !== layout.cells.length)) {
+    installPanelDriver(layout);
+  }
+  const ratio = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  const raster = rasterLayout(layout, width, height, ratio);
+  layout.cells.forEach((cell, z) => {
+    const node = runtime.nodes.get(cell.loop);
+    const [x,y,w,h] = cell.rect.map(number);
+    const {grow, rounded, radius} = raster.cells[z];
+    // Bleed under later neighbours in CSS px (device px / ratio); the edge drawn on top stays exact.
+    const start = (value, before) => before ? `calc(${value*100}% - ${before}px)` : `${value*100}%`;
+    const size = (value, extra) => extra ? `calc(${value*100}% + ${extra}px)` : `${value*100}%`;
+    Object.assign(node.box.style, {left:start(x, grow.left), top:start(y, grow.top),
+      width:size(w, grow.left + grow.right), height:size(h, grow.top + grow.bottom), zIndex:String(z), overflow:'hidden'});
+    const round = new Set([...rounded].flatMap(side => SIDE_CORNERS[side]));
+    for (const corner of CORNERS)
+      node.box.style[`border${corner}Radius`] = round.has(corner) ? `${radius}px` : '';
+    node.geometry = {width:w*width + grow.left + grow.right, height:h*height + grow.top + grow.bottom,
+      overscan:overscanFor(cell, layout, orientation, width, height)};
+    // Default focal/cover; slice overrides via applySlice per span
+    node.cell = cell;
+    if (!isPartialSlice(resolveSliceRect(node))) {
+      node.media.style.objectFit = cell.fit;
+      node.media.style.objectPosition = cell.focal.map(v => `${number(v)*100}%`).join(' ');
+    }
+    updatePan(node,cell,orientation,orientationChanged);
+  });
+  // Apply per-loop slice if active
+  for (const node of runtime.nodes.values()) applySlice(node);
+  applyPanelOrientation(compositionTime());
+  renderSeams();
+  record('layout', null, {orientation, width, height});
+}
+runtime.resizeObserver = new ResizeObserver(applyLayout);
+runtime.resizeObserver.observe(stage);
+/* The bleed is counted in device pixels, so a pixel-ratio change without a CSS
+ * resize (moving the window to another screen) re-runs the layout too. */
+function watchPixelRatio() {
+  if (typeof window.matchMedia !== 'function') return;
+  const query = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  query.addEventListener?.('change', () => { applyLayout(); watchPixelRatio(); }, {once:true});
+}
+watchPixelRatio();
+/* A caller may pin the authored layout instead of deriving it from the stage
+ * shape; null returns to the viewport rule. Like a resize, this only moves loop
+ * boxes: no media element, source or clock is touched. */
+runtime.setOrientation = value => {
+  if (value !== null && value !== 'portrait' && value !== 'landscape')
+    throw new Error('Orientation must be "portrait", "landscape" or null');
+  runtime.orientationOverride = value;
+  record('orientation-override', null, {orientation: value});
+  applyLayout();
+};
+
+async function activate(node, span, frame, initial = false) {
+  const epoch = runtime.initEpoch;
+  assertActive(epoch);
+  const source = runtime.sources.get(span.source);
+  const kindChange = node.kind !== span.kind;
+  if (kindChange) {
+    node.media?.pause?.();
+    if (node.audio) {
+      node.audio.source.disconnect(); node.audio.pan.disconnect(); node.audio.gain.disconnect(); node.audio=null;
+    }
+    node.media?.remove();
+    node.media = document.createElement(span.kind === 'video' ? 'video' : 'img');
+    node.media.dataset.loopId = node.id;
+    node.media.setAttribute('aria-label', `Loop ${node.ordinal} of ${runtime.plan.tracks.length}`);
+    node.box.append(node.media); node.kind = span.kind;
+    if (span.kind === 'video') {
+      node.media.muted = true; node.media.defaultMuted = true;
+      // Native EOF may precede the next frame-addressed source boundary.
+      node.media.loop = runtime.audio.mode === 'spatial_loops';
+      node.media.playsInline = true; node.media.preload = 'auto';
+      node.media.preservesPitch = true;
+      node.media.addEventListener('loadstart', () => record('loadstart', node.id));
+      node.media.addEventListener('seeking', () => record('seeking', node.id));
+      node.media.addEventListener('error', () => { if (epoch === runtime.initEpoch && !runtime.disposed) fail(new Error(`Media failure: ${node.id}`), true); });
+      frameProbe(node);
+      connectLoopAudio(node);
+    }
+  }
+  const sourceChanged = node.source !== span.source || kindChange;
+  node.span = span; node.source = span.source; node.slice_rect = span.slice_rect;
+  if (sourceChanged) {
+    record('source', node.id, {source: span.source});
+    if (span.kind === 'video') await waitFor(node.media, 'loadeddata', () => { node.media.src = source.url; });
+    else await waitFor(node.media, 'load', () => { node.media.src = source.url; });
+  }
+  assertActive(epoch);
+  if (span.kind === 'video') {
+    const elapsed = (frame - span.frame) / runtime.plan.fps;
+    const target = number(span.source_offset) + (span.held ? 0 : elapsed * number(span.rate));
+    node.media.playbackRate = number(span.rate);
+    node.media.muted = runtime.audio.mode !== 'spatial_loops' || !runtime.audio.enabled;
+    node.media.pause();
+    if (Math.abs(node.media.currentTime - target) > 0.00001) {
+      record('seek-command', node.id, {target, reason: initial ? 'initial' : 'timeline-boundary'});
+      await waitFor(node.media, 'seeked', () => { node.media.currentTime = target; });
+    }
+    assertActive(epoch);
+    if (!initial && runtime.running && !span.held) await node.media.play();
+  }
+  assertActive(epoch);
+  scheduleLoopGain(node);
+  applyLayout();
+}
+function tick(generation) {
+  if (!runtime.running || generation!==runtime.generation) return;
+  const frame = Math.floor(compositionTime()*runtime.plan.fps);
+  runtime.frame = Math.min(frame, runtime.plan.frames - 1);
+  if (frame >= runtime.plan.frames) {
+    runtime.running = false; runtime.finished = true;
+    runtime.position=runtime.plan.frames/runtime.plan.fps;
+    for (const node of runtime.nodes.values()) node.media?.pause?.();
+    stopSoundtrack();
+    record('finished', null);
+    setStatus('finished', FINISHED_TEXT); return;
+  }
+  try {
+    const layouts = runtime.plan.layout_keyframes;
+    while (runtime.layoutIndex + 1 < layouts.length && layouts[runtime.layoutIndex + 1].frame <= frame) {
+      runtime.layoutIndex += 1; applyLayout();
+    }
+    for (const node of runtime.nodes.values()) {
+      if (node.busy) continue;
+      let next = node.index;
+      while (next + 1 < node.spans.length && node.spans[next + 1].frame <= frame) next += 1;
+      if (next !== node.index) {
+        node.index = next; node.busy = true;
+        const epoch = runtime.initEpoch;
+        const transition = activate(node, node.spans[next], frame).catch(error => {
+          if (epoch === runtime.initEpoch && !runtime.disposed) fail(error);
+        }).finally(() => {
+          runtime.transitions.delete(transition);
+          if (epoch !== runtime.initEpoch || runtime.disposed) return;
+          node.busy = false;
+          if ([...runtime.nodes.values()].some(n => n.busy)) return;
+          if (runtime.pauseIntent) runtime.pause();
+          if (runtime.restartIntent) {
+            if (runtime.finished && !runtime.error) { runtime.restartIntent = false; restartFinished(); }
+            else cancelRestartIntent();
+          }
+        });
+        runtime.transitions.add(transition);
+      }
+    }
+    /* The shared evaluator's sweep is applied per frame, not per layout change:
+     * it is a continuous move, and only a layout reapplication would freeze it
+     * between keyframes. */
+    applyPanelOrientation(frame / runtime.plan.fps);
+  } catch (error) { fail(error); }
+  requestAnimationFrame(()=>tick(generation));
+}
+runtime.start = async () => {
+  if (!runtime.ready || runtime.running || runtime.starting || runtime.finished || runtime.error) throw new Error('Runtime is not ready');
+  const epoch = runtime.initEpoch;
+  runtime.starting=true;
+  runtime.pauseIntent=false;
+  runtime.restartIntent=false;
+  try {
+    if (runtime.audio.context) {
+      const context=runtime.audio.context;
+      // Called synchronously by the stage gesture: no autoplay policy bypass.
+      const resumed=context.resume();
+      let timer;
+      try { await Promise.race([resumed,new Promise((_,reject)=>{
+        timer=setTimeout(()=>reject(new Error('Audio blocked: click or press Space to enable sound')),3000);
+      })]); } finally { clearTimeout(timer); }
+      assertActive(epoch);
+      if (context.state!=='running') throw new Error('Audio context did not start');
+      runtime.audio.enabled=true;
+      runtime.audio.blocked=null;
+      runtime.audio.interrupted=false;
+    }
+    runtime.origin=runtime.audio.context ? runtime.audio.context.currentTime-runtime.position :
+      performance.now()-runtime.position*1000;
+    runtime.running=true; runtime.generation++;
+    for (const node of runtime.nodes.values()) {
+      if (node.kind==='video') node.media.muted=runtime.audio.mode!=='spatial_loops';
+      scheduleLoopGain(node);
+    }
+    startSoundtrack();
+    runtime.startMedia = Promise.all([...runtime.nodes.values()].filter(n => n.kind === 'video' && !n.span.held).map(n => n.media.play()));
+    await runtime.startMedia;
+    assertActive(epoch);
+    if (runtime.audio.interrupted) return;
+    // A decoder error can arrive while play() promises are outstanding.
+    // Never turn that terminal error back into an apparent playing state.
+    if (runtime.error) throw new Error(runtime.error);
+    if (runtime.pauseIntent) {
+      runtime.pauseIntent = false;
+      runtime.starting = false;
+      runtime.pause();
+      return;
+    }
+    setStatus('playing',runtime.audio.mode==='none' ? 'Playing · silent field · click or Space to pause' :
+      'Playing with sound · click or Space to pause');
+    const generation=runtime.generation; requestAnimationFrame(()=>tick(generation));
+  } catch (error) {
+    if (epoch !== runtime.initEpoch || runtime.disposed || runtime.audio.interrupted) return;
+    if (!runtime.error && runtime.audio.context &&
+        (error.name==='NotAllowedError' || String(error).includes('Audio blocked:'))) {
+      runtime.running=false; runtime.audio.enabled=false; runtime.audio.blocked=String(error);
+      for(const node of runtime.nodes.values()) { node.media?.pause?.(); if(node.kind==='video')node.media.muted=true; }
+      stopSoundtrack(); setStatus('audio-blocked','Sound is blocked. Click or press Space to enable playback.');
+      record('audio-blocked',null,{message:String(error)});
+    } else fail(error);
+    throw error;
+  }
+  finally { if (epoch === runtime.initEpoch) runtime.starting=false; }
+};
+runtime.play = async () => {
+  if (runtime.running) return;
+  cancelRestartIntent();
+  if (runtime.finished) {
+    await runtime.seek(0);
+  }
+  return runtime.start();
+};
+runtime.pause = () => {
+  cancelRestartIntent();
+  if (runtime.audio.resumeRequested) {
+    runtime.audio.resumeRequested = false;
+    runtime.pauseIntent = false;
+    setStatus('paused','Paused · click or Space to resume');
+  }
+  if (runtime.starting || runtime.initializing) {
+    runtime.pauseIntent = true;
+    record('pause-intent', null);
+    return;
+  }
+  if ([...runtime.nodes.values()].some(node=>node.busy)) {
+    runtime.pauseIntent = true;
+    record('pause-intent', null);
+    return;
+  }
+  runtime.pauseIntent = false;
+  if (!runtime.running) return;
+  runtime.position=compositionTime(); runtime.running=false; runtime.generation++;
+  runtime.frame=Math.min(Math.floor(runtime.position*runtime.plan.fps),runtime.plan.frames-1);
+  for (const node of runtime.nodes.values()) { node.media?.pause?.(); scheduleLoopGain(node); }
+  stopSoundtrack(); setStatus('paused','Paused · click or Space to resume'); record('paused',null,{time:runtime.position});
+};
+runtime.resume = runtime.play;
+runtime.replay = async () => {
+  if (runtime.running) {
+    runtime.pause();
+  }
+  await runtime.seek(0);
+  return runtime.play();
+};
+async function alignPosition(seconds) {
+  const epoch = runtime.initEpoch;
+  runtime.position=seconds; runtime.frame=Math.floor(seconds*runtime.plan.fps); runtime.finished=false;
+  runtime.layoutIndex=runtime.plan.layout_keyframes.findLastIndex(item=>item.frame<=runtime.frame);
+  await Promise.all([...runtime.nodes.values()].map(async node=>{
+    node.index=node.spans.findLastIndex(span=>span.frame<=runtime.frame);
+    node.busy=true;
+    try { await activate(node,node.spans[node.index],seconds*runtime.plan.fps,true); }
+    finally { node.busy=false; }
+  }));
+  assertActive(epoch);
+}
+runtime.seek = async seconds => {
+  if (!runtime.ready || runtime.error || runtime.starting || [...runtime.nodes.values()].some(node=>node.busy))
+    throw new Error('Runtime is not ready to seek');
+  if (!Number.isFinite(seconds) || seconds<0 || seconds>=runtime.plan.frames/runtime.plan.fps)
+    throw new Error('Seek must remain within composition duration');
+  const epoch = runtime.initEpoch;
+  const wasRunning=runtime.running; runtime.pause();
+  try { await alignPosition(seconds); }
+  catch (error) {
+    if (epoch !== runtime.initEpoch || runtime.disposed) return;
+    fail(error); throw error;
+  }
+  record('transport-seek',null,{time:seconds}); setStatus('paused','Paused · click or Space to resume');
+  const resume = wasRunning && !runtime.pauseIntent;
+  runtime.pauseIntent = false;
+  if (resume) await runtime.start();
+};
+runtime.retry = async () => {
+  if (runtime.disposed || (!runtime.retryable && !runtime.error && !runtime.assetError)) return;
+  record('retry', null);
+  await initialize();
+};
+let audioRecovery = null;
+function finishAudioRecovery() {
+  if (audioRecovery) return audioRecovery;
+  if (!runtime.audio.interrupted) return Promise.resolve();
+  const epoch = runtime.initEpoch;
+  audioRecovery = (async () => {
+    do {
+      await Promise.allSettled([...runtime.transitions, runtime.startMedia]);
+      assertActive(epoch);
+      if (runtime.audio.context.state !== 'running') return;
+      // Reconcile every source to the frozen composition position before restart.
+      await alignPosition(runtime.position);
+      assertActive(epoch);
+      const resume = runtime.audio.resumeRequested;
+      runtime.audio.interrupted = false;
+      runtime.audio.resumeRequested = false;
+      runtime.audio.enabled = true;
+      runtime.audio.blocked = null;
+      if (resume) await runtime.start();
+      assertActive(epoch);
+      record('audio-recovered', null, {state:'running'});
+    } while (runtime.audio.interrupted && runtime.audio.context?.state === 'running');
+  })().finally(() => { if (epoch === runtime.initEpoch) audioRecovery = null; });
+  return audioRecovery;
+}
+runtime.recoverAudio = async () => {
+  const context = runtime.audio.context, epoch = runtime.initEpoch;
+  if (!context || runtime.disposed) return;
+  try {
+    record('audio-recover-attempt', null, {state:context.state});
+    await context.resume();
+    assertActive(epoch);
+    if (context.state === 'running') {
+      await finishAudioRecovery();
+      assertActive(epoch);
+      runtime.audio.enabled = true;
+      runtime.audio.blocked = null;
+    }
+  } catch (error) {
+    if (epoch !== runtime.initEpoch || runtime.disposed) return;
+    record('audio-recover-failed', null, {message:String(error)});
+    throw error;
+  }
+};
+function releaseResources() {
+  runtime.initEpoch++;
+  runtime.initController?.abort();
+  runtime.initController = null;
+  runtime.initializing = false;
+  runtime.pauseIntent = false;
+  runtime.restartIntent = false;
+  runtime.audio.resumeRequested = false;
+  audioRecovery = null;
+  runtime.running = false;
+  runtime.ready = false;
+  runtime.starting = false;
+  runtime.startMedia = null;
+  runtime.generation++;
+  stopSoundtrack();
+  for (const node of runtime.nodes.values()) {
+    try { node.media?.pause?.(); } catch (_) {}
+    if (node.audio) {
+      try { node.audio.source?.disconnect(); } catch (_) {}
+      try { node.audio.pan?.disconnect(); } catch (_) {}
+      try { node.audio.gain?.disconnect(); } catch (_) {}
+      node.audio = null;
+    }
+    if (node.media) {
+      node.media.onloadeddata = null;
+      node.media.onseeked = null;
+      node.media.onerror = null;
+      const media = node.media;
+      node.media = null;
+      media.remove();
+      try { media.removeAttribute('src'); media.load(); } catch (_) {}
+    }
+    if (node.box) {
+      node.box.remove();
+      node.box = null;
+    }
+  }
+  runtime.nodes.clear();
+  for (const entry of runtime.sources.values()) {
+    if (entry.url && entry.url.startsWith('blob:')) {
+      try { URL.revokeObjectURL(entry.url); } catch (_) {}
+    }
+  }
+  runtime.sources.clear();
+  if (runtime.audio.context) {
+    try { runtime.audio.context.close(); } catch (_) {}
+    runtime.audio.context = null;
+    runtime.audio.buffer = null;
+    runtime.audio.gain = null;
+    runtime.audio.source = null;
+    runtime.audio.enabled = false;
+    runtime.audio.interrupted = false;
+  }
+  runtime.transitions.clear();
+  runtime.restarting = null;
+  panelDriver = null;
+  [...stage.querySelectorAll('.seam')].forEach(el => el.remove());
+  if (runtime.resizeObserver) {
+    try { runtime.resizeObserver.disconnect(); } catch (_) {}
+    runtime.resizeObserver = null;
+  }
+}
+runtime.dispose = () => {
+  runtime.disposed = true;
+  releaseResources();
+  setStatus('disposed', 'Runtime disposed.');
+  record('disposed', null);
+};
+runtime.snapshot = () => {
+  // Bind every derived value to the same instant, including while playing.
+  const sampledTime = compositionTime();
+  return {
+    frame: runtime.frame, wall: performance.now(), orientation: runtime.orientation,
+    orientationOverride: runtime.orientationOverride,
+    running: runtime.running, finished: runtime.finished, error: runtime.error,
+    retryable: !!runtime.retryable,
+    assetError: runtime.assetError ?? null,
+    pauseIntent: runtime.pauseIntent,
+    restartIntent: runtime.restartIntent,
+    disposed: !!runtime.disposed,
+    compositionTime:sampledTime,
+    /* The shared engine's contribution, reported so a test can assert the module
+     * actually ran rather than inferring it from unchanged panel framing. */
+    sharedEngine:{
+      build:runtime.sharedEngineBuild??null,
+      panels:runtime.sharedEnginePanels??0,
+      error:runtime.sharedEngineError??null,
+      renderedTime:renderedSharedEngine.time,
+      loops:renderedSharedEngine.loops,
+      poses:renderedSharedEngine.poses.map(pose=>({...pose})),
+    },
+    audio:{mode:runtime.audio.mode,enabled:runtime.audio.enabled,contextState:runtime.audio.context?.state??null,
+      blocked:runtime.audio.blocked??null,
+      interrupted:!!runtime.audio.interrupted,
+      soundtrackPlaying:!!runtime.audio.source,gain:runtime.audio.gain?.gain.value??null},
+    loops: [...runtime.nodes.values()].map(n => ({
+      id:n.id, source:n.source, kind:n.kind, currentTime:n.media?.currentTime ?? null,
+      rate:n.media?.playbackRate ?? 0, paused:n.media?.paused ?? true, readyState:n.media?.readyState ?? null,
+      busy:n.busy, callbacks:n.callbacks, decoded:n.decoded,
+      audio:n.audio ? {gain:n.audio.gain.gain.value,pan:n.audio.pan.pan.value}:null,
+      rect:n.box ? n.box.getBoundingClientRect().toJSON() : null,
+      quality:n.media?.getVideoPlaybackQuality?.().toJSON?.() ?? (n.kind === 'video' && n.media ? {
+        totalVideoFrames:n.media.getVideoPlaybackQuality().totalVideoFrames,
+        droppedVideoFrames:n.media.getVideoPlaybackQuality().droppedVideoFrames} : null),
+    })),
+    eventCount: runtime.events.length,
+  };
+};
+// Tests may supply file-backed IO without enabling network access. Playback,
+// layout, integrity comparisons and event handling use the identical code path.
+// Media supplied through this hook (for example files a visitor chose) need not
+// be MP4: any lowercase alphanumeric video suffix is accepted, the optional
+// io.type(source) names the Blob type, and io.maxMediaBytes may raise the
+// memory guard up to 512 MiB. Staged previews keep the MP4-only, 256 MiB rules.
+const ioHook = Boolean(window.compositionIO);
+const MEDIA_GUARD = 256*1024*1024, IO_MEDIA_GUARD_LIMIT = 512*1024*1024;
+const VIDEO_TYPES = {mp4:'video/mp4', m4v:'video/mp4', mov:'video/quicktime', qt:'video/quicktime', webm:'video/webm'};
+const io = window.compositionIO || {
+  async plan() {
+    const response = await fetch('plan.json');
+    if (!response.ok) throw new Error('Cannot load compiled plan');
+    return response.json();
+  },
+  async bytes(source) {
+    const response = await fetch(source.path);
+    if (!response.ok) throw new Error(`Missing media: ${source.id}`);
+    return response.arrayBuffer();
+  },
+  async digest(bytes) {
+    if (!crypto.subtle) throw new Error('Secure context required for media hashing');
+    return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(v => v.toString(16).padStart(2,'0')).join('');
+  },
+};
+function mediaGuard() {
+  const declared = ioHook ? io.maxMediaBytes : undefined;
+  return Number.isSafeInteger(declared) && declared > 0 ? Math.min(declared, IO_MEDIA_GUARD_LIMIT) : MEDIA_GUARD;
+}
+async function videoType(source) {
+  const declared = ioHook && typeof io.type === 'function' ? await io.type(source) : null;
+  if (typeof declared === 'string' && /^video\/[a-z0-9.+-]+$/i.test(declared)) return declared;
+  return VIDEO_TYPES[source.path.slice(source.path.lastIndexOf('.') + 1)] || 'video/mp4';
+}
+// Validate the transport document before IO or DOM mutation. This checks the
+// compiled envelope and references; it does not choose media or resolve events.
+function validatePlan(plan) {
+  const need = (test, reason) => { if (!test) throw new Error(`Invalid compiled plan: ${reason}`); };
+  const integer = (value, low, high) => Number.isSafeInteger(value) && value >= low && value <= high;
+  const ident = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(value);
+  const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  need(plan && ((plan.plan_version===1 && plan.engine_version==='1.0.0' && plan.audio==='none') ||
+    (plan.plan_version===2 && plan.engine_version==='1.1.0' && plan.audio &&
+      ['none','soundtrack','spatial_loops'].includes(plan.audio.mode))), 'version/audio');
+  need(hash(plan.state_sha256), 'state hash');
+  need(integer(plan.fps, 1, 60) && integer(plan.frames, 1, 14400), 'time bounds');
+  need(Array.isArray(plan.tracks) && integer(plan.tracks.length, 1, 32), 'loop guard');
+  need(Array.isArray(plan.sources) && plan.sources.length > 0, 'sources');
+  const sources = new Map(), guard = mediaGuard(); let total = 0;
+  for (const source of plan.sources) {
+    need(source && ident(source.id) && !sources.has(source.id), 'source identity');
+    need(hash(source.sha256) && integer(source.bytes, 1, guard), 'media metadata');
+    const extension = source.kind === 'video' ? (ioHook ? '[a-z0-9]{1,8}' : 'mp4') : '(?:png|jpe?g)';
+    need(['video','still'].includes(source.kind) &&
+      new RegExp(`^media/${source.sha256}\\.${extension}$`).test(source.path), 'media path/kind');
+    need(number(source.duration) > 0, 'source duration');
+    total += source.bytes; need(total <= guard, 'media memory guard');
+    if (plan.plan_version===2 && plan.audio.mode==='spatial_loops' && source.kind==='video') {
+      need(source.audio_stream===null || (source.audio_stream?.codec==='aac' &&
+        [1,2].includes(source.audio_stream.channels)), 'spatial source audio capability');
+    }
+    sources.set(source.id, source);
+  }
+  const ids = new Set(); let spanCount = 0;
+  for (const track of plan.tracks) {
+    need(track && ident(track.id) && !ids.has(track.id), 'loop identity'); ids.add(track.id);
+    need(Array.isArray(track.spans) && integer(track.spans.length, 1, plan.frames), 'spans');
+    let last = -1;
+    for (const span of track.spans) {
+      need(span && span.id === track.id && integer(span.frame, 0, plan.frames-1) &&
+        span.frame > last && (last !== -1 || span.frame === 0), 'span order/identity');
+      last = span.frame;
+      const source = sources.get(span.source);
+      need(source && span.kind === source.kind && typeof span.held === 'boolean', 'span source/kind/hold');
+      const rate = number(span.rate), offset = number(span.source_offset);
+      need(rate > 0 && rate <= 8 && (span.kind !== 'video' || rate >= 1/16), 'browser video rate');
+      need(offset >= 0 && offset < number(source.duration), 'source offset');
+      spanCount++;
+    }
+  }
+  need(spanCount <= 1024 * plan.tracks.length, 'span resource guard');
+  if (plan.plan_version===2) {
+    const audio=plan.audio;
+    const fields=allowed=>need(Object.keys(audio).every(key=>allowed.includes(key)), 'audio fields');
+    const level=value=>number(value)>=0 && number(value)<=1;
+    if (audio.mode==='none') {
+      fields(['mode','routing','generative']);
+      need(audio.routing===null && audio.generative===null,'silent audio');
+    } else if (audio.mode==='soundtrack') {
+      fields(['mode','source','sha256','duration','volume','loop','fade_in_seconds','fade_out_seconds','asset']);
+      need(level(audio.volume) && typeof audio.loop==='boolean' && number(audio.duration)>0 && number(audio.duration)<=600 &&
+        number(audio.fade_in_seconds)>=0 && number(audio.fade_out_seconds)>=0, 'soundtrack controls');
+      const asset=audio.asset;
+      need(asset && asset.id==='soundtrack' && asset.kind==='audio' && hash(asset.sha256) &&
+        asset.sha256===audio.sha256 && asset.path===audio.source && asset.duration===audio.duration &&
+        new RegExp(`^media/${asset.sha256}\\.(wav|mp3|m4a|ogg|flac)$`).test(asset.path) &&
+        integer(asset.bytes,1,guard), 'soundtrack asset');
+      total+=asset.bytes; need(total<=guard,'media memory guard');
+    } else {
+      fields(['mode','master_volume','spatial_panning','per_loop']);
+      need(level(audio.master_volume) && typeof audio.spatial_panning==='boolean' &&
+        audio.per_loop && Object.keys(audio.per_loop).length===ids.size,'spatial controls');
+      for (const [id,settings] of Object.entries(audio.per_loop)) {
+        need(ids.has(id) && settings && Object.keys(settings).every(key=>['gain','mute_on_hold'].includes(key)) &&
+          level(settings.gain) && settings.mute_on_hold===true,'per-loop audio');
+      }
+    }
+  }
+  need(Array.isArray(plan.layout_keyframes) && integer(plan.layout_keyframes.length, 1, plan.frames), 'layouts');
+  const only = (value, allowed) => value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).every(key => allowed.includes(key));
+  let last = -1;
+  for (const keyframe of plan.layout_keyframes) {
+    need(keyframe && integer(keyframe.frame, 0, plan.frames-1) && keyframe.frame > last &&
+      (last !== -1 || keyframe.frame === 0), 'layout order'); last = keyframe.frame;
+    need(only(keyframe, ['frame','layouts']) && only(keyframe.layouts, ['portrait','landscape']), 'layout fields');
+    for (const orientation of ['portrait','landscape']) {
+      const layout = keyframe.layouts?.[orientation], cells = layout?.cells;
+      need(only(layout, ['name','cells','full_bleed','presentation']) &&
+        (layout.name === undefined || typeof layout.name === 'string'), 'layout fields');
+      need(Array.isArray(cells) && cells.length === ids.size, 'paired layout cells');
+      const mapped = new Set(), rectangles = [];
+      for (const cell of cells) {
+        need(only(cell, ['loop','rect','fit','focal','lateral_offset']), 'cell fields');
+        need(cell && ids.has(cell.loop) && !mapped.has(cell.loop), 'one cell per loop'); mapped.add(cell.loop);
+        need(['contain','cover'].includes(cell.fit) && Array.isArray(cell.rect) && cell.rect.length === 4 &&
+          Array.isArray(cell.focal) && cell.focal.length === 2, 'geometry/fit');
+        const [x,y,w,h] = cell.rect.map(number), focal = cell.focal.map(number);
+        need(x >= 0 && y >= 0 && w > 0 && h > 0 && x+w <= 1+1e-12 && y+h <= 1+1e-12 &&
+          focal.every(v => v >= 0 && v <= 1), 'visible geometry');
+        for (const [a,b,c,d] of rectangles)
+          need(Math.min(x+w,a+c)-Math.max(x,a) <= 1e-12 ||
+            Math.min(y+h,b+d)-Math.max(y,b) <= 1e-12, 'overlapping cells');
+        rectangles.push([x,y,w,h]);
+      }
+      validateRasterLayout(layout, orientation);
+    }
+  }
+}
+/* Optional full-bleed fields, mirroring layout_presets.validate_layout_pair. A
+ * full_bleed layout is refused, by name, unless every cell covers and the rects
+ * tile the unit square exactly (disjoint interiors are checked by the caller). */
+function validateRasterLayout(layout, orientation) {
+  const where = `${orientation} layout ${JSON.stringify(layout.name ?? orientation)}`;
+  const need = (test, reason) => { if (!test) throw new Error(`Invalid compiled plan: ${where}: ${reason}`); };
+  const cells = layout.cells, has = key => Object.prototype.hasOwnProperty.call(layout, key);
+  const fraction = (value, label) => {
+    try { return exact(value); } catch (_) { need(false, `${label} must be a canonical rational`); }
+  };
+  const bounded = (value, label) => {
+    const result = fraction(value, label);
+    need(exactCmp(result, [0n, 1n]) >= 0 && exactCmp(result, [1n, 20n]) <= 0, `${label} must be in 0..1/20`);
+    return result;
+  };
+  if (has('full_bleed') || has('presentation'))
+    need(cells.length >= 1 && cells.length <= STRIPS_MAX_CELLS,
+      `full_bleed and presentation are supported for 1..${STRIPS_MAX_CELLS} cells, not ${cells.length}`);
+  if (has('full_bleed')) need(typeof layout.full_bleed === 'boolean', 'full_bleed must be boolean');
+  if (layout.full_bleed === true) {
+    cells.forEach((cell, index) => need(cell.fit === 'cover',
+      `full_bleed requires fit cover on every cell; cell ${index} is ${JSON.stringify(cell.fit)} (contain exposes background)`));
+    let area = [0n, 1n];
+    for (const cell of cells) {
+      const [, , w, h] = cell.rect.map((value, axis) => fraction(value, `rect[${axis}]`));
+      area = exactAdd(area, exactMul(w, h));
+    }
+    need(exactCmp(area, [1n, 1n]) === 0,
+      `full_bleed requires the rects to tile the unit square exactly; they cover ${exactText(area)}`);
+  }
+  let jitter = [0n, 1n];
+  if (has('presentation')) {
+    const presentation = layout.presentation;
+    need(presentation && typeof presentation === 'object' && !Array.isArray(presentation) &&
+      ['overlap_px','corner_radius','lateral_jitter'].every(key => key in presentation) &&
+      Object.keys(presentation).length === 3, 'presentation needs exactly overlap_px, corner_radius, lateral_jitter');
+    need(Number.isSafeInteger(presentation.overlap_px) && presentation.overlap_px >= 0 &&
+      presentation.overlap_px <= OVERLAP_PX_MAX, `presentation.overlap_px must be an integer in 0..${OVERLAP_PX_MAX}`);
+    const edges = adjacency(cells);
+    need(presentation.overlap_px === 0 || edges.length > 0,
+      'presentation.overlap_px > 0 is a bleed across shared edges; this layout has no shared edge');
+    const radius = bounded(presentation.corner_radius, 'presentation.corner_radius');
+    if (radius[0] !== 0n) {
+      need(edges.length > 0, 'presentation.corner_radius > 0 requires cells that share an edge');
+      // Each rounded corner (on a side shared with an earlier cell) needs that cell beneath it.
+      const covered = new Map();
+      for (const edge of edges) {
+        const key = `${edge.b}:${OPPOSITE_SIDE[edge.edge]}`;
+        if (!covered.has(key)) covered.set(key, []);
+        covered.get(key).push(edge.span.map(exact));
+      }
+      for (const [key, spans] of covered) {
+        const [index, side] = key.split(':');
+        const [x, y, w, h] = cells[Number(index)].rect.map(exact);
+        const ends = side === 'top' || side === 'bottom' ? [x, exactAdd(x, w)] : [y, exactAdd(y, h)];
+        for (const corner of ends)
+          need(spans.some(([low, high]) => exactCmp(low, corner) <= 0 && exactCmp(corner, high) <= 0),
+            `cell ${index}: rounded ${side} corner at ${exactText(corner)} has no earlier-drawn neighbour beneath it`);
+      }
+    }
+    jitter = bounded(presentation.lateral_jitter, 'presentation.lateral_jitter');
+  }
+  cells.forEach((cell, index) => {
+    const present = Object.prototype.hasOwnProperty.call(cell, 'lateral_offset');
+    if (jitter[0] === 0n) {
+      need(!present, `cell ${index}: lateral_offset requires presentation.lateral_jitter > 0`);
+      return;
+    }
+    need(present, `cell ${index}: presentation.lateral_jitter > 0 requires a resolved lateral_offset on every cell`);
+    const offset = fraction(cell.lateral_offset, `cell ${index} lateral_offset`);
+    need(exactCmp(offset[0] < 0n ? [-offset[0], offset[1]] : offset, jitter) <= 0,
+      `cell ${index}: |lateral_offset| must not exceed lateral_jitter ${exactText(jitter)}`);
+  });
+}
+async function initialize() {
+  releaseResources();
+  const epoch = runtime.initEpoch;
+  runtime.initController = new AbortController();
+  runtime.finished = false;
+  runtime.error = null;
+  runtime.retryable = false;
+  runtime.assetError = null;
+  runtime.disposed = false;
+  runtime.initializing = true;
+  runtime.position = 0;
+  runtime.frame = 0;
+  runtime.layoutIndex = 0;
+  if (!runtime.resizeObserver) {
+    runtime.resizeObserver = new ResizeObserver(applyLayout);
+    runtime.resizeObserver.observe(stage);
+  }
+  try {
+    const plan = await io.plan();
+    assertActive(epoch);
+    runtime.plan = plan;
+    validatePlan(runtime.plan);
+    let total = 0;
+    runtime.audio.mode=runtime.plan.plan_version===1 ? 'none' : runtime.plan.audio.mode;
+    const assets=[...runtime.plan.sources];
+    if (runtime.audio.mode==='soundtrack') assets.push(runtime.plan.audio.asset);
+    let soundtrackBytes;
+    for (const source of assets) {
+      if (!/^media\/[a-f0-9]{64}\.[a-z0-9]+$/.test(source.path)) throw new Error('Unsafe media URL');
+      total += source.bytes;
+      if (total > mediaGuard()) throw new Error('Media memory guard');
+      const bytes = await io.bytes(source);
+      assertActive(epoch);
+      const digest = await io.digest(bytes);
+      assertActive(epoch);
+      if (digest !== source.sha256 || bytes.byteLength !== source.bytes) throw new Error(`Media integrity: ${source.id}`);
+      if (source.kind==='audio') { soundtrackBytes=bytes; continue; }
+      const type = source.kind === 'video' ? await videoType(source) : (source.path.endsWith('.png') ? 'image/png' : 'image/jpeg');
+      assertActive(epoch);
+      runtime.sources.set(source.id, {url:URL.createObjectURL(new Blob([bytes], {type}))});
+    }
+    if (runtime.audio.mode!=='none') {
+      if (!window.AudioContext) throw new Error('Web Audio is required for this opted-in audio mode');
+      runtime.audio.context=new AudioContext({sampleRate:48000});
+      if (runtime.audio.mode==='soundtrack') {
+        const buffer=await runtime.audio.context.decodeAudioData(soundtrackBytes);
+        assertActive(epoch);
+        runtime.audio.buffer=buffer;
+        if (![1,2].includes(runtime.audio.buffer.numberOfChannels))
+          throw new Error('Browser soundtrack requires mono or stereo audio');
+        const duration=number(runtime.plan.audio.duration);
+        if (Math.abs(runtime.audio.buffer.duration-duration)>1/runtime.plan.fps)
+          throw new Error('Decoded soundtrack duration differs from verified duration');
+        // Probe tolerance permits a partial video frame discrepancy. Pad/trim the
+        // decoded PCM to the declared sample count so every loop still uses T.
+        const decoded=runtime.audio.buffer, length=Math.max(1,Math.round(duration*decoded.sampleRate));
+        if (length!==decoded.length) {
+          const normalized=runtime.audio.context.createBuffer(decoded.numberOfChannels,length,decoded.sampleRate);
+          for(let channel=0;channel<decoded.numberOfChannels;channel++)
+            normalized.copyToChannel(decoded.getChannelData(channel).subarray(0,length),channel);
+          runtime.audio.buffer=normalized;
+        }
+        runtime.audio.gain=runtime.audio.context.createGain();
+        runtime.audio.gain.gain.value=0;
+        runtime.audio.gain.connect(runtime.audio.context.destination);
+      }
+      const context = runtime.audio.context;
+      context.addEventListener('statechange',()=>{
+        if (epoch !== runtime.initEpoch || runtime.disposed) return;
+        const state = context.state;
+        record('audio-statechange', null, {state});
+        if (runtime.running && (state==='suspended' || state==='interrupted')) {
+          runtime.position = compositionTime();
+          runtime.running = false;
+          runtime.generation++;
+          runtime.audio.interrupted = true;
+          runtime.audio.resumeRequested = true;
+          runtime.audio.enabled = false;
+          for (const node of runtime.nodes.values()) { node.media?.pause?.(); scheduleLoopGain(node); }
+          stopSoundtrack();
+          record('audio-interrupted', null, {state});
+          setStatus('audio-interrupted', 'Audio interrupted. Click or press Space to recover sound.');
+        } else if (state==='running' && runtime.audio.interrupted) {
+          finishAudioRecovery().catch(error => {
+            if (epoch === runtime.initEpoch && !runtime.disposed) fail(error);
+          });
+        }
+      });
+    }
+    for (const [position, track] of runtime.plan.tracks.entries()) {
+      if (runtime.nodes.has(track.id)) throw new Error('Duplicate loop');
+      const box = document.createElement('div'); box.className = 'loop'; box.dataset.loopId = track.id; stage.append(box);
+      runtime.nodes.set(track.id, {id:track.id, ordinal:position + 1, box, media:null, kind:null, source:null,
+        spans:track.spans, index:0, span:null, callbacks:0, decoded:null, busy:false});
+    }
+    await Promise.all([...runtime.nodes.values()].map(n => activate(n, n.spans[0], 0, true)));
+    assertActive(epoch);
+    if (runtime.error) throw new Error(runtime.error);
+    runtime.ready = true;
+    setStatus('ready',runtime.audio.mode==='none' ? 'Click or press Space to play the silent field.' :
+      'Click or press Space to play with sound.');
+    applyLayout();
+    if (runtime.sharedEngineError) {
+      // A build-declared absence is informational; playback is unaffected.
+      if (runtime.sharedEngineOptional) showEngineNote(runtime.sharedEngineError);
+      else setStatus('error', 'Shared engine unavailable: ' + runtime.sharedEngineError);
+    }
+  } catch (error) {
+    if (epoch !== runtime.initEpoch || runtime.disposed) return;
+    fail(error);
+    throw error;
+  } finally {
+    if (epoch === runtime.initEpoch) runtime.initializing = false;
+  }
+}
+runtime.initialize = initialize;
+initialize().catch(fail);
+
+// Page visibility change recovery preserving independent source loop clocks
+if (typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    const hidden = document.hidden;
+    record('visibility-change', null, {hidden, time: compositionTime()});
+    if (!hidden && runtime.running && runtime.plan) {
+      const nowSec = compositionTime();
+      const curFrame = Math.min(Math.floor(nowSec * runtime.plan.fps), runtime.plan.frames - 1);
+      for (const node of runtime.nodes.values()) {
+        if (node.kind === 'video' && node.span && !node.span.held && !node.busy && node.media) {
+          const elapsed = (curFrame - node.span.frame) / runtime.plan.fps;
+          const target = number(node.span.source_offset) + elapsed * number(node.span.rate);
+          if (Math.abs(node.media.currentTime - target) > 0.25) {
+            node.media.currentTime = target;
+            record('visibility-resync', node.id, {target, currentTime: node.media.currentTime});
+          }
+        }
+      }
+    }
+  });
+}
+
+// A local preview can be started directly without a developer console.
+stage.tabIndex = 0;
+/* After the composition finishes, the same gesture plays it again from frame 0.
+ * runtime.play() seeks every loop back to its first authored span before the
+ * shared clock restarts, so the loops restart together on their authored clocks. */
+function restartFinished() {
+  if ([...runtime.nodes.values()].some(node => node.busy)) {
+    // Remember the gesture; the settling transition performs the restart.
+    runtime.restartIntent = true;
+    record('restart-intent', null);
+    setStatus('finished', RESTART_QUEUED_TEXT);
+    return;
+  }
+  const token = {}, epoch = runtime.initEpoch;
+  runtime.restarting = token;
+  record('restart', null);
+  runtime.play().catch(error => {
+    if (epoch !== runtime.initEpoch || runtime.disposed || runtime.error || runtime.audio.blocked) return;
+    fail(error);
+  }).finally(() => { if (runtime.restarting === token) runtime.restarting = null; });
+}
+stage.addEventListener('click', () => {
+  if (runtime.audio.interrupted) {
+    runtime.recoverAudio().catch(() => {});
+    return;
+  }
+  if (!runtime.ready || runtime.starting || runtime.restarting || runtime.restartIntent || runtime.error) return;
+  if (runtime.finished) { restartFinished(); return; }
+  if (runtime.running) { try { runtime.pause(); } catch (error) { record('transport-busy',null,{message:String(error)}); } }
+  else runtime.start().catch(error=>{if(!runtime.audio.blocked)fail(error);});
+});
+/* Space toggles playback wherever focus rests on non-interactive content (the
+ * stage or the page body), so a visitor need not click the stage first. Focused
+ * controls keep their own Space behaviour. */
+const INTERACTIVE_FOCUS = 'a[href],area[href],button,input,select,textarea,summary,iframe,' +
+  'audio[controls],video[controls],[contenteditable]:not([contenteditable="false"]),' +
+  '[role="button"],[role="link"],[role="checkbox"],[role="radio"],[role="switch"],[role="tab"],' +
+  '[role="menuitem"],[role="option"],[role="slider"],[role="spinbutton"],[role="textbox"],[role="combobox"]';
+function spaceTogglesPlayback(event) {
+  if (event.code !== 'Space' || event.defaultPrevented) return false;
+  // Space with a modifier, or while composing text, belongs to the browser or the IME.
+  if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.isComposing) return false;
+  const target = event.target;
+  return !(target && typeof target.closest === 'function' && target.closest(INTERACTIVE_FOCUS));
+}
+(typeof document.addEventListener === 'function' ? document : stage).addEventListener('keydown', event => {
+  if (!spaceTogglesPlayback(event)) return;
+  event.preventDefault();
+  // A held key repeats keydown: it must neither scroll the page nor toggle again.
+  if (event.repeat) return;
+  stage.click();
+});
+
+// Deterministic seeding and bounded snapshot paging helper (Issue #27)
+function seededRng(seed) {
+  let h = 0x811c9dc5;
+  const s = String(seed);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return function() {
+    h = Math.imul(h ^ (h >>> 15), 1 | h);
+    h ^= h + Math.imul(h ^ (h >>> 7), 61 | h) ^ h;
+    return ((h ^ (h >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function deterministicShuffle(arr, seed) {
+  const result = arr.slice();
+  const rng = seededRng(seed);
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = result[i];
+    result[i] = result[j];
+    result[j] = tmp;
+  }
+  return result;
+}
+
+function pageSnapshot(items, options = {}) {
+  const list = Array.isArray(items) ? items : (items ? Array.from(items) : []);
+  const totalItems = list.length;
+  const rawPageSize = Number(options.pageSize ?? 24);
+  const pageSize = (Number.isFinite(rawPageSize) && rawPageSize > 0) ? Math.floor(rawPageSize) : 24;
+  const totalPages = totalItems > 0 ? Math.ceil(totalItems / pageSize) : 0;
+
+  const rawPageIndex = Number(options.pageIndex ?? 0);
+  let pageIndex = (Number.isFinite(rawPageIndex) && rawPageIndex >= 0) ? Math.floor(rawPageIndex) : 0;
+  if (totalPages > 0 && pageIndex >= totalPages) {
+    pageIndex = Math.max(0, totalPages - 1);
+  }
+
+  // Active decoder cap strictly enforces maxActiveDecoders <= 6
+  const rawDecoders = Number(options.maxActiveDecoders ?? 6);
+  const maxActiveDecoders = Number.isFinite(rawDecoders)
+    ? Math.min(Math.max(0, Math.floor(rawDecoders)), 6) : 6;
+
+  let ordered = list.slice();
+  if (options.seed !== null && options.seed !== undefined) {
+    ordered = deterministicShuffle(ordered, options.seed);
+  }
+
+  const start = totalPages === 0 ? 0 : pageIndex * pageSize;
+  const end = Math.min(start + pageSize, totalItems);
+  const sliced = ordered.slice(start, end);
+
+  const pageItems = sliced.map((item, idx) => {
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      return Object.assign({}, item, {
+        activeDecoder: idx < maxActiveDecoders,
+        active_decoder: idx < maxActiveDecoders,
+      });
+    }
+    return item;
+  });
+
+  return {
+    items: pageItems,
+    pageIndex,
+    pageSize,
+    totalItems,
+    totalPages,
+    hasNextPage: totalPages > 0 && pageIndex < totalPages - 1,
+    hasPrevPage: totalPages > 0 && pageIndex > 0,
+    maxActiveDecoders,
+    activeDecoders: Math.min(pageItems.length, maxActiveDecoders),
+  };
+}
+
+runtime.pageSnapshot = pageSnapshot;
+runtime.applySlice = applySlice;
+runtime.adjacency = adjacency;
+runtime.rasterLayout = rasterLayout;
+runtime.overscanFor = overscanFor;
+runtime.validatePlan = validatePlan;
+
+if (typeof window !== 'undefined') {
+  window.pageSnapshot = pageSnapshot;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = runtime;
+  module.exports.runtime = runtime;
+  module.exports.pageSnapshot = pageSnapshot;
+  module.exports.applySlice = applySlice;
+  module.exports.adjacency = adjacency;
+  module.exports.validatePlan = validatePlan;
+}
