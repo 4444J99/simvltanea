@@ -134,9 +134,32 @@
       if (current >= 0 && current !== index) engine.move(id, index - current);
     });
   }
+  function panelNumber(clip) { return Math.round(clamp(clip && clip.settings && clip.settings.panel, 1, 12, 1)); }
+  function panelQueue(entries, number) {
+    return entries.filter(c => panelNumber(c) === number).slice().sort((a, b) => (a.settings.timelineStart || 0) - (b.settings.timelineStart || 0));
+  }
+  function queueAfterPicture(entries, id) {
+    const clip = entries.find(c => c.id === id); if (!clip) return null;
+    const pictures = entries.filter(c => c.id !== id && panelNumber(c) === panelNumber(clip) && c.kind !== 'audio' && c.settings.videoEnabled);
+    if (!pictures.length) return null;
+    const end = c => (c.settings.timelineStart || 0) + c.settings.videoLife;
+    const previous = pictures.reduce((last, c) => end(c) > end(last) ? c : last);
+    const life = clip.kind === 'audio' ? clip.settings.audioLife : clip.settings.videoLife;
+    const overlap = clip.settings.hold ? 0 : Math.min(clip.settings.attack, life / 2, previous.settings.videoLife);
+    const start = Math.max(0, end(previous) - overlap);
+    return {timelineStart: Math.min(3600, start), previousId: previous.id, overlap, limited: start > 3600};
+  }
+  function fittedCanvasBounds(canvasWidth, canvasHeight, boxWidth, boxHeight) {
+    if (![canvasWidth, canvasHeight, boxWidth, boxHeight].every(v => Number.isFinite(v) && v > 0)) return {left: 0, top: 0, width: 0, height: 0};
+    const scale = Math.min(boxWidth / canvasWidth, boxHeight / canvasHeight);
+    const width = canvasWidth * scale, height = canvasHeight * scale;
+    return {left: (boxWidth - width) / 2, top: (boxHeight - height) / 2, width, height};
+  }
+  function presetPatch(preset, settings) { return {...preset.settings, panel: settings.panel || 1, timelineStart: settings.timelineStart || 0}; }
   // Export settings, file names and content identities, never media or URLs. Missing files keep their saved slots.
-  function sessionData(snapshot, sources, slots) {
-    return {format: FORMAT, version: 1,
+  function sessionData(snapshot, sources, slots, selectedPanel = 1) {
+    const layout = Model.normalizeLayout(snapshot.layout || Model.DEFAULT_LAYOUT);
+    return {format: FORMAT, version: 1, layout, selectedPanel: Math.round(clamp(selectedPanel, 1, layout.count, 1)),
       master: {volume: snapshot.volume, muted: !!snapshot.muted},
       sequence: {enabled: !!snapshot.sequence.enabled, interval: snapshot.sequence.interval},
       transport: transportData(snapshot.transport),
@@ -192,7 +215,8 @@
     }
     for (const group of localGroups.values()) if (group.length > 1)
       for (const clip of group) if (!clip.fileSha256) clip.requiresFileChoice = true;
-    return {format: FORMAT, version: 1, clips, transport: transportData(data.transport),
+    const layout = Model.normalizeLayout(data.layout === undefined ? {...Model.DEFAULT_LAYOUT, count: 1} : data.layout);
+    return {format: FORMAT, version: 1, clips, layout, selectedPanel: Math.round(clamp(data.selectedPanel, 1, layout.count, 1)), transport: transportData(data.transport),
       master: {volume: clamp(data.master && data.master.volume, 0, 1, .45), muted: !!(data.master && data.master.muted)},
       sequence: {enabled: !!(data.sequence && data.sequence.enabled), interval: clamp(data.sequence && data.sequence.interval, 2, 120, 8)}};
   }
@@ -240,7 +264,7 @@
     }
     return {};
   }
-  const api = {FORMAT, STORAGE_KEY, sessionData, parseSession, selectedPatch, fileKind, envelopePath, slotEntries, alignEngineOrder, transportData, timelineEdit, availableClipId, PUBLIC_MEDIA, MEDIA_ORIGIN, MEDIA_CACHE, publicMedia, fetchPublicMedia, clearPublicMediaCache, fileIdentity, evictPublicMedia};
+  const api = {FORMAT, STORAGE_KEY, sessionData, parseSession, selectedPatch, fileKind, envelopePath, slotEntries, alignEngineOrder, transportData, timelineEdit, availableClipId, PUBLIC_MEDIA, MEDIA_ORIGIN, MEDIA_CACHE, publicMedia, fetchPublicMedia, clearPublicMediaCache, fileIdentity, evictPublicMedia, panelNumber, panelQueue, queueAfterPicture, fittedCanvasBounds, presetPatch};
   root.SimvltaneaLabUI = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (!root.document) return;
@@ -260,7 +284,8 @@
     const publicFiles = new Map();
     let localRestoreSlot = null, currentDownload = null;
     let zoom = 14, timelineSignature = '', timelineTicks = '', gesture = null;
-    let mode = 'arrange';
+    let mode = 'arrange', selectedPanel = 1, timelineFilter = 'all';
+    let overlaySignature = '', queueSignature = '', assignmentOptionsCount = 0;
     const GUTTER = 144;
     const controls = new Map();
     const filterLabels = {presence: 'Presence · low in / high out', 'presence-reverse': 'Presence · high in / low out',
@@ -323,12 +348,28 @@
     $('panel-motion').insertAdjacentHTML('beforeend', '<p class="scope-note">Rates change at each track’s own repeat boundary. Launch starts the pair together; their clocks then move independently.</p>');
     $('panel-sound').insertAdjacentHTML('beforeend', '<p class="scope-note">Every layer has its own filters and swept comb. Master volume sets the whole composition.</p>');
     function selected(snapshot = engine.snapshot()) { return slotEntries(snapshot, slots).find(c => c.id === selectedId); }
+    function currentLayout(snapshot = engine.snapshot()) { return Model.normalizeLayout(snapshot.layout || Model.DEFAULT_LAYOUT); }
     function applyClipPatch(id, patch) {
       const slot = slots.find(item => item.id === id || item.key === id);
+      if (patch.panel !== undefined && id === selectedId) {
+        const number = Model.normalizeSettings({panel: patch.panel}).panel;
+        if (number <= currentLayout().count) selectedPanel = number;
+      }
       if (slot && slot.pending) { slot.pending.settings = Model.normalizeSettings(patch, slot.pending.settings); render(engine.snapshot()); }
       else engine.set(id, patch);
     }
-    function setSelected(id) { selectedId = id; inspectorSignature = ''; render(engine.snapshot()); const c = selected(); if (c && c.kind === 'audio' && $('tab-picture').getAttribute('aria-selected') === 'true') activateTab($('tab-sound')); }
+    function setSelected(id) {
+      selectedId = id; inspectorSignature = '';
+      const clip = selected(); if (clip && panelNumber(clip) <= currentLayout().count) selectedPanel = panelNumber(clip);
+      render(engine.snapshot());
+      if (clip && clip.kind === 'audio' && $('tab-picture').getAttribute('aria-selected') === 'true') activateTab($('tab-sound'));
+    }
+    function selectPanel(number) {
+      selectedPanel = Math.round(clamp(Number(number), 1, currentLayout().count, 1));
+      const entries = slotEntries(engine.snapshot(), slots), clip = entries.find(c => c.id === selectedId);
+      if (!clip || panelNumber(clip) !== selectedPanel) { const first = panelQueue(entries, selectedPanel)[0]; selectedId = first ? first.id : null; }
+      inspectorSignature = ''; render(engine.snapshot());
+    }
     function newEngine() {
       engine = new root.SimvltaneaLabEngine.Engine($('lab-stage'), {onChange: render, onError: message => status(String(message), 'error')});
       api.engine = engine;
@@ -362,26 +403,36 @@
         layerSignature = signature;
         $('layer-list').innerHTML = front.length ? front.map((c, index) => {
           const src = sources.get(c.id); const thumb = c.kind === 'demo' ? (src && src.demo || 'tide') : c.kind;
-          return '<div class="layer' + (c.id === selectedId ? ' selected' : '') + (c.pending ? ' pending' : '') + '" data-layer="' + escape(c.id) + '"><button class="layer-select" data-action="' + (c.pending ? 'restore' : 'select') + '" aria-pressed="' + (c.id === selectedId) + '" aria-label="' + (c.pending ? (c.sampleId ? 'Retry public media for layer ' : 'Choose local file for layer ') : 'Select layer ') + (index + 1) + ': ' + escape(c.name) + '"><span class="thumb ' + thumb + '" aria-hidden="true"></span><span class="layer-copy"><span class="layer-name">' + escape(c.name) + '</span><span class="layer-status"><span class="layer-dot"></span><span data-layer-status>Ready</span></span></span></button><div class="layer-actions"><button class="launch" data-action="' + (c.pending ? 'restore' : 'launch') + '" aria-label="' + (c.pending ? (c.sampleId ? 'Retry public media for ' : 'Choose local file for ') : 'Launch ') + escape(c.name) + '" title="' + (c.pending ? (c.sampleId ? 'Retry public-media download' : 'Choose this local file again') : 'Restart this layer') + '">' + (c.pending ? (c.sampleId ? 'Retry' : 'Choose') : 'Launch') + '</button><button data-action="up" aria-label="Move ' + escape(c.name) + ' forward" title="Move forward"' + (index === 0 ? ' disabled' : '') + '>↑</button><button data-action="down" aria-label="Move ' + escape(c.name) + ' backward" title="Move backward"' + (index === front.length - 1 ? ' disabled' : '') + '>↓</button><button class="remove" data-action="remove" aria-label="Remove ' + escape(c.name) + '" title="Remove layer">×</button></div></div>';
-        }).join('') : '<div class="empty-state">An open stage.<br>Add a generated loop or choose a local file to begin.</div>';
+          return '<div class="layer' + (c.id === selectedId ? ' selected' : '') + (c.pending ? ' pending' : '') + '" data-layer="' + escape(c.id) + '"><button class="layer-select" data-action="' + (c.pending ? 'restore' : 'select') + '" aria-pressed="' + (c.id === selectedId) + '" aria-label="' + (c.pending ? (c.sampleId ? 'Retry public media for layer ' : 'Choose local file for layer ') : 'Select layer ') + (index + 1) + ': ' + escape(c.name) + '"><span class="thumb ' + thumb + '" aria-hidden="true"></span><span class="layer-copy"><span class="layer-name">' + escape(c.name) + '</span><span class="layer-panel-badge"></span><span class="layer-status"><span class="layer-dot"></span><span data-layer-status>Ready</span></span></span></button><div class="layer-actions"><button class="launch" data-action="' + (c.pending ? 'restore' : 'launch') + '" aria-label="' + (c.pending ? (c.sampleId ? 'Retry public media for ' : 'Choose local file for ') : 'Launch ') + escape(c.name) + '" title="' + (c.pending ? (c.sampleId ? 'Retry public-media download' : 'Choose this local file again') : 'Restart this layer') + '">' + (c.pending ? (c.sampleId ? 'Retry' : 'Choose') : 'Launch') + '</button><button data-action="up" aria-label="Move ' + escape(c.name) + ' forward" title="Move forward"' + (index === 0 ? ' disabled' : '') + '>↑</button><button data-action="down" aria-label="Move ' + escape(c.name) + ' backward" title="Move backward"' + (index === front.length - 1 ? ' disabled' : '') + '>↓</button><button class="remove" data-action="remove" aria-label="Remove ' + escape(c.name) + '" title="Remove layer">×</button></div></div>';
+        }).join('') : '<div class="empty-state">No clips loaded.<br>Select a panel, then import your footage or found sounds.</div>';
       }
       document.querySelectorAll('[data-layer]').forEach(row => {
         const c = front.find(item => item.id === row.dataset.layer); if (!c) return;
         row.classList.toggle('active', c.active); row.classList.toggle('tail', !!(c.audio && c.video && c.audio.active && !c.video.active));
         row.querySelector('[data-layer-status]').textContent = clipPhase(c) + ' · ' + (c.kind === 'demo' ? 'generated' : c.kind === 'audio' ? 'local sound' : 'local video');
         row.querySelector('.launch').disabled = busy;
+        const badge = row.querySelector('.layer-panel-badge'); badge.textContent = 'Panel ' + panelNumber(c) + (panelNumber(c) > currentLayout(snapshot).count ? ' · parked' : ''); badge.classList.toggle('parked', panelNumber(c) > currentLayout(snapshot).count);
       });
     }
     function renderInspector(c) {
       $('inspector-empty').hidden = !!c; $('inspector-body').hidden = !c;
       $('preset-select').disabled = !c;
+      const layout = currentLayout();
+      if (assignmentOptionsCount !== layout.count) { assignmentOptionsCount = layout.count; $('clip-panel').innerHTML = Array.from({length: 12}, (_, i) => '<option value="' + (i + 1) + '">Panel ' + (i + 1) + (i + 1 > layout.count ? ' · parked' : '') + '</option>').join(''); }
+      $('clip-panel').disabled = !c; $('clip-panel').value = String(c ? panelNumber(c) : selectedPanel);
+      const next = c && queueAfterPicture(slotEntries(engine.snapshot(), slots), c.id);
+      $('queue-after').disabled = busy || !next;
+      $('queue-after').title = next ? 'Place this clip after the last picture in Panel ' + panelNumber(c) + ', overlapping by ' + seconds(next.overlap) : 'Add another picture to this panel before queueing after it';
+      const parked = !!c && panelNumber(c) > layout.count;
+      $('panel-assignment-status').classList.toggle('parked', parked);
+      $('panel-assignment-status').textContent = parked ? 'Panel ' + panelNumber(c) + ' is outside this ' + layout.count + '-panel layout. Picture parked; sound can continue.' : c ? 'Assigned to Panel ' + panelNumber(c) + '. Queue after moves the shared start only.' : 'New imports go to Panel ' + selectedPanel + '.';
       $('selected-name').textContent = c ? c.name : 'No clip selected';
       const sample = c && publicMedia((sources.get(c.id) || {}).sampleId || c.sampleId);
       $('source-credit').hidden = !sample;
       if (sample) $('source-credit').innerHTML = escape(sample.title) + ' · ' + escape(sample.author) + '<br><a href="' + sample.licenseURL + '" target="_blank" rel="noopener noreferrer">' + escape(sample.license) + '</a> · <a href="' + sample.sourceURL + '" target="_blank" rel="noopener noreferrer">Source &amp; credits ↗</a>';
       $('selected-number').textContent = c ? String(slotEntries(engine.snapshot(), slots).slice().reverse().findIndex(x => x.id === c.id) + 1).padStart(2, '0') : '—';
       if (!c) { $('preset-description').textContent = 'Select an imported clip to shape its picture and sound.'; return; }
-      const signature = c.id + JSON.stringify(c.settings) + JSON.stringify(c.capabilities);
+      const signature = c.id + JSON.stringify(c.settings) + JSON.stringify(c.capabilities) + ':' + layout.count;
       if (signature === inspectorSignature) return;
       inspectorSignature = signature;
       const s = c.settings;
@@ -401,13 +452,13 @@
       });
       $('help-filterMode').textContent = s.filterMode === 'presence-reverse' ? 'Presence opens a high-pass filter on entrance, then warms the departing sound through a low-pass filter.' : s.filterMode === 'presence' ? helps.filterMode : s.filterMode === 'off' ? 'Presence filtering is bypassed. The swept comb has its own mix control below.' : 'Set the cutoff and resonance below to shape this pass filter.';
       $('help-preservePitch').textContent = c.capabilities && c.capabilities.preservePitch ? 'Keep pitch steady as the local media playback rate changes. Results depend on the browser.' : c.kind === 'demo' ? 'Generated sounds change pitch with speed. Pitch preservation is available for supported local media.' : 'This browser does not expose pitch preservation for this file.';
-      const preset = Object.keys(Model.PRESETS).find(key => JSON.stringify({...Model.PRESETS[key].settings, timelineStart: s.timelineStart}) === JSON.stringify(s));
+      const preset = Object.keys(Model.PRESETS).find(key => JSON.stringify(presetPatch(Model.PRESETS[key], s)) === JSON.stringify(s));
       $('preset-select').value = preset || 'custom';
       $('preset-description').textContent = preset ? Model.PRESETS[preset].description : 'Your own settings, applied to this layer only.';
       $('vanish-picture').disabled = c.kind === 'audio';
       $('vanish-picture').setAttribute('aria-pressed', String(!s.videoEnabled));
       $('vanish-picture').textContent = s.videoEnabled ? '◌ Vanish picture' : '◉ Bring picture back';
-      $('picture-capability').textContent = c.kind === 'audio' ? 'This layer contains sound only.' : c.capabilities && c.capabilities.pictureEffects === false ? 'Picture effects are unavailable in this browser.' : 'Blend order follows the stack: front layers combine with those below.';
+      $('picture-capability').textContent = c.kind === 'audio' ? 'This layer contains sound only.' : c.capabilities && c.capabilities.pictureEffects === false ? 'Picture effects are unavailable in this browser.' : 'Pictures blend with the other clips assigned to this panel, in stack order.';
       $('envelope-audio').setAttribute('d', s.audioEnabled ? envelopePath(s, s.audioLife) : 'M0 60H300');
       $('envelope-video').setAttribute('d', s.videoEnabled && c.kind !== 'audio' ? envelopePath(s, s.videoLife) : 'M0 60H300');
       $('envelope-end').textContent = s.hold ? 'Held until released' : seconds(Math.max(s.audioLife, s.videoLife));
@@ -429,6 +480,44 @@
     function timelineTime(clientX) {
       return Math.max(0, (clientX - $('timeline-canvas').getBoundingClientRect().left - GUTTER) / zoom);
     }
+    function resizePanelOverlay() {
+      const canvas = $('lab-stage'), box = canvas.getBoundingClientRect(), stage = $('stage-wrap').getBoundingClientRect();
+      const fit = fittedCanvasBounds(canvas.width, canvas.height, box.width, box.height);
+      const overlay = $('panel-overlay');
+      overlay.style.left = box.left - stage.left + fit.left + 'px'; overlay.style.top = box.top - stage.top + fit.top + 'px';
+      overlay.style.width = fit.width + 'px'; overlay.style.height = fit.height + 'px';
+    }
+    function renderPanels(snapshot) {
+      const layout = currentLayout(snapshot), entries = slotEntries(snapshot, slots);
+      selectedPanel = Math.round(clamp(selectedPanel, 1, layout.count, 1));
+      $('panel-count').textContent = String(layout.count);
+      $('panel-decrease').disabled = busy || layout.count <= (layout.family === 'authored' ? 2 : 1);
+      $('panel-increase').disabled = busy || layout.count >= (layout.family === 'authored' ? 7 : 12);
+      $('layout-family').value = layout.family; $('layout-orientation').value = layout.orientation; $('layout-framing').value = layout.framing;
+      $('slice-framing-option').disabled = layout.family !== 'strips'; $('slice-framing-option').hidden = layout.family !== 'strips';
+      const panels = snapshot.panels || Model.panelCells(layout, root.SimvltaneaLabLayoutBundle);
+      const signature = JSON.stringify(panels.map(cell => [cell.number, cell.id, cell.rect]));
+      if (signature !== overlaySignature) {
+        overlaySignature = signature;
+        $('panel-overlay').innerHTML = panels.map(cell => '<button class="panel-target" data-preview-panel="' + cell.number + '" aria-pressed="false" aria-label="Select Panel ' + cell.number + '" style="left:' + (cell.rect[0] * 100) + '%;top:' + (cell.rect[1] * 100) + '%;width:' + (cell.rect[2] * 100) + '%;height:' + (cell.rect[3] * 100) + '%"><span class="panel-target-label">Panel ' + cell.number + '<span class="panel-target-count"></span></span></button>').join('');
+      }
+      $('panel-overlay').querySelectorAll('[data-preview-panel]').forEach(button => {
+        const number = Number(button.dataset.previewPanel), count = entries.filter(c => panelNumber(c) === number).length;
+        button.setAttribute('aria-pressed', String(number === selectedPanel));
+        button.setAttribute('aria-label', 'Select Panel ' + number + ', ' + count + (count === 1 ? ' clip' : ' clips'));
+        button.querySelector('.panel-target-count').textContent = ' · ' + count;
+      });
+      resizePanelOverlay();
+      $('selected-panel-label').textContent = 'Panel ' + selectedPanel;
+      $('panel-import').title = 'Import media into Panel ' + selectedPanel;
+      $('timeline-panel-filter').options[1].textContent = 'Panel ' + selectedPanel + ' only'; $('timeline-panel-filter').value = timelineFilter;
+      const queue = panelQueue(entries, selectedPanel);
+      const queueKey = selectedPanel + ':' + selectedId + ':' + queue.map(c => c.id + ':' + c.name + ':' + c.settings.timelineStart + ':' + c.settings.videoLife + ':' + c.settings.audioLife).join('|');
+      if (queueKey !== queueSignature) {
+        queueSignature = queueKey;
+        $('panel-queue').innerHTML = queue.length ? queue.map(c => '<button class="panel-queue-clip" data-queue-clip="' + escape(c.id) + '" aria-pressed="' + (c.id === selectedId) + '" title="Select ' + escape(c.name) + '"><span>' + escape(c.name) + '</span><small>' + seconds(c.settings.timelineStart || 0) + ' · ' + (c.kind === 'audio' ? 'sound' : 'picture + sound') + '</small></button>').join('') : '<span class="panel-queue-empty">Empty · imports go to Panel ' + selectedPanel + '</span>';
+      }
+    }
     function renderTimeline(snapshot) {
       const transport = transportData(snapshot.transport || {mode}); mode = transport.mode;
       ['arrange','perform'].forEach(view => {
@@ -440,9 +529,12 @@
       ['loop-enabled','loop-start','loop-end'].forEach(id => { $(id).disabled = mode === 'perform'; $(id).title = mode === 'perform' ? 'Loop range applies to Arrange mode' : id === 'loop-start' ? 'Loop start (seconds)' : id === 'loop-end' ? 'Loop end (seconds)' : 'Loop arrangement range'; });
       if (document.activeElement !== $('loop-start')) $('loop-start').value = String(transport.loopStart);
       if (document.activeElement !== $('loop-end')) $('loop-end').value = String(transport.loopEnd);
-      const front = slotEntries(snapshot, slots).slice().reverse();
+      const allFront = slotEntries(snapshot, slots).slice().reverse();
+      const front = timelineFilter === 'selected' ? allFront.filter(c => panelNumber(c) === selectedPanel) : allFront;
+      $('timeline-empty-title').textContent = allFront.length ? 'No clips in Panel ' + selectedPanel + '.' : 'An empty arrangement.';
+      $('timeline-empty-message').textContent = 'Select a panel, then import or drop your footage or found sounds. New clips go to Panel ' + selectedPanel + '.';
       $('timeline-empty').hidden = front.length > 0;
-      const end = Math.max(60, transport.loopEnd, ...front.map(c => (c.settings.timelineStart || 0) + Math.max(c.settings.videoLife, c.settings.audioLife)));
+      const end = Math.max(60, transport.loopEnd, ...allFront.map(c => (c.settings.timelineStart || 0) + Math.max(c.settings.videoLife, c.settings.audioLife)));
       const extent = Math.ceil((end + 8) / 10) * 10;
       const width = GUTTER + extent * zoom;
       $('timeline-canvas').style.width = width + 'px';
@@ -455,16 +547,18 @@
       const signature = front.map(c => c.id + ':' + !!c.pending).join('|');
       if (signature !== timelineSignature) {
         timelineSignature = signature;
-        $('timeline-tracks').innerHTML = front.map((c, index) => '<div class="timeline-row" data-track="' + escape(c.id) + '"><div class="track-head"><button class="track-title" data-track-action="select" title="Select ' + escape(c.name) + '">' + String(index + 1).padStart(2, '0') + ' ' + escape(c.name) + '</button><span class="track-meta"></span><div class="track-actions"><button data-track-action="up" aria-label="Move ' + escape(c.name) + ' forward">↑</button><button data-track-action="down" aria-label="Move ' + escape(c.name) + ' backward">↓</button><button data-track-action="launch" aria-label="Play ' + escape(c.name) + '">▶</button><button data-track-action="remove" aria-label="Delete ' + escape(c.name) + '">×</button></div></div>' + ['video','audio'].map(lane => '<div class="track-lane ' + lane + '" data-lane="' + lane + '"><span class="lane-kind">' + (lane === 'video' ? 'PICTURE' : 'SOUND') + '</span><div class="timeline-clip ' + lane + '" data-clip="' + escape(c.id) + '" data-lane="' + lane + '" role="button" tabindex="0" aria-label="' + escape(c.name) + ' ' + (lane === 'video' ? 'picture' : 'sound') + ' region. Drag to move the pair."><span class="clip-label"></span><svg class="clip-envelope" aria-hidden="true" preserveAspectRatio="none"><path/></svg><button class="envelope-peak" data-edit="peak" aria-label="Adjust ' + (lane === 'video' ? 'picture opacity' : 'sound level') + ' and entrance" title="Drag: entrance / level. Arrow keys: entrance / level."></button><button class="trim-handle" data-edit="trim" aria-label="Trim ' + (lane === 'video' ? 'picture' : 'sound') + ' region duration" title="Drag to change region duration"></button></div></div>').join('') + '</div>').join('');
+        $('timeline-tracks').innerHTML = front.map((c, index) => '<div class="timeline-row" data-track="' + escape(c.id) + '"><div class="track-head"><button class="track-title" data-track-action="select" title="Select ' + escape(c.name) + '">' + String(index + 1).padStart(2, '0') + ' ' + escape(c.name) + '</button><span class="track-panel-badge"></span><span class="track-meta"></span><div class="track-actions"><button data-track-action="up" aria-label="Move ' + escape(c.name) + ' forward">↑</button><button data-track-action="down" aria-label="Move ' + escape(c.name) + ' backward">↓</button><button data-track-action="launch" aria-label="Play ' + escape(c.name) + '">▶</button><button data-track-action="remove" aria-label="Delete ' + escape(c.name) + '">×</button></div></div>' + ['video','audio'].map(lane => '<div class="track-lane ' + lane + '" data-lane="' + lane + '"><span class="lane-kind">' + (lane === 'video' ? 'PICTURE' : 'SOUND') + '</span><div class="timeline-clip ' + lane + '" data-clip="' + escape(c.id) + '" data-lane="' + lane + '" role="button" tabindex="0" aria-label="' + escape(c.name) + ' ' + (lane === 'video' ? 'picture' : 'sound') + ' region. Drag to move the pair."><span class="clip-label"></span><svg class="clip-envelope" aria-hidden="true" preserveAspectRatio="none"><path/></svg><button class="envelope-peak" data-edit="peak" aria-label="Adjust ' + (lane === 'video' ? 'picture opacity' : 'sound level') + ' and entrance" title="Drag: entrance / level. Arrow keys: entrance / level."></button><button class="trim-handle" data-edit="trim" aria-label="Trim ' + (lane === 'video' ? 'picture' : 'sound') + ' region duration" title="Drag to change region duration"></button></div></div>').join('') + '</div>').join('');
       }
       document.querySelectorAll('[data-track]').forEach(row => {
         const c = front.find(item => item.id === row.dataset.track); if (!c) return;
         row.classList.toggle('selected', c.id === selectedId);
+        const parked = panelNumber(c) > currentLayout(snapshot).count; row.classList.toggle('parked', parked);
+        const badge = row.querySelector('.track-panel-badge'); badge.textContent = 'P' + panelNumber(c) + (parked ? ' · parked' : ''); badge.classList.toggle('parked', parked);
         const sourceDuration = c.video && c.video.duration || c.audio && c.audio.duration;
         row.querySelector('.track-meta').textContent = c.pending ? (c.sampleId ? 'Public media · download pending' : 'Missing local media · choose file') : (c.kind === 'demo' ? 'Generated' : c.kind === 'audio' ? 'Audio' : 'Video') + (sourceDuration > 0 ? ' · ' + seconds(sourceDuration) + ' source' : ' · source duration unavailable');
-        const index = front.indexOf(c);
+        const index = allFront.indexOf(c);
         row.querySelector('[data-track-action="up"]').disabled = index === 0;
-        row.querySelector('[data-track-action="down"]').disabled = index === front.length - 1;
+        row.querySelector('[data-track-action="down"]').disabled = index === allFront.length - 1;
         row.querySelector('[data-track-action="launch"]').textContent = c.pending ? (c.sampleId ? '↻' : '↥') : '▶';
         row.querySelector('[data-track-action="launch"]').title = c.pending ? (c.sampleId ? 'Retry public-media download' : 'Choose local file') : 'Play from this clip';
         row.querySelectorAll('.track-lane').forEach(lane => { lane.style.backgroundSize = (step * zoom) + 'px 100%'; });
@@ -475,6 +569,7 @@
           const clipWidth = Math.max(6, life * zoom); clip.style.width = clipWidth + 'px';
           clip.classList.toggle('selected', c.id === selectedId); clip.classList.toggle('pending', !!c.pending);
           clip.classList.toggle('disabled', !s[lane === 'video' ? 'videoEnabled' : 'audioEnabled']);
+          clip.classList.toggle('parked', lane === 'video' && parked);
           clip.querySelector('.clip-label').textContent = c.name + ' · ' + seconds(life);
           const gain = s[lane === 'video' ? 'opacity' : 'audioGain'], peakX = Math.min(s.attack, life / 2) * zoom, peakY = 39 - gain * 29;
           const svg = clip.querySelector('svg'); svg.setAttribute('viewBox', '0 0 ' + clipWidth + ' 46');
@@ -491,10 +586,11 @@
     }
     function render(snapshot) {
       if (!snapshot) return;
+      renderPanels(snapshot);
       const allEntries = slotEntries(snapshot, slots);
       $('preview-empty').hidden = allEntries.length > 0;
       if (!allEntries.length) $('stage-caption').textContent = 'Your media stays on this device.';
-      if (!allEntries.some(c => c.id === selectedId)) selectedId = allEntries[0] ? allEntries[0].id : null;
+      if (!allEntries.some(c => c.id === selectedId)) { const first = panelQueue(allEntries, selectedPanel)[0]; selectedId = first ? first.id : null; }
       if (snapshot.playing) hasPlayed = true;
       $('stage-panel').classList.toggle('playing', snapshot.playing);
       $('stage-state').textContent = snapshot.playing ? 'Preview · playing' : hasPlayed ? 'Preview · paused' : 'Preview · ready';
@@ -536,7 +632,8 @@
       sources.set(id, source); slots.push({id}); layerSignature = ''; setSelected(id); renderBin(); return id;
     }
     async function defaults() {
-      selectedId = null;
+      selectedId = null; selectedPanel = 1; timelineFilter = 'all';
+      if (engine.setLayout) engine.setLayout(Model.DEFAULT_LAYOUT);
       engine.setSequence({enabled: false, interval: 8});
       setMode('arrange');
       if (engine.setTransport) engine.setTransport({looping: false, loopStart: 0, loopEnd: 60});
@@ -545,7 +642,8 @@
     }
     async function replaceSession(data) {
       engine.dispose(); sources = new Map(); slots = data.clips.map((c, index) => ({key: 'pending-' + index, pending: c})); selectedId = null; hasPlayed = false; layerSignature = ''; inspectorSignature = '';
-      newEngine(); engine.setMaster(data.master); engine.setSequence(data.sequence); setMode(data.transport.mode); if (engine.setTransport) engine.setTransport(data.transport);
+      selectedPanel = data.selectedPanel || 1; timelineFilter = 'all';
+      newEngine(); if (engine.setLayout) engine.setLayout(data.layout); engine.setMaster(data.master); engine.setSequence(data.sequence); setMode(data.transport.mode); if (engine.setTransport) engine.setTransport(data.transport);
       const failures = [];
       for (const slot of slots.slice()) {
         const c = slot.pending;
@@ -557,7 +655,8 @@
           catch (error) { failures.push(error.message || String(error)); }
         }
       }
-      selectedId = engine.snapshot().clips[0] ? engine.snapshot().clips[0].id : null;
+      selectedPanel = Math.round(clamp(data.selectedPanel, 1, currentLayout().count, 1));
+      const first = panelQueue(slotEntries(engine.snapshot(), slots), selectedPanel)[0]; selectedId = first ? first.id : null;
       const local = slots.filter(slot => slot.pending && !slot.pending.sampleId).map(slot => slot.pending);
       status(failures.length ? 'Project opened; some public media could not download. ' + failures.join(' ') : local.length ? 'Project opened. Choose ' + local.map(c => c.fileName || c.name).join(', ') + ' again to restore local media.' : 'Project opened. Press Play to begin.', failures.length ? 'error' : 'success');
       render(engine.snapshot()); renderBin();
@@ -577,6 +676,37 @@
       localRestoreSlot = slot; $('media-input').click();
     }
     function openSources() { chooseLocalFile(); }
+    function editLayout(patch) {
+      if (!engine.setLayout) { status('Panel layout playback is unavailable. Reload the workspace.', 'error'); return; }
+      inspectorSignature = ''; engine.setLayout(patch); render(engine.snapshot());
+    }
+    $('panel-decrease').addEventListener('click', () => editLayout({count: currentLayout().count - 1}));
+    $('panel-increase').addEventListener('click', () => editLayout({count: currentLayout().count + 1}));
+    $('layout-family').addEventListener('change', event => editLayout({family: event.target.value}));
+    $('layout-orientation').addEventListener('change', event => editLayout({orientation: event.target.value}));
+    $('layout-framing').addEventListener('change', event => editLayout({framing: event.target.value}));
+    $('clip-panel').addEventListener('change', event => { if (selectedId) applyClipPatch(selectedId, {panel: Number(event.target.value)}); });
+    $('timeline-panel-filter').addEventListener('change', event => { timelineFilter = event.target.value; renderTimeline(engine.snapshot()); });
+    $('panel-import').addEventListener('click', openSources);
+    $('panel-queue').addEventListener('click', event => { const button = event.target.closest('[data-queue-clip]'); if (button) setSelected(button.dataset.queueClip); });
+    $('queue-after').addEventListener('click', () => {
+      const entries = slotEntries(engine.snapshot(), slots), result = queueAfterPicture(entries, selectedId); if (!result) return;
+      const previous = entries.find(c => c.id === result.previousId);
+      applyClipPatch(selectedId, {timelineStart: result.timelineStart});
+      status(result.limited ? 'Queue start is limited to 3600 seconds.' : 'Queued after ' + previous.name + ' at ' + seconds(result.timelineStart) + ', with ' + seconds(result.overlap) + ' entrance overlap.');
+    });
+    $('panel-overlay').addEventListener('click', event => { const button = event.target.closest('[data-preview-panel]'); if (button) selectPanel(button.dataset.previewPanel); });
+    $('panel-overlay').addEventListener('keydown', event => {
+      const button = event.target.closest('[data-preview-panel]'); if (!button || !['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)) return;
+      event.preventDefault(); const delta = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
+      const count = currentLayout().count, next = (Number(button.dataset.previewPanel) - 1 + delta + count) % count + 1;
+      selectPanel(next); $('panel-overlay').querySelector('[data-preview-panel="' + next + '"]').focus();
+    });
+    $('panel-overlay').addEventListener('dragover', event => { const button = event.target.closest('[data-preview-panel]'); if (button) { event.preventDefault(); button.classList.add('drag-over'); event.dataTransfer.dropEffect = 'copy'; } });
+    $('panel-overlay').addEventListener('dragleave', event => { const button = event.target.closest('[data-preview-panel]'); if (button && !button.contains(event.relatedTarget)) button.classList.remove('drag-over'); });
+    $('panel-overlay').addEventListener('drop', event => { const button = event.target.closest('[data-preview-panel]'); if (button) { button.classList.remove('drag-over'); selectPanel(button.dataset.previewPanel); droppedSource(event, engine.snapshot().time, Number(button.dataset.previewPanel)); } });
+    if (root.ResizeObserver) { const observer = new root.ResizeObserver(resizePanelOverlay); observer.observe($('stage-wrap')); observer.observe($('lab-stage')); }
+    root.addEventListener('resize', resizePanelOverlay);
     $('transport-stop').addEventListener('click', () => { if (engine.stop) engine.stop(); else { engine.pause(); seekTo(0); } });
     document.querySelectorAll('[data-view]').forEach(button => {
       button.addEventListener('click', () => setMode(button.dataset.view));
@@ -656,7 +786,7 @@
     $('sequence-enabled').addEventListener('change', event => engine.setSequence({enabled: event.target.checked}));
     $('sequence-interval').addEventListener('change', event => engine.setSequence({interval: clamp(Number(event.target.value), 2, 120, 8)}));
     $('vanish-picture').addEventListener('click', vanish);
-    $('preset-select').addEventListener('change', event => { const preset = Model.PRESETS[event.target.value]; if (preset && selectedId) { applyClipPatch(selectedId, {...preset.settings, timelineStart: selected().settings.timelineStart || 0}); status(preset.label + ' applied to ' + selected().name + '.'); } });
+    $('preset-select').addEventListener('change', event => { const preset = Model.PRESETS[event.target.value]; if (preset && selectedId) { applyClipPatch(selectedId, presetPatch(preset, selected().settings)); status(preset.label + ' applied to ' + selected().name + '.'); } });
     $('add-layer').addEventListener('click', openSources);
     $('bin-import').addEventListener('click', openSources);
     $('timeline-import').addEventListener('click', openSources);
@@ -701,6 +831,7 @@
     }
     async function importFiles(files, at = engine.snapshot().time, options = {}) {
       const sample = options.sampleId ? publicMedia(options.sampleId) : null;
+      const targetPanel = Math.round(clamp(options.panel === undefined ? selectedPanel : options.panel, 1, 12, 1));
       if (options.sampleId && !sample) throw new Error('Unknown public media source.');
       let imported = 0, binned = 0; const errors = [];
       for (const file of files) {
@@ -739,7 +870,7 @@
           const url = URL.createObjectURL(file);
           const source = {name: restore ? restore.name : sample ? sample.title : file.name, kind, url, ownedURL: true, id: restore && restore.clipId || availableClipId(engine.snapshot(), slots)};
           try {
-            const id = await engine.addClip(source, restore ? restore.settings : {...Model.PRESETS.drift.settings, timelineStart: at, videoEnabled: kind !== 'audio'});
+            const id = await engine.addClip(source, restore ? restore.settings : {...Model.PRESETS.drift.settings, timelineStart: at, panel: targetPanel, videoEnabled: kind !== 'audio'});
             const admitted = engine.snapshot().clips.find(c => c.id === id);
             const videoDuration = admitted.video.duration || admitted.audio.duration, audioDuration = admitted.audio.duration || admitted.video.duration;
             asset.duration = Math.max(videoDuration || 0, audioDuration || 0);
@@ -765,12 +896,12 @@
       const asset = Array.from(assets.values()).find(item => item.id === button.dataset.asset); if (asset) run(() => importFiles([asset.file], engine.snapshot().time, {sampleId: asset.sampleId}));
     });
     $('media-bin-list').addEventListener('dragstart', event => { const button = event.target.closest('[data-asset]'); if (button) { event.dataTransfer.setData('application/x-ilc-source', button.dataset.asset); event.dataTransfer.effectAllowed = 'copy'; } });
-    function droppedSource(event, at) {
+    function droppedSource(event, at, targetPanel = selectedPanel) {
       event.preventDefault(); event.stopPropagation(); $('media-drop').classList.remove('drag-over');
       const files = Array.from(event.dataTransfer.files || []);
-      if (files.length) { run(() => importFiles(files, at)); return; }
+      if (files.length) { run(() => importFiles(files, at, {panel: targetPanel})); return; }
       const source = event.dataTransfer.getData('application/x-ilc-source');
-      const asset = Array.from(assets.values()).find(item => item.id === source); if (asset) run(() => importFiles([asset.file], at, {sampleId: asset.sampleId}));
+      const asset = Array.from(assets.values()).find(item => item.id === source); if (asset) run(() => importFiles([asset.file], at, {sampleId: asset.sampleId, panel: targetPanel}));
     }
     $('timeline-scroll').addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
     $('timeline-scroll').addEventListener('drop', event => { let time = timelineTime(event.clientX); if ($('timeline-snap').checked) time = Math.round(time * 4) / 4; droppedSource(event, time); });
@@ -789,6 +920,7 @@
     }
     async function loadPublicMedia(sampleId, at = engine.snapshot().time, restoreSlot = null) {
       const sample = publicMedia(sampleId); if (!sample) throw new Error('Unknown public media source.');
+      const targetPanel = selectedPanel;
       if (slots.length >= Model.MAX_CLIPS && !slots.some(slot => slot.pending && slot.pending.sampleId === sampleId)) throw new Error('All eight clip slots are occupied. Remove a clip before adding public media.');
       status('Loading ' + sample.title + ' from Wikimedia Commons…');
       $('public-media-status').textContent = 'Loading ' + sample.title + '…';
@@ -811,7 +943,7 @@
         }
         endDownload();
         $('public-media-status').textContent = 'Adding ' + sample.title + '…';
-        const result = await importFiles([file], at, {sampleId, restoreSlot, throwOnError: true});
+        const result = await importFiles([file], at, {sampleId, restoreSlot, throwOnError: true, panel: targetPanel});
         if (!result.imported) throw new Error(result.errors.join(' ') || 'No timeline clip was added.');
         if (commitCache) void commitCache();
         renderPublicPicker();
@@ -856,7 +988,7 @@
     }
     $('duplicate-clip').addEventListener('click', duplicateSelected);
     $('save-settings').addEventListener('click', () => {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sessionData(engine.snapshot(), sources, slots))); status('Session settings saved in this browser. Local media files are not stored.', 'success'); }
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sessionData(engine.snapshot(), sources, slots, selectedPanel))); status('Session settings saved in this browser. Local media files are not stored.', 'success'); }
       catch (_) { status('This browser could not save locally. Use Export JSON to keep your settings.', 'error'); }
     });
     $('load-settings').addEventListener('click', () => run(async () => {
@@ -866,7 +998,7 @@
     }));
     $('export-settings').addEventListener('click', () => {
       try {
-        const blob = new Blob([JSON.stringify(sessionData(engine.snapshot(), sources, slots), null, 2) + '\n'], {type: 'application/json'});
+        const blob = new Blob([JSON.stringify(sessionData(engine.snapshot(), sources, slots, selectedPanel), null, 2) + '\n'], {type: 'application/json'});
         const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = 'effects-lab-session.json'; document.body.appendChild(link); link.click(); link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000); status('Session JSON prepared for download. It contains settings and file names, never media.');
       } catch (_) { status('This browser could not prepare a download. Try Save session instead.', 'error'); }

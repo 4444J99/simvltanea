@@ -7,6 +7,7 @@ into one fresh directory, so the studio finds its library on the same origin::
 
     <site>/index.html  runtime.js  compiler.js  studio.js  layouts.json
     <site>/lab.html  lab_model.js  lab_engine.js  lab_ui.js  lab_audio.js
+    <site>/lab_compiler.js  lab_layouts.js
     <site>/library/manifest.json
     <site>/library/clips/<id>.mp4
 
