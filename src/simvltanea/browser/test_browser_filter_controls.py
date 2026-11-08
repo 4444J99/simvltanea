@@ -178,7 +178,16 @@ class FilterControlsBrowserTests(unittest.TestCase):
         # the real Studio ecology subscriber continues computing competition.
         page, _ = self.open()
         page.locator('#speaker').click()
-        wait_for(page, "compositionRuntime.audio.context?.state==='running' && compositionRuntime.clock.simTime>1.5")
+        wait_for(page, '''() => {
+          const runtime=compositionRuntime;
+          return runtime.audio.context?.state==='running' && runtime.nodes.size===2 &&
+            !runtime.draining && !runtime.fade && !SimvltaneaStudio.snapshot().busy &&
+            [...runtime.nodes.values()].every(n=>!n.busy && !n.promoting && n.active &&
+              n.media===n.active.media && n.item && n.active.item===n.item &&
+              n.active.url && n.media.currentSrc===n.active.url && Number.isFinite(n.active.enteredAt) &&
+              runtime.clock.simTime-n.active.enteredAt>=runtime.effectSettings.attackSeconds &&
+              n.active.presence===1);
+        }''')
         page.evaluate('''() => {
           window.competitors=[...compositionRuntime.nodes.values()];
           window.competitionContext=compositionRuntime.audio.context;
