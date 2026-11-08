@@ -408,8 +408,25 @@ def build(args) -> int:
     write_atomic(out / "manifest.json", (json.dumps(document, indent=1, sort_keys=True) + "\n").encode("utf-8"))
     listed = {f"{clip['id']}.mp4" for clip in clips}
     orphans = sum(1 for path in clips_dir.glob("*.mp4") if path.name not in listed)
+    boomerang_count = 0
+    if args.boomerang:
+        for clip in clips:
+            src = clips_dir / f"{clip['id']}.mp4"
+            dst = clips_dir / f"{clip['id']}.boomerang.mp4"
+            if not dst.exists():
+                # reuse lab dataset helper if available
+                try:
+                    from tools.media.build_lab_dataset import build_boomerang
+                    ok = build_boomerang(src, dst, args.audio == "keep")
+                except Exception:
+                    ok = False
+                if ok:
+                    boomerang_count += 1
+            else:
+                boomerang_count += 1
     print(json.dumps({**summary, "encoded_new": encoded, "reused_existing": reused, "failed_by_reason": failed,
-                      "in_manifest": len(clips), "orphan_files_not_in_manifest": orphans}, indent=1))
+                      "in_manifest": len(clips), "orphan_files_not_in_manifest": orphans,
+                      "boomerang": boomerang_count if args.boomerang else 0}, indent=1))
     return 0
 
 
@@ -422,6 +439,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="print selection counts only; encode and write nothing")
     parser.add_argument("--audio", choices=("keep", "mute"), default="keep",
                         help="keep (default): AAC 64k mono; mute: no audio stream")
+    parser.add_argument("--boomerang", action="store_true",
+                        help="also build forward-reverse (boomerang) MP4s for each clip")
     toggle = argparse.BooleanOptionalAction
     parser.add_argument("--exclude-needs-review", action=toggle, default=True)
     parser.add_argument("--exclude-unsafe", action=toggle, default=True,
