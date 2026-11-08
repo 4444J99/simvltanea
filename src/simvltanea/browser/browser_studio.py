@@ -207,7 +207,7 @@ INDEX_HTML = '''<!doctype html>
 accept="video/*,.mov,.mp4,.m4v,.webm,.json,application/json">
 </div>
 <div id="corner" role="toolbar" aria-label="Page">
-<a class="lab-link" href="lab.html">Effects Lab</a>
+<a class="lab-link" href="workspace.html" aria-label="Open Composition Workspace">Compose</a>
 <button id="activity" type="button" aria-label="Hold changes" aria-pressed="false" title="Hold changes">∞</button>
 <button id="effects" type="button" aria-label="Filters" aria-pressed="true" title="Filters on">ƒx</button>
 <button id="filter-tune" type="button" aria-label="Filter settings" aria-haspopup="dialog"
@@ -280,7 +280,7 @@ def studio_files() -> dict[str, bytes]:
 def stage_studio(output: Path) -> None:
     """Write the flat studio into ``output``, creating it when absent.
 
-    Only the declared Studio and Effects Lab files are ever written. A directory holding anything
+    Only the declared Studio and Composition Workspace files are ever written. A directory holding anything
     else (including hidden files, subdirectories or symlinks) is refused before
     any byte is written, so staging cannot clobber or mix with foreign content.
     """

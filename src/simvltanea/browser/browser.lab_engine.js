@@ -1,4 +1,4 @@
-/* Effects Lab playback is intentionally independent of the inherited Studio. */
+/* Composition Workspace playback is intentionally independent of the inherited Studio. */
 (function (root, factory) {
   const model = typeof module === 'object' && module.exports ? require('./browser.lab_model.js') : root.SimvltaneaLabModel;
   const audio = typeof module === 'object' && module.exports ? require('./browser.audio.js') : root.SimvltaneaLiveAudio;
@@ -165,8 +165,8 @@
       this._emit(true);
     }
     async addClip(source, partial) {
-      if (this.disposed) throw new Error('Effects Lab is closed.');
-      if (this.clips.length + this._pending >= Model.MAX_CLIPS) throw new Error(`Effects Lab supports at most ${Model.MAX_CLIPS} clips.`);
+      if (this.disposed) throw new Error('Composition Workspace is closed.');
+      if (this.clips.length + this._pending >= Model.MAX_CLIPS) throw new Error(`Composition Workspace supports at most ${Model.MAX_CLIPS} clips.`);
       if (!source || !['demo', 'video', 'audio'].includes(source.kind)) throw new Error('Choose a demo, video, or audio clip.');
       if (source.kind !== 'demo' && !source.url) throw new Error('This clip has no media URL.');
       let id = source.id;
@@ -184,7 +184,7 @@
       try {
         if (source.kind !== 'demo') await this._loadNative(c);
         else c.duration = c.videoDuration = c.audioDuration = demoDuration(source.demo);
-        if (this.disposed) throw new Error('Effects Lab was closed while loading.');
+        if (this.disposed) throw new Error('Composition Workspace was closed while loading.');
         if (this.clips.some(x => x.id === id)) throw new Error('A clip with this ID already exists.');
         if (root.document && c.kind !== 'audio') {
           c.layer = root.document.createElement('canvas'); c.layer.width = this.canvas.width; c.layer.height = this.canvas.height;
