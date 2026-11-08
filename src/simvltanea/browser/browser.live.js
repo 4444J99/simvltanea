@@ -522,6 +522,10 @@ function applySlice(node) {
       }
       return {schema: 1, supported, maxGapMs: this.proofMaxGapMs,
         suspensionCount: this.proofSuspensionCount, retiredCount: this.proofRetiredCount,
+        nativeLoopSeek: {attempted: this.loopSeekProof?.attempted ?? 0,
+          recovered: this.loopSeekProof?.recovered ?? 0, rejected: this.loopSeekProof?.rejected ?? 0,
+          interrupted: this.loopSeekProof?.interrupted ?? 0, dropped: this.loopSeekProof?.dropped ?? 0,
+          receipts: includeTrace ? (this.loopSeekProof?.receipts || []).slice() : []},
         retired: includeTrace ? this.proofRetired.slice() : []};
     }
     report(error, node = null) {
@@ -560,7 +564,7 @@ function applySlice(node) {
         Object.assign(media.style, {position: 'absolute', inset: '0', width: '100%', height: '100%',
           objectFit: 'cover', opacity: '0', pointerEvents: 'none', transition: 'none'});
         const deck = {media, url: null, item: null, binding: null, weight: 0, frameId: null, callbacks: 0, decoded: null,
-          presence: 1, presenceTarget: null, enteredAt: null};
+          presence: 1, presenceTarget: null, enteredAt: null, sourceEpoch: 0, loopSeek: null};
         if (this.proof) {
           deck.progress = new FrameProgress(typeof media.requestVideoFrameCallback === 'function');
           deck.proofDeck = i;
@@ -768,6 +772,7 @@ function applySlice(node) {
         incoming.presenceTarget = null; incoming.enteredAt = null;
         this.applyDeckEffects(incoming, true);
         incoming.url = URL.createObjectURL(item.file);
+        incoming.sourceEpoch++; incoming.loopSeek = null;
         incoming.progress?.assign(incoming.url, performance.now());
         incoming.media.src = incoming.url; incoming.media.load();
         node.box.style.display = '';
@@ -844,6 +849,8 @@ function applySlice(node) {
       }, {signal});
     }
     unload(deck) {
+      this.interruptLoopSeek(deck, 'retired');
+      deck.loopSeek = null;
       deck.weight = 0;
       if (deck.binding) {
         const now = this.audio.context.currentTime;
@@ -997,11 +1004,95 @@ function applySlice(node) {
       this.master?.setVolume(this.sound.volume, this.sound.enabled && this.running);
       for (const node of this.nodes.values()) this.updateNodeAudio(node);
     }
-    tick(time) {
+    recordLoopSeek(type, id, detail) {
+      this.record(type, id, detail);
+      if (!this.proof) return;
+      const proof = this.loopSeekProof ||= {attempted: 0, recovered: 0, rejected: 0, interrupted: 0,
+        dropped: 0, receipts: []};
+      const counter = {'native-loop-seek-recovery': 'attempted', 'native-loop-seek-recovered': 'recovered',
+        'native-loop-seek-play-rejected': 'rejected', 'native-loop-seek-interrupted': 'interrupted'}[type];
+      proof[counter]++;
+      proof.receipts.push({type, id, time: this.clock?.simTime, wall: performance.now(), ...detail});
+      if (proof.receipts.length > 16) { proof.receipts.shift(); proof.dropped++; }
+    }
+    interruptLoopSeek(deck, reason) {
+      const state = deck.loopSeek;
+      if (!state?.attempt || state.attempt.interrupted) return;
+      state.attempt.interrupted = true;
+      this.recordLoopSeek('native-loop-seek-interrupted', state.id,
+        {url: state.url, sourceEpoch: state.epoch, attemptedAt: state.attempt.time, reason});
+    }
+    recoverNativeLoop(node, time, dt) {
+      const deck = node.active, media = deck?.media;
+      if (!media || !deck.url || this.options?.nativeLoopSeekRecovery === false) return;
+      let state = deck.loopSeek;
+      if (!state || state.url !== deck.url || state.epoch !== deck.sourceEpoch) {
+        this.interruptLoopSeek(deck, 'source-changed');
+        state = deck.loopSeek = {id: node.id, url: deck.url, epoch: deck.sourceEpoch, generation: this.generation,
+          decoded: deck.decoded?.mediaTime, changes: 0, endSeen: false, seamCurrent: null,
+          stalled: 0, attempt: null, recoveryFrames: 0};
+      }
+      const current = media.currentTime, duration = media.duration, fps = Number(deck.item?.asset?.fps);
+      const foreground = this.nodes.get(node.id) === node && node.media === media;
+      const eligible = this.running && !this.disposed && !root.document?.hidden && !this.draining &&
+        foreground && !node.busy && !node.resting && media.loop && !media.paused &&
+        media.readyState >= 3 && !media.error && media.currentSrc === state.url &&
+        Number.isFinite(duration) && duration > .1 && Number.isFinite(fps) && fps > 0 && 1 / fps < duration;
+      const changed = Number.isFinite(deck.decoded?.mediaTime) && state.decoded !== deck.decoded.mediaTime;
+      state.decoded = deck.decoded?.mediaTime;
+      if (!eligible || state.generation !== this.generation) {
+        this.interruptLoopSeek(deck, 'inactive-or-suspended');
+        state.generation = this.generation; state.stalled = 0; state.endSeen = false; state.changes = 0;
+        state.recoveryFrames = 0; return;
+      }
+      if (state.attempt && media.seeking) state.recoveryFrames = 0;
+      if (changed) {
+        state.changes++; state.stalled = 0;
+        if (state.attempt && !media.seeking && current > .001) {
+          state.recoveryFrames++;
+          if (state.recoveryFrames >= 2) {
+            if (!state.attempt.interrupted) this.recordLoopSeek('native-loop-seek-recovered', node.id,
+              {url: state.url, sourceEpoch: state.epoch, attemptedAt: state.attempt.time,
+                decodedChanges: state.recoveryFrames, current, decoded: state.decoded, seeking: media.seeking});
+            state.attempt = null; state.endSeen = false; state.recoveryFrames = 0;
+          }
+        }
+      }
+      // Native currentTime reaches the seam even when the decoded texture is
+      // stale mid-clip. Require that source's observed end, never a generic
+      // quiet decoder or the first seek of a newly admitted source.
+      if (!media.seeking && current >= duration - 2 / fps && state.changes >= 2) {
+        state.endSeen = true; state.seamCurrent = current;
+      } else if (changed && !media.seeking && current > .001) state.endSeen = false;
+      if (!media.seeking || current > .001 || !state.endSeen || state.changes < 2 || state.attempt || changed) {
+        state.stalled = 0; return;
+      }
+      // Count foreground simulation time, not a single delayed host callback.
+      state.stalled += Math.max(0, Math.min(.1, Number(dt) || 0));
+      if (state.stalled + 1e-9 < .6) return;
+      const attempt = state.attempt = {time, generation: this.generation};
+      const detail = {url: state.url, sourceEpoch: state.epoch, current, seeking: media.seeking,
+        decoded: state.decoded, priorSeamCurrent: state.seamCurrent, duration,
+        stalledSimSec: state.stalled, target: 1 / fps};
+      this.recordLoopSeek('native-loop-seek-recovery', node.id, detail);
+      const stillOwned = () => !this.disposed && this.nodes.get(node.id) === node && node.active === deck &&
+        deck.loopSeek === state && deck.url === state.url && deck.sourceEpoch === state.epoch &&
+        state.attempt === attempt && this.generation === attempt.generation && !attempt.interrupted;
+      const failed = error => {
+        if (stillOwned()) this.recordLoopSeek('native-loop-seek-play-rejected', node.id,
+          {url: state.url, sourceEpoch: state.epoch, message: String(error?.message || error)});
+      };
+      // Experimental target-only recovery. Keep the resident, URL, decoder and
+      // audio routing intact; a fulfilled play promise alone is not recovery.
+      try { media.currentTime = 1 / fps; Promise.resolve(media.play()).catch(failed); }
+      catch (error) { failed(error); }
+    }
+    tick(time, dt = 0) {
       this.frame = Math.floor(time * (this.plan?.fps || 24));
       // Incoming media has an independent entrance while the scheduler still
       // observes the outgoing resident. Never copy its closing filter state.
       for (const node of this.nodes.values()) {
+        this.recoverNativeLoop(node, time, dt);
         let changed = false;
         for (const deck of node.decks) {
           if (deck.enteredAt === null || deck.presenceTarget !== null ||
@@ -1031,6 +1122,7 @@ function applySlice(node) {
     suspend() {
       if (!this.running) return;
       this.running = false; this.generation++; this.clock.pause();
+      for (const node of this.slots.values()) for (const deck of node.decks) this.interruptLoopSeek(deck, 'suspended');
       if (this.proof) {
         this.proofSuspensionCount++;
         const wall = performance.now();
