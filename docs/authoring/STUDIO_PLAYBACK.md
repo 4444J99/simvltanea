@@ -88,6 +88,15 @@ down, the resident continues for another whole loop. Automatic changes wait unti
 an import batch finishes. Personal replacements read the admitted files locally,
 without network requests.
 
+Whole-loop extensions preserve the resident's original retirement priority.
+Once a clip is overdue, younger clips yield when its next retry boundary is
+within ten seconds. This reserves a scheduling turn without starting a decoder
+early. A farther-away boundary remains eligible for later consideration, so a
+long clip cannot block every other replacement for another full long loop.
+Failed replacements rejoin at their next whole-loop deadline; waking a resting
+clip gives it a fresh priority at its next boundary. Scarcity can still extend a
+lifetime, but repeated cooldown collisions no longer erase its place in line.
+
 Steady, sparse and burst regimes vary arrival spacing. Sparse periods target a
 time-averaged population near 65 percent for four panels, with at least two active
 residents. Readiness and lifetime guards can change the achieved average. Resting
