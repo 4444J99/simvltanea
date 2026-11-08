@@ -1066,7 +1066,9 @@ function applySlice(node) {
       }
       const current = media.currentTime, duration = media.duration, fps = Number(deck.item?.asset?.fps);
       const foreground = this.nodes.get(node.id) === node && node.media === media;
-      const eligible = this.running && !this.disposed && !root.document?.hidden && !this.draining &&
+      // A sibling's awaited replacement keeps drain() open. Only this slot's
+      // transition may suspend recovery of its otherwise unchanged resident.
+      const eligible = this.running && !this.disposed && !root.document?.hidden &&
         foreground && !node.busy && !node.resting && media.loop && !media.paused &&
         media.readyState >= 3 && !media.error && media.currentSrc === state.url &&
         Number.isFinite(duration) && duration > .1 && Number.isFinite(fps) && fps > 0 && 1 / fps < duration;

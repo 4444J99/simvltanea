@@ -29,6 +29,7 @@ class NativeLoopSeekTests(unittest.TestCase):
     def run_js(self, body):
         result=subprocess.run(['node','-e',FIXTURE+body,str(LIVE)],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
+        return result
 
     def test_true_stall_reseeks_once_without_touching_sibling_or_graph(self):
         self.run_js('''progress();const before={node:sibling,media:sibling.media,deck:sibling.active,audio:sibling.audio};
@@ -42,12 +43,47 @@ const e=events.find(e=>e.type==='native-loop-seek-recovery');assert.equal(e.sour
         self.run_js('''progress();for(let i=0;i<4;i++)seek();n.media.seeking=false;current(n,.06,.033333);assert.equal(plays.length,0);
 progress();seek(9);n.media.seeking=false;current(n,.1,.1);assert.equal(plays.length,0);''')
 
-    def test_pause_hidden_rest_and_drain_do_not_accumulate_a_stall(self):
-        self.run_js('''for(const mode of ['pause','hidden','rest','drain','busy']){
- progress();if(mode==='pause')session.running=false;if(mode==='hidden')document.hidden=true;if(mode==='rest')n.resting=true;if(mode==='drain')session.draining=true;if(mode==='busy')n.busy=true;
+    def test_pause_hidden_rest_busy_and_removal_do_not_accumulate_a_stall(self):
+        self.run_js('''for(const mode of ['pause','hidden','rest','busy','removed']){
+ progress();if(mode==='pause')session.running=false;if(mode==='hidden')document.hidden=true;if(mode==='rest')n.resting=true;if(mode==='busy')n.busy=true;if(mode==='removed')session.nodes.delete(n.id);
  for(let i=0;i<20;i++)seek();assert.equal(plays.length,0,mode);
- session.running=true;document.hidden=false;n.resting=false;session.draining=false;n.busy=false;n.media.seeking=false;current(n,.1,.1);
+ session.running=true;document.hidden=false;n.resting=false;n.busy=false;session.nodes.set(n.id,n);n.media.seeking=false;current(n,.1,.1);
 }''')
+
+    def test_pending_sibling_drain_preserves_seam_stall_and_recovery(self):
+        result=self.run_js('''(async()=>{
+for(const began of ['before-seam','during-stall']){
+ n.active.sourceEpoch++;n.media.seeking=false;seeks=[];plays=[];events=[];
+ n.item={sha256:'resident-one'};sibling.item={sha256:'resident-sibling'};
+ const identity={media:n.media,deck:n.active,audio:n.audio,url:n.active.url,epoch:n.active.sourceEpoch,
+   siblingMedia:sibling.media,siblingDeck:sibling.active,siblingAudio:sibling.audio};
+ let release,settled=false;
+ const plan={tracks:[{id:n.id},{id:sibling.id}],sources:[{id:'source-one'},{id:'source-sibling'}]};
+ Object.assign(session,{slots:new Map(session.nodes),playingIntent:true,revision:1,sources:new Map(),
+   applyLayout(){},updateAudio(){},status(){},report(error){throw error},
+   pending:{plan,items:[n.item,{sha256:'next-sibling'}],playing:true,revision:1,
+     resolve(value){assert.equal(value,true);settled=true}},
+   async replace(node){assert.equal(node,sibling);node.busy=true;node.phase='PRIMING';
+     try{await new Promise(resolve=>{release=resolve})}finally{node.busy=false;node.phase='ACTIVE'}}});
+ if(began==='during-stall'){progress();for(let i=0;i<3;i++)seek();}
+ const draining=session.drain();
+ assert.equal(session.draining,true);assert.equal(sibling.busy,true);assert.equal(n.busy,false);
+ if(began==='before-seam')progress();
+ for(let i=0;i<(began==='before-seam'?6:3);i++)seek();
+ assert.deepEqual(seeks,[{id:'one',value:1/30}],began);assert.deepEqual(plays,['one'],began);
+ assert.equal(settled,false);assert.equal(session.draining,true);
+ n.media.seeking=false;current(n,.05,.033333);current(n,.1,.066667);
+ const recovered=events.filter(e=>e.type==='native-loop-seek-recovered');
+ assert.equal(recovered.length,1);assert.equal(recovered[0].sourceEpoch,identity.epoch);
+ assert.equal(recovered[0].url,identity.url);assert.equal(recovered[0].decodedChanges,2);
+ assert.equal(n.media,identity.media);assert.equal(n.active,identity.deck);assert.equal(n.audio,identity.audio);
+ assert.equal(sibling.media,identity.siblingMedia);assert.equal(sibling.active,identity.siblingDeck);assert.equal(sibling.audio,identity.siblingAudio);
+ assert.equal(sibling.busy,true);assert.equal(session.draining,true);
+ release();await draining;assert.equal(settled,true);assert.equal(session.draining,false);
+}
+console.log('sibling-drain-complete');
+})().catch(error=>{console.error(error);process.exitCode=1});''')
+        self.assertIn('sibling-drain-complete',result.stdout)
 
     def test_no_unproven_source_or_nonloop_or_error_or_nonzero_seek(self):
         self.run_js('''for(const mode of ['unproven','loop','error','ready','source','midseek']){

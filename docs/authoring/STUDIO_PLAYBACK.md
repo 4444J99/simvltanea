@@ -126,7 +126,8 @@ and sibling decks retain their identities.
 The guard requires known asset frame timing, prior decoded movement, a ready and
 error-free element, and a running visible session. Current library boomerangs
 provide that timing; forward and personal clips do not participate. Pause,
-backgrounding, resting, replacement and source changes invalidate the evidence.
+backgrounding, resting, and replacement or source changes in the watched slot
+invalidate the evidence. A sibling's pending replacement does not suspend the guard.
 A delayed host callback contributes at most 100 milliseconds. Another attempt
 requires decoded recovery and a newly observed loop boundary.
 
