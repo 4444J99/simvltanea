@@ -278,19 +278,26 @@ class FilterRuntimeBrowserTests(unittest.TestCase):
     def test_audio_and_visual_targets_share_presence_and_settle_together(self):
         page = self.open()
         self.unlock(page)
-        page.evaluate(r"""() => {
+        initial_audio_time = page.evaluate(r"""() => {
           live.clock.pause();live.setEffectSettings({gainDepth:.5,lowpassDepth:.75,blurPx:1});
           live.setTargetGain('loop-1',.8);live.setPresence('loop-1',1);
+          return live.audio.context.currentTime;
         }""")
-        page.wait_for_timeout(120)
+        page.wait_for_function('start=>live.audio.context.currentTime-start>=.12',
+                               arg=initial_audio_time, timeout=1000)
         state = page.evaluate(r"""() => {live.setPresence('loop-1',.25);const n=live.nodes.get('loop-1');
           return {p:n.active.presence,expected:SimvltaneaPresence.filterTargets(.25,live.audio.context.sampleRate,live.effectSettings),
-            gain:n.audio.target,cutoff:n.audio.cutoff,style:n.media.style.filter};}""")
+            gain:n.audio.target,cutoff:n.audio.cutoff,style:n.media.style.filter,
+            audioTime:live.audio.context.currentTime};}""")
         self.assertEqual(state['p'], .25)
         self.assertAlmostEqual(state['gain'], .8 * state['expected']['gain'])
         self.assertAlmostEqual(state['cutoff'], state['expected']['cutoffHz'])
         self.assertIn('blur(0.75px)', state['style'])
-        page.wait_for_timeout(100)
+        # AudioParam ramps follow the render clock, which need not advance by
+        # 100 ms during a 100 ms host timer. Keep the original settling interval
+        # and tolerances, measured on the clock that scheduled the ramps.
+        page.wait_for_function('start=>live.audio.context.currentTime-start>=.1',
+                               arg=state['audioTime'], timeout=1000)
         actual = page.evaluate("({gain:live.nodes.get('loop-1').audio.gain.gain.value,cutoff:live.nodes.get('loop-1').audio.filter.frequency.value})")
         self.assertAlmostEqual(actual['gain'], state['gain'], delta=.003)
         self.assertAlmostEqual(actual['cutoff'], state['cutoff'], delta=30)

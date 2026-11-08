@@ -418,6 +418,60 @@ class PersistentSessionTests(unittest.TestCase):
         self.assertGreaterEqual(age, .4)
         self.assertLess(age, .65, 'priming time leaked into the new resident lifetime')
 
+    def test_primed_standby_parks_during_seam_wait_without_touching_residents(self):
+        page = self.open()
+        page.evaluate('''() => {
+          const node=live.nodes.get('loop-1');window.outgoing=node.active;
+          window.sibling=live.nodes.get('loop-2').active;
+          window.incoming=node.decks.find(deck=>deck!==outgoing);
+          window.residentCalls=[];window.incomingSeeks=[];
+          for(const deck of [outgoing,sibling]) for(const name of ['play','pause','load']) {
+            const native=deck.media[name].bind(deck.media);
+            deck.media[name]=(...args)=>{residentCalls.push(name);return native(...args)};
+          }
+          const current=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'currentTime');
+          Object.defineProperty(incoming.media,'currentTime',{
+            get(){return current.get.call(this)},
+            set(value){incomingSeeks.push(value);current.set.call(this,value)}});
+          // Hold a future seam long enough to inspect the already-primed deck.
+          // The real freshness and promotion path resumes after this gate.
+          live.waitForSeam=()=>new Promise(resolve=>{window.releaseSeam=resolve});
+          window.change=live.reconcile({plan:planFor([2,1]),items:[items[2],items[1]],
+            playing:true,atLoopBoundary:true});
+        }''')
+        page.wait_for_function('Boolean(window.releaseSeam)')
+        before = page.evaluate('''() => ({paused:incoming.media.paused,
+          outgoing:outgoing.callbacks,sibling:sibling.callbacks,current:incoming.media.currentTime,
+          epoch:incoming.sourceEpoch,url:incoming.url,weight:incoming.weight,
+          permits:live.activeStandbys})''')
+        self.assertTrue(before['paused'], 'a hidden READY standby kept decoding throughout the seam wait')
+        self.assertEqual(before['weight'], 0)
+        self.assertEqual(before['permits'], 1)
+        page.wait_for_timeout(400)
+        during = page.evaluate('''() => ({paused:incoming.media.paused,
+          outgoing:outgoing.callbacks,sibling:sibling.callbacks,current:incoming.media.currentTime,
+          epoch:incoming.sourceEpoch,url:incoming.url,calls:residentCalls,seeks:incomingSeeks})''')
+        self.assertTrue(during['paused'])
+        self.assertGreater(during['outgoing'], before['outgoing'])
+        self.assertGreater(during['sibling'], before['sibling'])
+        self.assertEqual(during['current'], before['current'])
+        self.assertEqual(during['epoch'], before['epoch'])
+        self.assertEqual(during['url'], before['url'])
+        self.assertEqual(during['calls'], [])
+        self.assertEqual(during['seeks'], [])
+        page.evaluate('releaseSeam()')
+        self.assertTrue(page.evaluate('change'))
+        result = page.evaluate('''() => ({active:live.nodes.get('loop-1').active===incoming,
+          paused:incoming.media.paused,frames:incoming.callbacks,
+          sibling:live.nodes.get('loop-2').active===sibling,permits:live.activeStandbys,
+          seeks:incomingSeeks})''')
+        self.assertTrue(result['active'])
+        self.assertFalse(result['paused'])
+        self.assertGreaterEqual(result['frames'], 4)
+        self.assertTrue(result['sibling'])
+        self.assertEqual(result['permits'], 0)
+        self.assertEqual(result['seeks'], [])
+
     def test_frozen_outgoing_does_not_hold_the_preparation_permit_forever(self):
         page = self.open()
         page.evaluate('''() => {
@@ -784,12 +838,15 @@ class PersistentSessionTests(unittest.TestCase):
           const descriptor=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'muted'),edges=[];
           Object.defineProperty(media,'muted',{get(){return descriptor.get.call(this)},set(value){
             if(value!==descriptor.get.call(this))edges.push(value);descriptor.set.call(this,value);}});
-          live.tick(fade.began+fade.duration);
+          // A paused clock needs a tick strictly past the endpoint: subtracting
+          // the fractional start can round an exact sum below full progress.
+          live.tick(fade.began+fade.duration+1/60);
           // The ecology subscriber runs before replace() resumes its awaited fade.
           live.setTargetGain(fade.node.id,.4);
           return edges;
         }''')
         self.assertNotIn(True, edges, 'fade completion temporarily revoked incoming audio ownership')
+        self.assertFalse(page.evaluate('Boolean(live.fade)'), 'the frozen test clock never completed its fade')
         page.evaluate('change')
 
     def test_rejected_immediate_resume_rolls_back_unverified_successor(self):

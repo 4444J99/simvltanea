@@ -935,7 +935,13 @@ function applySlice(node) {
           if (signal.aborted) throw cancelled();
           node.phase = 'READY';
           this.bind(incoming);
-          if (atLoopBoundary && outgoing) await this.waitForSeam(node, signal);
+          if (atLoopBoundary && outgoing) {
+            // A ready successor need not keep decoding throughout a future
+            // outgoing seam. Park only the hidden deck, without seeking it;
+            // the freshness gate below resumes it and verifies new frames.
+            if (this.running && !node.resting && node.media.currentTime >= .04) incoming.media.pause();
+            await this.waitForSeam(node, signal);
+          }
           if (signal.aborted) throw cancelled();
           if (incoming.media.error) throw new Error('Incoming clip could not be decoded');
           if (outgoing && (beganRunning || this.running)) {

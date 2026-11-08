@@ -745,7 +745,7 @@
     requested: 0, next: null, prefetch: [], probe: null};
   const digests = new WeakMap();
   const sound = {unlocked: false, muted: false, volume: 0.7, mixer: null};
-  let selection = null, session = null, waiting = [], launches = 0, hold = reduced, paused = false;
+  let selection = null, session = null, exportFailure = null, waiting = [], launches = 0, hold = reduced, paused = false;
   let lastRefusals = [], busy = 0, recordMode = 'pending', previewClock = null;
   const liveVoices = new Map();
   let liveVoiceClock = null;
@@ -780,7 +780,8 @@
     const count = nearestCount(fits(family), Math.min(value.loops.length, live.maxForeground));
     if (count === null) return null;
     return family === value.family && count === value.loops.length ? value :
-      {...value, family, panels: count, loops: value.loops.slice(0, count)};
+      {...value, family, panels: count, loops: value.loops.slice(0, count),
+        retained: new Map([...(value.retained || [])].filter(([slot]) => slot < count))};
   }
 
   // ---- Toast, idle chrome, about ------------------------------------------------
@@ -854,17 +855,17 @@
     if (!wantSound()) media.muted = true;
   }
 
-  function promoteAudioPlan() {
-    const r = runtime();
-    if (!r || !r.plan || !sound.unlocked) return;
-    Object.assign(r.plan, {plan_version: 2, engine_version: '1.1.0', audio: {
+  function promoteAudioPlan(current = session) {
+    if (!current || !sound.unlocked) return;
+    const {plan, bySha} = current;
+    Object.assign(plan, {plan_version: 2, engine_version: '1.1.0', audio: {
       mode: 'spatial_loops', master_volume: '1', spatial_panning: true,
-      per_loop: Object.fromEntries(r.plan.tracks.map(track => [track.id,
-        {gain: loopGain(r.nodes.size || 1), mute_on_hold: true}]))}});
-    r.plan.sources.forEach(source => {
-      source.audio_stream = session?.bySha.get(source.sha256)?.audioStream || null;
+      per_loop: Object.fromEntries(plan.tracks.map(track => [track.id,
+        {gain: loopGain(plan.tracks.length), mute_on_hold: true}]))}});
+    plan.sources.forEach(source => {
+      source.audio_stream = bySha.get(source.sha256)?.audioStream || null;
     });
-    if (session) session.sound = true;
+    current.sound = true;
   }
   function unlock() {
     if (sound.unlocked) {
@@ -989,7 +990,7 @@
   }
   setInterval(() => {
     try {
-      if (session && !live.disposed) pumpVoices(liveVoiceClock || session.clock);
+      if (liveVoiceClock && !live.disposed) pumpVoices(liveVoiceClock);
       if (previewClock && previewClock.audio) pumpVoices(previewClock.audio);
     } catch (_) { /* a closed context; the next launch rebuilds the voices */ }
   }, 120);
@@ -1026,7 +1027,7 @@
     refreshVoiceClock();
   }
   function refreshVoiceClock() {
-    if (!session || !live.audio.context) return;
+    if (!live.audio.context) return;
     const decks = new Set([...live.nodes.values()].flatMap(node => node.decks));
     for (const [deck, voice] of liveVoices) if (!decks.has(deck) || deck.item !== voice.item) {
       voice.input.disconnect(); liveVoices.delete(deck);
@@ -1038,20 +1039,33 @@
         running: () => live.running, origin: () => live.origin, epoch: () => live.generation};
     }
     liveVoiceClock.voices = [...liveVoices.values()];
-    session.clock = liveVoiceClock;
+    if (session) session.clock = liveVoiceClock;
   }
 
   // ---- The runtime hook ------------------------------------------------------
 
   root.__sharedEngineUnavailable =
     'The studio plays every loop with its authored framing; the panel framing sweep is not included.';
+  // Export consumers keep the plan's source objects through their asynchronous
+  // reads. Their files must survive a later selection without a strong cache.
+  const exportedMedia = new WeakMap();
+  function exportPlan(current) {
+    const plan = structuredClone(current.plan);
+    for (const source of plan.sources) {
+      const item = current.bySha.get(source.sha256);
+      exportedMedia.set(source, {file: item.file, type: item.type, sha256: item.sha256});
+    }
+    return plan;
+  }
   root.compositionIO = {
     maxMediaBytes: MAX_TOTAL_BYTES,
     plan() {
-      return session ? Promise.resolve(session.plan) : new Promise(resolve => { waiting.push(resolve); });
+      if (pendingSelection || (!session && !exportFailure))
+        return new Promise((resolve, reject) => { waiting.push({resolve, reject}); });
+      return exportFailure ? Promise.reject(exportFailure) : Promise.resolve(exportPlan(session));
     },
     async bytes(source) {
-      const item = session && session.bySha.get(source.sha256);
+      const item = exportedMedia.get(source);
       if (!item) throw new Error(`Missing media: ${source.id}`);
       const buffer = await item.file.arrayBuffer();
       digests.set(buffer, item.sha256);
@@ -1061,7 +1075,7 @@
       return digests.get(buffer) ?? hex(await crypto.subtle.digest('SHA-256', buffer));
     },
     type(source) {
-      const item = session && session.bySha.get(source.sha256);
+      const item = exportedMedia.get(source);
       return item ? item.type : null;
     },
   };
@@ -1136,43 +1150,159 @@
     return plan;
   }
 
-  const selectedItems = () => (selection ? selection.loops.map(index => pool()[index]).filter(Boolean) : []);
+  const selectedItems = (sel = selection, sourcePool = pool()) => (sel ?
+    sel.loops.map((index, slot) => sel.retained?.get(slot) || sourcePool[index]).filter(Boolean) : []);
   const itemsReady = items => items.length > 0 && items.every(item => item.sha256);
+
+  function replaceSelectionItem(sel, slot, index) {
+    const retained = new Map(sel.retained);
+    retained.delete(slot);
+    return {...sel, loops: sel.loops.map((old, at) => at === slot ? index : old), retained};
+  }
+
+  function residentSelection(requested, items, sourcePool) {
+    const retained = new Map();
+    const loops = items.map((item, slot) => {
+      let index = sourcePool.indexOf(item);
+      if (index < 0) index = sourcePool.findIndex(candidate =>
+        item.clip && candidate.clip ? item.clip.id === candidate.clip.id :
+          Boolean(item.sha256) && item.sha256 === candidate.sha256);
+      // A deferred old variant or a resident from the previous source pool
+      // remains exact. Never put its bytes into the newly requested pool item.
+      if (sourcePool[index] !== item) retained.set(slot, item);
+      return index < 0 ? null : index;
+    });
+    return {...requested, loops, retained};
+  }
+
+  function residentAdmission(items, r) {
+    const current = items.map((_, index) => r.nodes.get(`loop-${index + 1}`)?.item);
+    const residentHashes = new Set([...r.nodes.values()].map(node => node.item?.sha256));
+    const wanted = new Set(items.map(item => item.sha256));
+    const aligned = current.map(item => item && wanted.has(item.sha256) ? item : null);
+    const used = new Set(aligned.filter(Boolean).map(item => item.sha256));
+    const fresh = items.filter(item => !residentHashes.has(item.sha256));
+    // Keep existing ownership even for a permutation or a shrinking shuffle.
+    // Moving an occupied source can otherwise leave duplicate residents when
+    // its old slot's replacement fails or a later intent cancels retirement.
+    items.forEach((item, index) => {
+      if (!aligned[index] && fresh.includes(item) && !used.has(item.sha256)) {
+        aligned[index] = item; used.add(item.sha256);
+      }
+    });
+    aligned.forEach((item, index) => {
+      if (item) return;
+      const next = fresh.find(candidate => !used.has(candidate.sha256)) || current[index];
+      if (next && !used.has(next.sha256)) { aligned[index] = next; used.add(next.sha256); }
+    });
+    return aligned.every(Boolean) ? aligned : null;
+  }
 
   /* Compile layout/export metadata, then reconcile residents in place. The live
    * session owns native loops; editing metadata never restarts its global clock. */
-  async function launch({atLoopBoundary = false} = {}) {
+  async function launch({atLoopBoundary = false, shareMix} = {}) {
     const bounded = boundedSelection(selection);
     if (bounded !== selection) { selection = bounded; renderControls(); }
-    const token = ++launches, r = runtime(), items = selectedItems(), sourcePool = pool();
+    const token = ++launches, r = runtime(), requested = selection, sourcePool = pool();
+    const items = selectedItems(requested, sourcePool);
+    const ownsIntent = () => token === launches && selection === requested && pool() === sourcePool;
+    let published = false, attempted = false, settledCohort = null;
+    const ownsCohort = value => value && r.revision === value.revision && r.plan === value.plan &&
+      r.nodes.size === value.cohort.length && value.cohort.every(({id, node, deck, item, url, epoch}) =>
+        r.nodes.get(id) === node && node.active === deck && node.item === item &&
+        deck.url === url && deck.sourceEpoch === epoch);
+    const finish = () => {
+      if (token !== launches) return;
+      if (!published && !ownsIntent()) return;
+      const previousCurrent = session && r.plan === session.plan && r.nodes.size === session.byTrack.size &&
+        [...session.byTrack].every(([id, item]) => r.nodes.get(id)?.active && r.nodes.get(id).item === item);
+      // A compiler/admission refusal may leave the previous accepted cohort
+      // entirely intact. Restore its metadata, never a superseding user intent.
+      if (!published && previousCurrent) {
+        selection = residentSelection(session.selection, [...session.byTrack.values()], sourcePool);
+        writeUrl(session.mix);
+        renderControls();
+      } else if (!published && ownsCohort(settledCohort)) {
+        // Even if export compilation fails, describe the actual mixed field.
+        selection = residentSelection(requested, settledCohort.cohort.map(({item}) => item), sourcePool);
+        writeUrl(formatMix(selection.family, selection.loops));
+        renderControls();
+      }
+      pendingSelection = false;
+      if (published || previousCurrent) {
+        exportFailure = null;
+        waiting.splice(0).forEach(({resolve}) => resolve(exportPlan(session)));
+      } else if (attempted) {
+        // A prior export remains readable, but it cannot represent a field
+        // changed by partial admission whose new metadata did not compile.
+        exportFailure = new Error('The current composition is not ready to export. Try another edit.');
+        waiting.splice(0).forEach(({reject}) => reject(exportFailure));
+      }
+      renderPreview(); sync();
+    };
     pendingSelection = true;
     if (pendingCompilation) pendingCompilation.cancel();
     renderPreview();
-    if ((!layout.bundle && !layout.own) || !selection) { pendingSelection = false; return false; }
+    if ((!layout.bundle && !layout.own) || !selection) { finish(); return false; }
     if (!itemsReady(items)) {
       if (usingLibrary() && items.length) {
         const ok = await loadClips(items);
         if (token !== launches) return false;
         // A local import can change pools while this library fetch is pending.
         // Its completed batch owns the next launch, never the partial pool.
-        if (pool() !== sourcePool) { pendingSelection = false; return false; }
-        if (ok) return launch({atLoopBoundary});
+        if (pool() !== sourcePool) { finish(); return false; }
+        if (ok) return launch({atLoopBoundary, shareMix});
         repairSelection();
       }
-      if (token === launches) pendingSelection = false;
+      finish();
       return false;
     }
+    attempted = true;
     try {
-      const plan = await compile(selection, items, sound.unlocked);
-      if (token !== launches) return false;
-      session = {plan, sound: sound.unlocked, token, clock: null,
-        bySha: new Map(items.map(item => [item.sha256, item])),
-        byTrack: new Map(plan.tracks.map((track, index) => [track.id, items[index]]))};
-      waiting.splice(0).forEach(resolve => resolve(plan));
+      let admission = residentAdmission(items, r), plan;
+      while (ownsIntent()) {
+        if (!admission) return false;
+        plan = await compile(requested, admission, sound.unlocked);
+        if (!ownsIntent()) return false;
+        // An older handoff can finish while the compiler is working. Recheck
+        // ownership before submitting this intent to the serialized runtime.
+        const latest = residentAdmission(items, r);
+        if (latest && latest.every((item, index) => item === admission[index])) break;
+        admission = latest;
+      }
+      if (!ownsIntent()) return false;
+      const reordered = admission.some((item, index) => item !== items[index]);
       r.setSound({enabled: wantSound(), volume: sound.volume});
-      const completed = await r.reconcile({plan, items, playing: !hold && !paused, atLoopBoundary});
-      if (token !== launches) return false;
+      const completed = await r.reconcile({plan, items: admission, playing: !hold && !paused, atLoopBoundary});
+      if (!ownsIntent()) return false;
+      const revision = r.revision;
+      const cohort = plan.tracks.map(track => {
+        const node = r.nodes.get(track.id), deck = node?.active;
+        return {id: track.id, node, deck, item: node?.item, url: deck?.url, epoch: deck?.sourceEpoch};
+      });
+      // Initial admission may have no outgoing resident to keep. Do not export
+      // a requested source which never became a real resident.
+      if (cohort.some(({node, deck, item}) => !node || !deck || !item)) return false;
+      settledCohort = {plan, revision, cohort};
+      const actualItems = cohort.map(({item}) => item);
+      const changed = actualItems.some((item, index) => item !== admission[index]);
+      const acceptedSelection = residentSelection(requested, actualItems, sourcePool);
+      const acceptedPlan = changed ? await compile(acceptedSelection, actualItems, sound.unlocked) : plan;
+      if (!ownsIntent() || !ownsCohort(settledCohort)) return false;
+      // Reconciliation can retain one outgoing clip and admit its siblings.
+      // Repair only metadata, including compiled loop spans, from that cohort.
+      r.plan = acceptedPlan;
+      acceptedPlan.tracks.forEach((track, index) => { cohort[index].node.span = track.spans?.[0] ?? null; });
+      session = {plan: acceptedPlan, selection: acceptedSelection, sound: sound.unlocked, token, clock: null,
+        bySha: new Map(actualItems.map(item => [item.sha256, item])),
+        byTrack: new Map(cohort.map(({id, item}) => [id, item]))};
+      selection = acceptedSelection;
       promoteAudioPlan(); refreshVoiceClock();
+      if (shareMix !== undefined || changed || reordered)
+        writeUrl(shareMix || changed || reordered ? formatMix(selection.family, selection.loops) : null);
+      session.mix = new URLSearchParams(root.location.search).get('mix');
+      published = true;
+      renderControls();
       if (r.ready) studio.dataset.phase = 'playing';
       if (usingLibrary()) prefetchNext();
       return completed;
@@ -1180,7 +1310,7 @@
       if (token === launches && error.name !== 'AbortError') toast(oneLine(error.message || error));
       return false;
     } finally {
-      if (token === launches) { pendingSelection = false; renderPreview(); sync(); }
+      finish();
     }
   }
   function guardAll() { const r = runtime(); if (r) for (const node of r.nodes.values()) guardMute(node.media); }
@@ -1191,7 +1321,9 @@
     if (!root.history || !history.replaceState || !selection) return;
     const params = new URLSearchParams(root.location.search);
     params.set('seed', String(selection.seed));
-    if (mix && !own.length) params.set('mix', mix); else params.delete('mix');
+    if (mix && !own.length && selection.loops.every(Number.isInteger) &&
+        new Set(selection.loops).size === selection.loops.length) params.set('mix', mix);
+    else params.delete('mix');
     history.replaceState(null, '', `${root.location.pathname}?${params}`);
   }
   function freshSeed() {
@@ -1228,14 +1360,12 @@
       rolled = {...rolled, family, loops: moreLoops([], count, family)};
     }
     selection = rolled;
-    writeUrl(manualPopulation ? formatMix(selection.family, selection.loops) : null);
     renderControls();
-    launch();
+    launch({shareMix: manualPopulation});
   }
   function edited() {
-    writeUrl(formatMix(selection.family, selection.loops));
     renderControls();
-    launch();
+    launch({shareMix: true});
   }
 
   function setCount(target) {
@@ -1258,7 +1388,7 @@
     if (count === selection.loops.length) return;
     selection = {...selection, loops: count > selection.loops.length ?
       selection.loops.concat(moreLoops(selection.loops, count - selection.loops.length, selection.family)) :
-      selection.loops.slice(0, count)};
+      selection.loops.slice(0, count), retained: new Map([...(selection.retained || [])].filter(([slot]) => slot < count))};
     edited();
   }
 
@@ -1269,7 +1399,8 @@
     const count = nearestCount(counts, selection.loops.length);
     if (count !== selection.loops.length) toast(`${familyLabel(family, layout.own && layout.own.name)}: ${count} panels.`);
     selection = {...selection, family, loops: count <= selection.loops.length ? selection.loops.slice(0, count) :
-      selection.loops.concat(moreLoops(selection.loops, count - selection.loops.length, family))};
+      selection.loops.concat(moreLoops(selection.loops, count - selection.loops.length, family)),
+      retained: new Map([...(selection.retained || [])].filter(([slot]) => slot < count))};
     edited();
   }
 
@@ -1278,10 +1409,8 @@
     if (!selection || index < 0 || index >= selection.loops.length) return;
     const others = selection.loops.filter((_, at) => at !== index);
     const [fresh] = moreLoops(others, 1, selection.family, [selection.loops[index]]);
-    const loops = selection.loops.slice();
-    if (fresh !== undefined) loops[index] = fresh;
-    else { toast('Every available clip is already on screen.'); return; }
-    selection = {...selection, loops};
+    if (fresh === undefined) { toast('Every available clip is already on screen.'); return; }
+    selection = replaceSelectionItem(selection, index, fresh);
     edited();
   }
 
@@ -1700,10 +1829,13 @@
     if (!bad.length) { launch({fade: false}); return; }
     const counts = familyCounts()[selection.family].filter(count => count <= available());
     if (!counts.length || available() < 1) { fallbackToGenerated(); return; }
-    let loops = selection.loops.filter(index => !library.broken.has(index));
+    let kept = selection.loops.map((index, slot) => ({index, retained: selection.retained?.get(slot)}))
+      .filter(({index}) => !library.broken.has(index));
     const count = counts.includes(selection.loops.length) ? selection.loops.length : nearestCount(counts, selection.loops.length);
-    if (loops.length > count) loops = loops.slice(0, count);
-    selection = {...selection, loops: loops.concat(moreLoops(loops, count - loops.length, selection.family))};
+    if (kept.length > count) kept = kept.slice(0, count);
+    const loops = kept.map(({index}) => index);
+    selection = {...selection, loops: loops.concat(moreLoops(loops, count - loops.length, selection.family)),
+      retained: new Map(kept.flatMap(({retained}, slot) => retained ? [[slot, retained]] : []))};
     edited();
   }
 
@@ -1832,11 +1964,10 @@
         if (fresh === undefined) {
           ecosystem.settle(request, false, time); ecologicalRequest = null; return;
         }
-        const next = {...previous, loops: previous.loops.map((value, at) => at === index ? fresh : value)};
+        const next = replaceSelectionItem(previous, index, fresh);
         selection = next; renderControls();
         launch({atLoopBoundary: true}).then(ok => {
           ecosystem.settle(request, ok, live.clock.simTime);
-          if (!ok && selection === next) { selection = previous; renderControls(); }
         }).finally(() => { if (ecologicalRequest === request) ecologicalRequest = null; });
       } else {
         live.setResting(request.id, request.type === 'rest');
@@ -1907,6 +2038,7 @@
     for (const job of library.inflight.values()) job.controller.abort();
     library.inflight.clear(); library.cache.clear(); library.broken.clear(); library.prefetch = []; library.next = null;
     library.items = library.clips.map((clip, index) => ({name: clip.id, index, clip, file: null, sha256: null}));
+    if (selection) selection = {...selection, retained: new Map()};
     const params = new URLSearchParams(root.location.search); params.set('loop', loopMode);
     history.replaceState(null, '', `${root.location.pathname}?${params}`);
     renderActivity(); launch();

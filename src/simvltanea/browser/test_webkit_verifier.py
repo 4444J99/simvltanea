@@ -469,6 +469,59 @@ const {proofJournal} = require(process.argv[1]);
 '''
         subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
 
+    def test_dense_prelude_metadata_is_bounded_and_reconstructs_all_raw_evidence(self):
+        program = r'''
+const assert = require('node:assert/strict');
+const {Writable} = require('node:stream');
+const {proofJournal, preludeJournalMetadata} = require(process.argv[1]);
+const rows = Array.from({length: 40}, (_, index) => ({wall: 1000 + index * 137,
+  incoming: {id: 'loop-3', deck: 1, item: 'clip', sha: 'pinned', callbacks: index + 3,
+    progress: {url: 'blob:incoming', epoch: 2, sourceChanges: index + 3}}, tracePayload: 'x'.repeat(35000)}));
+const prelude = {scope: 'fixture', samples: [{wall: 1}], before: {wall: 2},
+  incomingObservations: rows, siblingOverlap: rows.slice(2)};
+const before = JSON.stringify(prelude), legacy = {samples: prelude.samples.length,
+  incomingObservations: rows, siblingOverlap: rows.slice(2)};
+assert.ok(Buffer.byteLength(JSON.stringify(legacy)) > 2 * 1024 * 1024);
+(async () => {
+  const records = [], journal = proofJournal('', '', () => new Writable({write(chunk, _, done) {
+    records.push(JSON.parse(chunk)); done(); }}));
+  for (const row of rows) await journal.append('diagnostic-sibling-incoming', row);
+  await journal.append('diagnostic-prelude', preludeJournalMetadata(prelude)); await journal.close();
+  const metadata = records.at(-1).value, raw = records.slice(0, -1).map(record => record.value);
+  assert.equal(metadata.incomingObservations.journalType, 'diagnostic-sibling-incoming');
+  assert.equal(metadata.incomingObservations.count, 40);
+  assert.equal(metadata.siblingOverlap.source, 'incomingObservations');
+  assert.equal(metadata.siblingOverlap.count, 38);
+  assert.deepEqual(raw, rows);
+  assert.deepEqual(metadata.siblingOverlap.indices.map(index => raw[index]), prelude.siblingOverlap);
+  assert.equal(metadata.samples, 1);assert.deepEqual(metadata.before, {wall: 2});
+  assert.ok(Buffer.byteLength(JSON.stringify(records.at(-1))) < 10000);
+  assert.equal(JSON.stringify(prelude), before);
+  // The reference metadata must also work with deserialized final JSON.
+  assert.deepEqual(preludeJournalMetadata(JSON.parse(before)), metadata);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+'''
+        subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
+
+    def test_prelude_metadata_rejects_unwitnessed_or_changed_source_rows(self):
+        program = r'''
+const assert = require('node:assert/strict');
+const {preludeJournalMetadata} = require(process.argv[1]);
+const row = {wall: 100, incoming: {id: 'loop-3', deck: 1, item: 'clip', sha: 'hash',
+  callbacks: 4, progress: {url: 'blob:one', epoch: 2, sourceChanges: 3}}};
+const prelude = {samples: [], incomingObservations: [row], siblingOverlap: [row]};
+for (const change of [copy => {copy.incoming.progress.epoch++;}, copy => {copy.incoming.sha = 'other';},
+  copy => {copy.incoming.callbacks++;}, copy => {copy.wall++;}, copy => {copy.extra = 'not in raw';}]) {
+  const changed = structuredClone(row); change(changed);
+  assert.throws(() => preludeJournalMetadata({...prelude, siblingOverlap: [changed]}), /witnessed|match/);
+}
+assert.throws(() => preludeJournalMetadata({...prelude, siblingOverlap: [row, row]}), /order|duplicate/);
+assert.throws(() => preludeJournalMetadata({...prelude, incomingObservations: []}), /witnessed/);
+const ordinary = {samples: [{wall: 1}], before: {wall: 2}, after: {wall: 3}};
+assert.deepEqual(preludeJournalMetadata(ordinary), {samples: 1, before: {wall: 2}, after: {wall: 3}});
+'''
+        subprocess.run(['node', '-e', program, str(VERIFIER)], check=True, capture_output=True, text=True, timeout=15)
+
     def test_recorded_failure_after_completed_sampling_cannot_pass(self):
         self.assert_refused("result.failure = 'Screenshot failed after the browser closed';", 'noFailure')
 

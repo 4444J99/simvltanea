@@ -16,6 +16,10 @@ Tapping a panel replaces its clip. Untouched residents keep their elements,
 playback positions and audio bindings. Shuffle queues replacements and compresses
 queued crossfades to 0.2 seconds. The old clip keeps looping if its successor fails.
 Failed boomerang derivatives fall back to their admitted forward source.
+When a primed successor must wait for a future loop boundary, its hidden video
+pauses without seeking. The preparation permit remains held, while the outgoing
+clip and its neighbors continue playing. This reduces unnecessary concurrent
+decoding; the activity ceiling alone does not guarantee hardware capacity.
 Running replacements revalidate two fresh, nonseeking decoded frames after any
 seam wait and before revealing the successor. A source-bound progress monitor then
 spans the fade and promotion without restarting its deadline. Its normal budget
@@ -32,6 +36,20 @@ pause suspends monitoring of a verified visible successor; pausing before fresh
 reveal defers the handoff. A manual edit that stays paused can still admit a
 decoded still image. These safeguards preserve the original frame-progress
 history and the separate two-second verification gate.
+
+Selection, share links and export metadata are committed from the residents that
+actually remain after a change. A deferred panel does not undo successful changes
+in other panels. During a multi-panel edit, an already resident source keeps its
+slot; requested permutations and shrinking layouts cannot copy it into a second
+slot and leave duplicate residents after a refusal. When this changes a seeded
+roll's order or source set, the share link records the actual public mix.
+
+Exports requested during a change wait for settlement. Each issued plan retains
+its own source-file bindings across subsequent edits, including retained forward
+variants and local files. A compilation failure can reuse the previous accepted
+snapshot only when it still describes the live residents; otherwise export reports
+unavailable metadata until a later change settles. Generated voices continue
+scheduling independently while export metadata is pending.
 
 ## Rhythm and controls
 

@@ -577,6 +577,18 @@ class StudioBrowserTests(unittest.TestCase):
     def snapshot(self, page):
         return page.evaluate('SimvltaneaStudio.snapshot()')
 
+    def settled(self, page):
+        """Wait for the current intent's accepted residents and export metadata."""
+        return page.evaluate('''async () => {
+          let timer;
+          try {
+            await Promise.race([compositionIO.plan(), new Promise((_, reject) => {
+              timer=setTimeout(() => reject(new Error('Studio settlement timed out')),45000);
+            })]);
+            return SimvltaneaStudio.snapshot();
+          } finally { clearTimeout(timer); }
+        }''')
+
     def playing(self, page, count=None, timeout=45000):
         """Wait until the runtime plays every panel with decoded frames, then return its snapshot."""
         page.wait_for_function(
@@ -692,15 +704,16 @@ class StudioBrowserTests(unittest.TestCase):
             before = self.snapshot(first)
             self.tap(first, '#shuffle')
             first.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=before['seed'])
-            after = self.snapshot(first)
-            self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}$')
+            after = self.settled(first)
+            self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}(?:&mix=[sa][\d.]+)?$')
             rolls.add((after['family'], tuple(after['selection'])))
             self.assertEqual(len(set(after['selection'])), after['panels'])
         self.assertGreater(len(rolls), 1)
         last = self.snapshot(first)
         self.playing(first, last['panels'])
-        again = self.open(f'?seed={last["seed"]}')
-        self.assertEqual(self.snapshot(again)['selection'], last['selection'])
+        # Resident clips keep their slots; the settled URL records any normalized mix.
+        again = self.open(first.evaluate('location.search'))
+        self.assertEqual(self.settled(again)['selection'], last['selection'])
         self.assertEqual(self.allowed(first), [])
 
     def test_unlock_during_recording_produces_audio_after_transition(self):
@@ -800,7 +813,7 @@ class StudioBrowserTests(unittest.TestCase):
         box = page.locator('#stage .loop[data-loop-id="loop-1"]').bounding_box()
         page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
         page.wait_for_function('b => SimvltaneaStudio.snapshot().selection.join() !== b.join()', arg=before)
-        after = self.snapshot(page)['selection']
+        after = self.settled(page)['selection']
         self.assertEqual(len(after), len(before))
         if len(before) < 12:
             self.assertNotEqual(after[0], before[0])
@@ -831,6 +844,7 @@ class StudioBrowserTests(unittest.TestCase):
         seed = self.snapshot(page)['seed']
         page.locator('body').press('r')
         page.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=seed)
+        self.settled(page)
         # Manual population survives shuffle and is retained in the reproducible URL.
         self.assertRegex(page.evaluate('location.search'), r'^\?seed=\d+&mix=[sa][\d.]+$')
         self.assertEqual(self.snapshot(page)['panels'], 7)
@@ -1339,6 +1353,7 @@ class StudioLibraryTests(unittest.TestCase):
         cls.thread.join()
 
     snapshot = StudioBrowserTests.snapshot
+    settled = StudioBrowserTests.settled
     playing = StudioBrowserTests.playing
     unlock = StudioBrowserTests.unlock
     tap = StudioBrowserTests.tap
@@ -1767,11 +1782,22 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertEqual(ready['prefetch'], self.roll(ready['next'])['ids'])
         self.tap(first, '#shuffle')
         first.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=99)
-        after = self.snapshot(first)
+        after = self.settled(first)
         self.assertEqual(after['seed'], ready['next'])
-        self.assertEqual(after['selection'], ready['prefetch'])
-        self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}$')
+        self.assertEqual(after['panels'], len(ready['prefetch']))
+        self.assertEqual(len(set(after['selection'])), after['panels'])
+        self.assertTrue(set(after['selection']) <= set(expected['ids']) | set(ready['prefetch']))
+        self.assertTrue(set(ready['prefetch']) - set(expected['ids']) <= set(after['selection']))
+        # A resident requested again keeps its surviving slot through a shuffle.
+        # Shrinking can retain a different old clip instead of moving a retiring one.
+        for slot, clip_id in enumerate(expected['ids'][:after['panels']]):
+            if clip_id in ready['prefetch']:
+                self.assertEqual(after['selection'][slot], clip_id)
+        self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}(?:&mix=[sa][\d.]+)?$')
         self.showing(first, after['selection'])
+        again = self.open(query=first.evaluate('location.search'))
+        self.assertEqual(self.settled(again)['selection'], after['selection'])
+        self.showing(again, after['selection'])
         later = self.prefetched(first)
         requested = self.clip_requests(first)
         self.assertEqual(len(requested), len(set(requested)), 'a clip was fetched twice')
@@ -1783,7 +1809,7 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertIn(after['panels'], after['counts'])
         first.locator('body').press('ArrowRight' if after['panels'] < max(after['counts']) else 'ArrowLeft')
         first.wait_for_function('n => SimvltaneaStudio.snapshot().panels !== n', arg=after['panels'])
-        edited = self.snapshot(first)
+        edited = self.settled(first)
         self.showing(first, edited['selection'])
         self.assertTrue(set(self.clip_requests(first)) - before <= set(edited['selection']) | set(later['prefetch']))
         self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}&mix=[sa]\d')

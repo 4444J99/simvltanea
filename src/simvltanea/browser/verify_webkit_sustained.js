@@ -486,6 +486,34 @@ function proofJournal(out, name, createStream = fs.createWriteStream) {
   };
 }
 
+function preludeJournalMetadata(prelude) {
+  const {samples, ...metadata} = prelude;
+  if (metadata.incomingObservations !== undefined || metadata.siblingOverlap !== undefined) {
+    const raw = metadata.incomingObservations, overlap = metadata.siblingOverlap;
+    assert(Array.isArray(raw) && Array.isArray(overlap), 'Diagnostic incoming evidence arrays are missing');
+    const identity = row => JSON.stringify([row?.wall, row?.incoming?.id, row?.incoming?.deck,
+      row?.incoming?.item, row?.incoming?.sha, row?.incoming?.progress?.url,
+      row?.incoming?.progress?.epoch, row?.incoming?.progress?.sourceChanges, row?.incoming?.callbacks]);
+    const observed = new Map(raw.map((row, index) => [identity(row), index]));
+    assert(observed.size === raw.length, 'Diagnostic incoming journal contains duplicate observations');
+    let previous = -1;
+    const indices = overlap.map(row => {
+      const index = observed.get(identity(row));
+      assert(index !== undefined, 'Qualified overlap is not witnessed in the incoming journal');
+      assert(index > previous, 'Qualified overlap journal order is duplicated or reversed');
+      assert(raw[index] === row || JSON.stringify(raw[index]) === JSON.stringify(row),
+        'Qualified overlap does not match the witnessed incoming observation');
+      previous = index; return index;
+    });
+    // Every full row already streams as its own bounded journal record and
+    // remains in final JSON. Keep source-checked references here instead of
+    // duplicating several megabytes of traces in one metadata record.
+    metadata.incomingObservations = {count: raw.length, journalType: 'diagnostic-sibling-incoming'};
+    metadata.siblingOverlap = {count: overlap.length, source: 'incomingObservations', indices};
+  }
+  return {...metadata, samples: samples.length};
+}
+
 async function sustained(webkit, device, base, out, name, query, diagnostic = null) {
   const result = {name, progressSchema: 1, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
   let browser, page; const journal = proofJournal(out, name), errorOffsets = {};
@@ -511,8 +539,7 @@ async function sustained(webkit, device, base, out, name, query, diagnostic = nu
     if (diagnostic) {
       result.phase = 'controlled-diagnostic-prelude'; result.prelude = {};
       await diagnostic.prepare(page, {sample, click, ready, pause, journal}, diagnostic.targets, result.prelude, diagnostic.options);
-      const {samples: preludeSamples, ...preludeMetadata} = result.prelude;
-      await journal.append('diagnostic-prelude', {...preludeMetadata, samples: preludeSamples.length});
+      await journal.append('diagnostic-prelude', preludeJournalMetadata(result.prelude));
     }
     result.actualUrl = page.url(); result.initialStudio = await page.evaluate(() => SimvltaneaStudio.snapshot());
     result.phase = 'sustained';
@@ -789,4 +816,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = {analyse, classifyResourceErrors, proofJournal, sample, staticServer, ready, click};
+module.exports = {analyse, classifyResourceErrors, proofJournal, preludeJournalMetadata, sample, staticServer, ready, click};
