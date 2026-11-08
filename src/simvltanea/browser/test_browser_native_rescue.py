@@ -164,8 +164,12 @@ class NativeRescueTests(unittest.TestCase):
         page.evaluate('''() => {
           items.push({...items[1],name:'replacement',sha256:'5'.repeat(64)});
           const prime=live.prime.bind(live);
+          let held=false;
           live.prime=async(...args)=>{await prime(...args);
-            if(args[1].id==='loop-2')await new Promise(resolve=>{window.releaseSibling=resolve})};
+            // This deliberate non-aborting fixture delays its first cleanup.
+            // A yielded ordinary intent may then retry the same decoder.
+            if(args[1].id==='loop-2' && !held){held=true;
+              await new Promise(resolve=>{window.releaseSibling=resolve})}};
           window.siblingChange=setClips([0,4,2,3]);
         }''')
         page.wait_for_function('typeof releaseSibling==="function"')

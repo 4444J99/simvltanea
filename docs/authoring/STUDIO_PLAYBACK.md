@@ -8,9 +8,17 @@ An ordinary library visit begins with up to four panels. Mobile and touch device
 admit at most four foreground panels, including manual, seed, mix, upload and
 layout requests. Desktop manual controls retain the range of one to twelve.
 Each slot has two persistent video elements, but only one global preparation
-permit covers metadata probes, standby playback and crossfades. On mobile this
-bounds application activity to four foreground videos plus one preparing or
+permit covers personal-file metadata probes, standby playback and crossfades.
+On mobile this bounds application activity to four foreground videos plus one preparing or
 fading successor; it is not a measurement of hardware decoder allocation.
+
+Published-library prefetch checks the validated manifest, downloaded byte count,
+SHA-256 prefix, container and browser codec support without creating a temporary
+metadata decoder. Its dimensions and whole-frame duration come from that
+manifest. Actual decoding is checked when the persistent standby admits the
+asset. A hash-consistent asset that cannot decode is therefore refused at that
+handoff, while the outgoing resident keeps playing. Personal uploads still decode
+their metadata before entering the local pool.
 
 Tapping a panel replaces its clip. Untouched residents keep their elements,
 playback positions and audio bindings. Shuffle queues replacements and compresses
@@ -20,6 +28,14 @@ When a primed successor must wait for a future loop boundary, its hidden video
 pauses without seeking. The preparation permit remains held, while the outgoing
 clip and its neighbors continue playing. This reduces unnecessary concurrent
 decoding; the activity ceiling alone does not guarantee hardware capacity.
+An eligible resident rescue takes priority over queued ordinary preparations.
+An ordinary preparation can yield while its incoming deck is still hidden:
+rollback unloads that deck before releasing the permit, leaving its outgoing
+resident and neighbors untouched. The same request retries after urgent work if
+its reconciliation and resident identity remain valid. Visible fades and
+promotions, active rescues and personal metadata probes are not preempted.
+This arbitration reduces rescue queue delay; it does not guarantee recovery
+within two seconds on every device.
 Running replacements revalidate two fresh, nonseeking decoded frames after any
 seam wait and before revealing the successor. A source-bound progress monitor then
 spans the fade and promotion without restarting its deadline. Its normal budget

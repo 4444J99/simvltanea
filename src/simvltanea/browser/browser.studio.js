@@ -23,8 +23,9 @@
  * Library mode: when library/manifest.json (simvltanea.public-demo/1) sits beside the page and
  * validates, its clips replace the generated loops (?gen=1 forces the generated ones). A roll
  * picks clips by their tags (no palette+shot twice when avoidable, a portrait/landscape mix), and
- * only those clips are fetched, checked like a visitor's file and kept in a small LRU; the next
- * shuffle's clips are prefetched when idle. The clips' own audio plays in the spatial mix.
+ * only those clips are fetched, checked against their manifest and kept in a small LRU; the next
+ * shuffle's clips are prefetched when idle. Real decoding is verified at standby admission.
+ * The clips' own audio plays in the spatial mix.
  *
  * A visitor's own files are optional. Each one is gated before it becomes a loop:
  * a total-size cap, a container/codec sniff checked with video.canPlayType(), a
@@ -1595,9 +1596,10 @@
     }));
   }
 
-  /* The playability and duration checks every loop passes, the visitor's files and library clips
-   * alike: {refusal} or {sniff, type, facts, quantized}. */
-  async function inspect(file, buffer, name, declared, probe) {
+  /* Container, codec and duration checks for both sources. Personal files decode
+   * their metadata here; byte-checked library assets supply validated manifest
+   * facts and wait for their real standby admission to allocate a decoder. */
+  async function inspect(file, buffer, name, declared, probe, publishedFacts = null) {
     const sniff = sniffContainer(buffer);
     const type = blobType(name, declared, sniff);
     const described = sniff.codec ? `${type}, ${sniff.codec.label}${sniff.codec.string &&
@@ -1608,7 +1610,7 @@
     const {decisive, queries} = playbackQueries(type, sniff);
     const answers = queries.map(query => probe.canPlayType(query));
     if (decisive ? answers[0] === '' : answers.every(answer => answer === '')) return {refusal: cannot};
-    const facts = await metadata(file, type);
+    const facts = publishedFacts || await metadata(file, type);
     if (!facts) return {refusal: cannot};
     let quantized = null;
     try { quantized = quantizeDuration(facts.duration, FPS); } catch (_) { /* shorter than one frame */ }
@@ -1759,9 +1761,10 @@
     for (const [id, job] of library.inflight) if (!wanted.has(id)) job.controller.abort();
   }
 
-  /* Fetch one clip, then check it exactly as a chosen file: its size and SHA-256 must match the
-   * manifest (the id is the digest's first 12 hex digits), then the codec, a decoded frame and a
-   * duration of whole frames. Resolves true when the clip is ready, false when it is not. */
+  /* Prefetch verifies the published asset's bytes, SHA-256 prefix and browser
+   * codec support, using its already validated manifest dimensions and duration.
+   * Actual decoding is checked by the persistent standby's admission gates, so
+   * caching a spare clip does not allocate another temporary video decoder. */
   let activeFetches = 0;
   const fetchQueue = [];
   function boundedFetch(task) {
@@ -1797,7 +1800,8 @@
     if (!sha256.startsWith(asset.id)) throw new Error('digest differs from the manifest');
     const file = new Blob([buffer], {type: 'video/mp4'});
     if (!library.probe) library.probe = document.createElement('video');
-    const checked = await inspect(file, buffer, `${item.name}.mp4`, 'video/mp4', library.probe);
+    const checked = await inspect(file, buffer, `${item.name}.mp4`, 'video/mp4', library.probe,
+      {width: asset.width, height: asset.height, duration: asset.duration_seconds});
     if (checked.refusal) throw new Error('not playable');
     if (controller.signal.aborted) return false;
     Object.assign(item, {file, type: checked.type, suffix: 'mp4', size: buffer.byteLength, sha256,

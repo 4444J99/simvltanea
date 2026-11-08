@@ -445,10 +445,10 @@ function applySlice(node) {
   // The permit spans priming AND the entire fade. Admission probes use this
   // same queue: background metadata loading cannot add a second standby.
   class PreparationGate {
-    constructor(changed) { this.active = 0; this.queue = []; this.changed = changed; }
-    acquire(signal) {
+    constructor(changed) { this.active = 0; this.queue = []; this.changed = changed; this.owner = null; }
+    acquire(signal, {urgent = false, onYield = null} = {}) {
       return new Promise((resolve, reject) => {
-        const job = {signal, resolve, reject, abort: null};
+        const job = {signal, resolve, reject, abort: null, urgent, onYield, yielding: false};
         job.abort = () => {
           const index = this.queue.indexOf(job);
           if (index >= 0) this.queue.splice(index, 1);
@@ -456,7 +456,14 @@ function applySlice(node) {
         };
         if (signal?.aborted) { reject(cancelled()); return; }
         signal?.addEventListener('abort', job.abort, {once: true});
-        this.queue.push(job); this.drain();
+        const ordinary = urgent ? this.queue.findIndex(queued => !queued.urgent) : -1;
+        if (ordinary < 0) this.queue.push(job); else this.queue.splice(ordinary, 0, job);
+        this.drain();
+        // Yield is cooperative: only an explicitly cancellable hidden owner
+        // may opt in. Its cleanup still owns the permit until release().
+        const owner = this.owner;
+        if (urgent && owner && !owner.urgent && !owner.yielding && owner.onYield)
+          owner.yielding = Boolean(owner.onYield());
       });
     }
     drain() {
@@ -464,11 +471,11 @@ function applySlice(node) {
       const job = this.queue.shift();
       job.signal?.removeEventListener('abort', job.abort);
       if (job.signal?.aborted) { job.reject(cancelled()); this.drain(); return; }
-      this.active = 1; this.changed(1);
+      this.active = 1; this.owner = job; this.changed(1);
       let released = false;
       job.resolve(() => {
         if (released) return;
-        released = true; this.active = 0; this.changed(0); this.drain();
+        released = true; this.active = 0; this.owner = null; this.changed(0); this.drain();
       });
     }
   }
@@ -562,9 +569,9 @@ function applySlice(node) {
       this.stage.dataset.status = this.running ? 'playing' : this.ready ? 'paused' : 'loading';
       try { this.options.onChange?.(this); } catch (error) { this.report(error); }
     }
-    async withPreparation(task, {signal} = {}) {
+    async withPreparation(task, {signal, urgent = false, onYield = null} = {}) {
       if (this.disposed) throw cancelled();
-      const release = await this.gate.acquire(signal);
+      const release = await this.gate.acquire(signal, {urgent, onYield});
       try { if (this.disposed || signal?.aborted) throw cancelled(); return await task(); }
       finally { release(); }
     }
@@ -942,8 +949,47 @@ function applySlice(node) {
       });
     }
     async replace(node, item, source, signal, duration, atLoopBoundary = false, rescue = null) {
+      if (rescue) return this.replacePrepared(node, item, source, signal, duration, atLoopBoundary, rescue, {urgent: true});
+      const original = node.active, resident = node.item, residentSource = node.source;
+      const identity = node.residentIdentity, url = original?.url, epoch = original?.sourceEpoch;
+      const owned = () => !this.disposed && !signal.aborted && this.nodes.get(node.id) === node &&
+        node.item === resident && node.source === residentSource && node.residentIdentity === identity &&
+        ((node.active === original && original?.url === url && original?.sourceEpoch === epoch) ||
+          (identity && node.active?.residentIdentity === identity && node.media === node.active.media &&
+            node.active.residentSource?.url === node.active.url &&
+            node.active.residentSource?.epoch === node.active.sourceEpoch &&
+            node.active.media.currentSrc === node.active.url));
+      // A yielded hidden successor retries the same reconciliation intent.
+      // Never cancel the reconciliation controller or touch its resident.
+      while (true) {
+        if (!owned()) throw cancelled();
+        const controller = new AbortController();
+        let hidden = true, yielded = false;
+        const abort = () => controller.abort();
+        signal.addEventListener('abort', abort, {once: true});
+        const preparation = {
+          assert: () => { if (!owned()) throw cancelled(); },
+          reveal: () => { hidden = false; },
+          onYield: () => {
+            const outgoing = node.active;
+            if (!hidden || !outgoing || !owned() || controller.signal.aborted) return false;
+            yielded = true;
+            this.record('preparation-yielded', node.id, {reason: 'native-loop-rescue',
+              url: outgoing.url, sourceEpoch: outgoing.sourceEpoch});
+            controller.abort(); return true;
+          },
+        };
+        try {
+          return await this.replacePrepared(node, item, source, controller.signal, duration, atLoopBoundary, null, preparation);
+        } catch (error) {
+          if (!yielded || error.name !== 'AbortError' || !owned()) throw error;
+        } finally { signal.removeEventListener('abort', abort); }
+      }
+    }
+    async replacePrepared(node, item, source, signal, duration, atLoopBoundary, rescue, preparation) {
       await this.withPreparation(async () => {
         if (signal.aborted) throw cancelled();
+        preparation.assert?.();
         rescue?.assert();
         const outgoing = node.active, incoming = node.decks.find(deck => deck !== outgoing);
         const previous = {active: node.active, media: node.media, item: node.item, source: node.source,
@@ -960,7 +1006,7 @@ function applySlice(node) {
         incoming.enteredAt = rescue ? outgoing.enteredAt : null;
         this.applyDeckEffects(incoming, true);
         incoming.url = URL.createObjectURL(item.file);
-        incoming.sourceEpoch++; incoming.loopSeek = null; incoming.residentIdentity = null;
+        incoming.sourceEpoch++; incoming.loopSeek = null; incoming.residentIdentity = null; incoming.residentSource = null;
         incoming.progress?.assign(incoming.url, performance.now());
         incoming.media.src = incoming.url; incoming.media.load();
         node.box.style.display = '';
@@ -986,8 +1032,10 @@ function applySlice(node) {
             handoff = this.watchHandoff(node, incoming, outgoing, signal);
             await handoff.ready; handoff.assert();
             rescue?.assert();
+            preparation.reveal?.();
             handoff.visible = true; handoff.phase = 'fade';
           }
+          preparation.reveal?.();
           // Priming can run for several native loops. The resident's entrance
           // begins when it is revealed, independently of the media playhead.
           incoming.enteredAt = rescue ? outgoing.enteredAt : this.clock.simTime;
@@ -1065,6 +1113,10 @@ function applySlice(node) {
           // to another decoder. Ordinary admissions always get a new identity.
           node.residentIdentity = rescue ? previous.residentIdentity : {};
           incoming.residentIdentity = node.residentIdentity;
+          // A queued ordinary intent may survive verified repairs of this
+          // logical resident. Bind that exception to the committed source,
+          // so a reloaded or reassigned deck cannot reuse a stale token.
+          incoming.residentSource = {url: incoming.url, epoch: incoming.sourceEpoch};
           node.audio = incoming.binding; node.callbacks = incoming.callbacks; node.decoded = incoming.decoded;
           node.promoting = null; node.phase = node.resting ? 'RESTING' : 'ACTIVE';
           if (rescue) rescue.committed = true;
@@ -1097,11 +1149,11 @@ function applySlice(node) {
           }
           throw error;
         } finally { handoff?.stop(); node.busy = false; }
-      }, {signal});
+      }, {signal, urgent: preparation.urgent, onYield: preparation.onYield});
     }
     unload(deck) {
       this.interruptLoopSeek(deck, 'retired');
-      deck.loopSeek = null; deck.residentIdentity = null;
+      deck.loopSeek = null; deck.residentIdentity = null; deck.residentSource = null;
       try { this.options.onDeckUnload?.(deck); }
       catch (error) { this.report(error); }
       deck.weight = 0;

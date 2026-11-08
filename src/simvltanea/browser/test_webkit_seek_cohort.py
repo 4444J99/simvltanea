@@ -159,6 +159,23 @@ for (const row of [...replay.prelude.samples, ...replay.samples]) {
 '''
 
 
+RETIRED_RESCUE = r'''
+const lastLive = replay.samples.at(-1), lastDeck = lastLive.decks[3];
+const retired = {id:lastDeck.id, deck:lastDeck.deck, ...structuredClone(lastDeck.progress),
+  live:false, foreground:false, running:false, currentGapMs:0, retiredAt:3400, nativeError:null};
+const unloaded = {...structuredClone(lastDeck), active:false, populated:false, src:'',
+  currentSrc:committed.successorUrl, paused:true, seeking:false, ready:0, weight:0,
+  progress:{...structuredClone(retired)}};
+for (const wall of [3466, 3603]) {
+  const row = structuredClone(lastLive); row.wall = wall;
+  row.nodes = row.nodes.filter(node => node.id !== 'loop-4');
+  row.decks[3] = structuredClone(unloaded);
+  row.progressSummary.retired = wall === 3603 ? [structuredClone(retired)] : [];
+  replay.samples.push(row);
+}
+'''
+
+
 def execute(body: str):
     completed = subprocess.run(['node', '-e', FIXTURE + body, str(HELPER)],
                                capture_output=True, text=True, timeout=15)
@@ -615,6 +632,94 @@ console.log(JSON.stringify(api.coverage(replay, targets)));
 
 
 class RescueCohortTests(unittest.TestCase):
+    def test_repeated_retirement_trace_cannot_supply_different_frozen_witnesses(self):
+        result = execute(COHORT + RESCUE + RETIRED_RESCUE + r'''
+console.log(JSON.stringify([false, true].map(inject => {
+  const value = structuredClone(replay), early = value.samples.at(-2), late = value.samples.at(-1);
+  early.progressSummary.retired = [structuredClone(late.progressSummary.retired[0])];
+  if (inject) {
+    // Only the later retirement would supply the missing first admission frame.
+    early.progressSummary.retired[0].trace.shift();
+    for (const row of value.samples) for (const deck of row.decks)
+      if (deck.progress?.url === committed.successorUrl && deck.progress.trace) deck.progress.trace.shift();
+  } else late.progressSummary.retired[0].trace.shift();
+  return api.rescueAudit(value, targets).pass;
+})));
+''')
+        self.assertEqual(result, [False, False])
+
+    def test_unloaded_optional_trace_must_match_the_frozen_retirement(self):
+        result = execute(COHORT + RESCUE + RETIRED_RESCUE + r'''
+console.log(JSON.stringify([[], {}, null, unloaded.progress.trace.slice(0, -1)].map(trace => {
+  const value = structuredClone(replay); value.samples.at(-2).decks[3].progress.trace = trace;
+  return api.rescueAudit(value, targets).pass;
+})));
+''')
+        self.assertEqual(result, [False] * 4)
+
+    def test_malformed_retirement_trace_is_rejected_without_parser_exception(self):
+        result = execute(COHORT + RESCUE + RETIRED_RESCUE + r'''
+console.log(JSON.stringify([null, {}, 'not a trace'].map(trace => {
+  const value = structuredClone(replay); value.samples.at(-1).progressSummary.retired[0].trace = trace;
+  try { return {pass:api.rescueAudit(value, targets).pass, threw:false}; }
+  catch (_) { return {pass:null, threw:true}; }
+})));
+''')
+        self.assertEqual(result, [{'pass': False, 'threw': False}] * 3)
+
+    def test_verified_retirement_allows_later_unloaded_native_source_duplicates(self):
+        result = execute(COHORT + RESCUE + RETIRED_RESCUE + r'''
+const before = JSON.stringify(replay), report = api.rescueAudit(replay, targets);
+console.log(JSON.stringify({pass:report.pass,bridges:report.bridges.length,
+  unchanged:JSON.stringify(replay)===before}));
+''')
+        self.assertEqual(result, {'pass': True, 'bridges': 1, 'unchanged': True})
+
+    def test_retired_native_frames_remain_admission_and_promotion_evidence(self):
+        result = execute(COHORT + RESCUE + RETIRED_RESCUE + r'''
+for (const row of replay.samples) for (const deck of row.decks)
+  if (deck.progress?.url === committed.successorUrl) delete deck.progress.trace;
+const report = api.rescueAudit(replay, targets);
+console.log(JSON.stringify({pass:report.pass,bridges:report.bridges.length}));
+''')
+        self.assertEqual(result, {'pass': True, 'bridges': 1})
+
+    def test_retired_duplicate_exception_requires_exact_proof_and_unloaded_state(self):
+        result = execute(COHORT + RESCUE + RETIRED_RESCUE + r'''
+const mutations = [
+  value => {value.samples.at(-1).progressSummary.retired = [];},
+  value => {value.samples.at(-1).progressSummary.retired[0].retiredAt = 3467;},
+  value => {value.samples.at(-1).progressSummary.retired[0].retiredAt = 2900;},
+  value => {value.samples.at(-1).progressSummary.retired[0].id = 'loop-1';},
+  value => {value.samples.at(-1).progressSummary.retired[0].deck = 1;},
+  value => {value.samples.at(-1).progressSummary.retired[0].epoch = 2;},
+  value => {value.samples.at(-1).progressSummary.retired[0].url = 'blob:foreign';},
+  value => {value.samples.at(-1).progressSummary.retired[0].live = true;},
+  value => {value.samples.at(-1).progressSummary.retired[0].supported = false;},
+  value => {value.samples.at(-1).progressSummary.retired[0].nativeError = {code:3};},
+  value => {delete value.samples.at(-1).progressSummary.retired[0].trace;},
+  value => {value.samples.at(-1).progressSummary.retired[0].trace.at(-1).wall = 3401;},
+  value => {delete value.samples.at(-1).progressSummary.retired[0].lastChangeWall;},
+  value => {value.samples.at(-2).decks[3].active = true;},
+  value => {value.samples.at(-2).decks[3].populated = true;},
+  value => {value.samples.at(-2).decks[3].src = committed.successorUrl;},
+  value => {value.samples.at(-2).decks[3].currentSrc = 'blob:foreign';},
+  value => {value.samples.at(-2).decks[3].paused = false;},
+  value => {value.samples.at(-2).decks[3].ready = 1;},
+  value => {value.samples.at(-2).decks[3].weight = .1;},
+  value => {value.samples.at(-2).decks[3].nativeError = {code:3};},
+  value => {value.samples.at(-2).decks[3].progress.live = true;},
+  value => {value.samples.at(-2).decks[3].progress.epoch = 2;},
+  value => {value.samples.at(-2).decks[3].progress.foreground = true;},
+  value => {value.samples.at(-2).decks[3].progress.sourceChanges++;},
+  value => {value.samples.at(-2).decks[3].progress.trace.at(-1).wall = 3401;},
+];
+console.log(JSON.stringify(mutations.map(mutate => {
+  const value = structuredClone(replay); mutate(value); return api.rescueAudit(value, targets).pass;
+})));
+''')
+        self.assertEqual(result, [False] * 26)
+
     def test_later_foreground_snapshot_cannot_backdate_reveal_before_admission(self):
         result = execute(COHORT + RESCUE + r'''
 for (const row of replay.samples) for (const deck of row.decks)

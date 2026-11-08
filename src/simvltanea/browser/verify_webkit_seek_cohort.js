@@ -216,6 +216,30 @@ function rescueAudit(result, targets) {
       node.progress?.url === end.successorUrl))) { fail('rescue promotion lacks observed ownership or retirement'); continue; }
     const expected = sourceKey(end.id, end.successorDeck, end.successorUrl, end.successorEpoch);
     const points = new Map(); let invalid = false;
+    const frozenFields = ['schema', 'supported', 'url', 'epoch', 'live', 'changes', 'sourceChanges',
+      'lastChangeWall', 'mediaTime', 'foreground', 'running', 'foregroundSince', 'lastForegroundChangeWall',
+      'maxGapMs', 'currentGapMs', 'lifetimeMaxGapMs'];
+    const retirements = [];
+    for (const row of rows) for (const retired of row.progressSummary?.retired || []) {
+      if (retired?.url !== end.successorUrl) continue;
+      const last = Array.isArray(retired.trace) ? retired.trace.at(-1) : null;
+      if (sourceKey(retired.id, retired.deck, retired.url, retired.epoch) !== expected ||
+          retired.schema !== 1 || retired.supported !== true || retired.live !== false || retired.nativeError !== null ||
+          retired.foreground !== false || retired.running !== false || retired.currentGapMs !== 0 ||
+          ![retired.retiredAt, retired.lastChangeWall, retired.foregroundSince, retired.lastForegroundChangeWall].every(timestamp) ||
+          retired.retiredAt < end.wall || retired.retiredAt > row.wall || retired.lastChangeWall > retired.retiredAt ||
+          retired.foregroundSince > retired.lastForegroundChangeWall || retired.lastForegroundChangeWall > retired.retiredAt ||
+          !Number.isSafeInteger(retired.sourceChanges) || retired.sourceChanges < 1 ||
+          !Number.isSafeInteger(retired.changes) || retired.changes < retired.sourceChanges ||
+          !Number.isFinite(retired.mediaTime) || retired.mediaTime < 0 ||
+          ![retired.maxGapMs, retired.lifetimeMaxGapMs].every(timestamp) || retired.lifetimeMaxGapMs < retired.maxGapMs ||
+          !Array.isArray(retired.trace) || !last || last.wall !== retired.lastChangeWall ||
+          last.changes !== retired.changes || last.mediaTime !== retired.mediaTime ||
+          (retirements.length && (retired.retiredAt !== retirements[0].retiredAt ||
+            frozenFields.some(key => retired[key] !== retirements[0][key]) ||
+            JSON.stringify(retired.trace) !== JSON.stringify(retirements[0].trace)))) invalid = true;
+      else if (!retirements.length) retirements.push(retired);
+    }
     const inspect = (progress, id, deck, capturedAt, nativeError) => {
       if (progress?.url !== end.successorUrl) return;
       if (sourceKey(id, deck, progress.url, progress.epoch) !== expected || nativeError ||
@@ -239,6 +263,18 @@ function rescueAudit(result, targets) {
     };
     for (const row of rows) {
       for (const deck of row.decks || []) if (deck.progress?.url === end.successorUrl) {
+        // Trace summaries may deliver this proof after the first empty-deck
+        // poll. The actual retirement must already precede that poll. Validate
+        // the frozen source again, retaining its native frames and gap maxima.
+        const retired = retirements.find(proof => proof.retiredAt <= row.wall);
+        if (retired) {
+          if (deck.id !== retired.id || deck.deck !== retired.deck || deck.active !== false || deck.populated !== false ||
+              deck.src !== '' || (deck.currentSrc !== '' && deck.currentSrc !== retired.url) || deck.paused !== true ||
+              deck.seeking !== false || deck.ready !== 0 || deck.weight !== 0 || deck.nativeError !== null ||
+              frozenFields.some(key => deck.progress[key] !== retired[key]) ||
+              (deck.progress.trace !== undefined && JSON.stringify(deck.progress.trace) !== JSON.stringify(retired.trace))) invalid = true;
+          continue;
+        }
         if (deck.src !== end.successorUrl || (deck.currentSrc !== '' && deck.currentSrc !== end.successorUrl)) invalid = true;
         // Polling need not catch a short hidden phase. Any observed successor
         // before its independently checked admission must still be invisible.
@@ -248,9 +284,9 @@ function rescueAudit(result, targets) {
             deck.progress.currentGapMs !== 0 || deck.progress.maxGapMs !== 0)) invalid = true;
         inspect(deck.progress, deck.id, deck.deck, row.wall, deck.nativeError);
       }
-      for (const retired of row.progressSummary?.retired || [])
-        inspect(retired, retired.id, retired.deck, Math.min(row.wall, retired.retiredAt), retired.nativeError);
     }
+    for (const retired of retirements)
+      inspect(retired, retired.id, retired.deck, retired.retiredAt, retired.nativeError);
     const frames = [...points.values()].sort((a, b) => a.wall - b.wall);
     const witness = (wall, changes, lastWall, decoded) => {
       const fresh = frames.filter(point => point.wall > wall && point.wall <= lastWall && point.local > changes);
