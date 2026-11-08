@@ -11,7 +11,7 @@ B = "b" * 40
 def fixture():
     runs = [dict(id=i, path=f".github/workflows/{name}.yml", head_sha=A, head_branch="main", event="push",
                  status="completed", conclusion="success", html_url="https://github.com/owner/repo/actions/runs/" + str(i))
-            for i, name in enumerate(("ci", "package"), 1)]
+            for i, name in enumerate(("ci", "package", "macos-webkit"), 1)]
     raw = {"started_at": "2026-10-03T00:00:00+00:00", "finished_at": "2026-10-03T00:00:01+00:00", "errors": [],
            "repository": {"id": 1, "full_name": "owner/repo", "default_branch": "main"},
            "main_before": {"commit": {"sha": A}, "protected": False}, "main_after": {"commit": {"sha": A}},
@@ -65,6 +65,16 @@ class RepositoryStatusTests(unittest.TestCase):
         raw = fixture(); raw["runs"]["items"] = []
         self.assertFalse(project(raw, {})["selected_post_merge_workflows_pass"])
         raw = fixture(); raw["runs"]["complete"] = False
+        self.assertFalse(project(raw, {})["selected_post_merge_workflows_pass"])
+
+    def test_missing_apple_backend_proof_cannot_pass(self):
+        raw = fixture()
+        raw["runs"]["items"] = [run for run in raw["runs"]["items"] if not run["path"].endswith("macos-webkit.yml")]
+        self.assertFalse(project(raw, {})["selected_post_merge_workflows_pass"])
+
+    def test_failed_apple_backend_proof_cannot_pass(self):
+        raw = fixture()
+        raw["runs"]["items"][-1]["conclusion"] = "failure"
         self.assertFalse(project(raw, {})["selected_post_merge_workflows_pass"])
 
     def test_empty_scope_is_not_vacuously_green(self):
