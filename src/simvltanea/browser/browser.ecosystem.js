@@ -262,6 +262,10 @@
       if (!Array.isArray(residents) || residents.length > this.maxSlots)
         throw new RangeError('resident count exceeds maxSlots');
       this._time = simTime;
+      if (this._effectSettingsInput !== options.effectSettings || !this._effectSettings) {
+        this._effectSettingsInput = options.effectSettings;
+        this._effectSettings = presence.normalizeSettings(options.effectSettings);
+      }
       const count = residents.length, ids = new Set();
       for (let index = 0; index < count; index++) {
         const state = this._resident(residents[index], index, simTime, count);
@@ -281,8 +285,8 @@
         // Scheduling retries must not restart the envelope's fall. Keep its
         // initial lifetime separate from the movable retirement deadline.
         state.presence = options.effects === false ? 1 : state.resting ? 0 : options.enabled === false
-          ? clamp(state.age / presence.ATTACK_SECONDS, 0, 1)
-          : presence.presenceEnvelope(state.age, state.presenceDeadlineAge);
+          ? presence.entranceEnvelope(state.age, this._effectSettings)
+          : presence.presenceEnvelope(state.age, state.presenceDeadlineAge, this._effectSettings);
         this.output.presence[i] = state.presence;
       }
       return this.output;

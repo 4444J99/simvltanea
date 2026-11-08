@@ -40,6 +40,7 @@ pixels (44 on wider screens).
 | Volume | none | Master level; appears when the speaker is hovered or focused |
 | Add yours | none | Opens the file picker for your own videos |
 | ƒx Filters | none | Links each clip's audible and visible rise and fall; toggles the effect without restarting playback |
+| ☷ Filter settings | Esc closes | Adjusts rise, curve, waiting presence, and separate sound and image effect strengths |
 | Full screen | F | Enters or leaves full screen where the browser allows it |
 | ? | Esc closes | Three short lines: what this is, privacy, the keys |
 | A panel | none | Swaps that panel's loop for one not on screen |

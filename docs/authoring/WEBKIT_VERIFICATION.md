@@ -117,6 +117,53 @@ rendered sample peak must exceed `0.1` and remain at or below `0.891251`.
 This checks sample peaks, not reconstructed true peaks, physical speaker output,
 or human listening quality.
 
+## Controlled held-source diagnostic
+
+The workflow additionally passes `--held-source-diagnostic`. This adds a separate
+180-second session; it does not replace either default baseline or change the
+two-second hold threshold. The step allows 15 minutes and the job 35 minutes so
+the additional work does not consume the original baselines' time allowance.
+
+The source set comes from failed Apple run `42431559354` at PR #92 head
+`5dc225a87684012a529bad97770e10a8883d3585`. Its original artifact `13597902240`
+has SHA-256 `da5959ad179bf7bb4a942605edac0f859df70cf6fd0dfd76097d8d572a88d193`.
+Seventeen dense observations recorded all four decoded positions and callback
+counts unchanged for 2,648 ms. That failure remains unresolved.
+
+The diagnostic copies the five complete original manifest entries for held
+residents `107936da1aae`, `2f00e7f10d19`, `443fbc2c885a`, `c1d21417eede` and
+predecessor `37b398494e0d`. Both the full and subset manifests must pass Studio's
+existing schema gate. The pinned full-manifest digest and every selected forward
+and boomerang file's full digest and byte length are checked. Only a separate
+diagnostic server returns the subset manifest; file paths and bytes remain
+unchanged. No asset is re-encoded and neither the staged site nor full library is
+modified. The fixture, original URLs, full hashes, source run and helper digest
+are retained in the artifact.
+
+A public composition URL starts the predecessor alongside the three held
+siblings with evolution off. Read-only observations must prove active decoded
+progress and a decoded-time wrap for each. A public tap on panel 1 then chooses
+the sole spare, `107936da1aae`. The resulting quartet and unchanged sibling
+identities are checked. After the arriving source has decoded and wrapped,
+the activity control enables evolution for the full 180-second measurement.
+Sampling continues throughout the tap and handoff.
+
+The receipt requires all five sources' exact hashes, active admission, multiple
+advancing decoded observations, and a decoded-time wrap within one unchanged
+slot/deck/birth/source epoch. The four held sources must also satisfy that
+coverage during the sustained phase. Media-clock movement, passive prefetch,
+missing samples or a requested seed cannot supply this proof. Brief native
+`HAVE_METADATA` at a loop seam does not invalidate subsequent decoded callback
+evidence; unsupported telemetry and native holds reaching two seconds still fail.
+Raw prelude samples stream to the bounded journal, including on failure.
+
+This controlled four-active composition uses a manual mix, which suppresses
+sparse resting. It reproduces the selected assets and one predecessor-to-successor
+handoff, not the original wall timing, deck ages or complete ecological history.
+The two default baselines retain ordinary population and rest coverage. A passing
+diagnostic establishes that coverage for its tested revision, not a cause or
+repair of the archived failure.
+
 ## Running on a Mac
 
 From a clean checkout, install the pinned browser in a temporary directory:
@@ -126,7 +173,7 @@ export NODE_PATH="$(mktemp -d)/node_modules"
 npm install --prefix "${NODE_PATH%/node_modules}" --no-save --package-lock=false --ignore-scripts playwright@1.65.0
 node "$NODE_PATH/playwright/cli.js" install webkit
 python3 -m tools.publishing.build_studio_site --output var/site/macos-webkit
-node src/simvltanea/browser/verify_webkit_sustained.js var/site/macos-webkit var/proofs/macos-webkit
+node src/simvltanea/browser/verify_webkit_sustained.js var/site/macos-webkit var/proofs/macos-webkit --held-source-diagnostic
 ```
 
 The workflow uploads `var/proofs/macos-webkit/` on success or failure, including
@@ -143,7 +190,7 @@ skip the other run.
 Analyzer and journal regressions run without a browser:
 
 ```bash
-python3 -m unittest src.simvltanea.browser.test_webkit_verifier
+python3 -m unittest src.simvltanea.browser.test_webkit_verifier src.simvltanea.browser.test_webkit_held_sources
 ```
 
 Reanalysis writes a separate derived receipt and retains the original artifact

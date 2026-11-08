@@ -682,6 +682,89 @@ class PersistentSessionTests(unittest.TestCase):
         self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===original && !original.paused"))
         self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
 
+    def test_immediate_resume_during_frame_verification_keeps_promoted_deck_moving(self):
+        page = self.open()
+        page.evaluate('''() => {
+          const node=live.nodes.get('loop-1'),next=node.decks.find(d=>d!==node.active).media;
+          const native=next.play.bind(next);let held=false;
+          next.play=()=>{if(next.dataset.deck==='active' && !held) {
+            held=true;next.pause();window.verifying=true;return Promise.resolve();}return native();};
+          window.change=setClips([2,1]);
+        }''')
+        page.wait_for_function('window.verifying && Boolean(live.promotion)')
+        page.evaluate('''async () => {live.pause();const resumed=live.play();await Promise.all([resumed,change]);}''')
+        self.assertFalse(page.evaluate("live.nodes.get('loop-1').media.paused"),
+                         'immediate resume omitted the provisional incoming deck')
+        before = page.evaluate("live.nodes.get('loop-1').callbacks")
+        page.wait_for_function("n=>live.nodes.get('loop-1').callbacks>n+2", arg=before, timeout=2000)
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
+    def test_finished_fade_keeps_incoming_audible_until_promotion_continuation(self):
+        page = self.open()
+        page.evaluate("document.addEventListener('click',()=>{window.unlocked=live.unlock();live.setSound({enabled:true,volume:.5})},{once:true})")
+        page.mouse.click(10, 10)
+        page.evaluate('unlocked')
+        page.evaluate("() => {live.crossfadeSec=.8;window.change=setClips([2,1]);}")
+        page.wait_for_function('Boolean(live.fade)')
+        edges = page.evaluate('''() => {
+          live.clock.pause();const fade=live.fade,media=fade.incoming.media;
+          const descriptor=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'muted'),edges=[];
+          Object.defineProperty(media,'muted',{get(){return descriptor.get.call(this)},set(value){
+            if(value!==descriptor.get.call(this))edges.push(value);descriptor.set.call(this,value);}});
+          live.tick(fade.began+fade.duration);
+          // The ecology subscriber runs before replace() resumes its awaited fade.
+          live.setTargetGain(fade.node.id,.4);
+          return edges;
+        }''')
+        self.assertNotIn(True, edges, 'fade completion temporarily revoked incoming audio ownership')
+        page.evaluate('change')
+
+    def test_rejected_immediate_resume_rolls_back_unverified_successor(self):
+        page = self.open()
+        page.evaluate('''() => {
+          const node=live.nodes.get('loop-1');window.outgoing=node.media;
+          const next=node.decks.find(d=>d!==node.active).media,native=next.play.bind(next);let held=false;
+          next.play=()=>{if(next.dataset.deck!=='active')return native();
+            if(!held){held=true;next.pause();window.verifying=true;return Promise.resolve();}
+            return Promise.reject(new Error('resume refused'));};
+          window.change=setClips([2,1]);
+        }''')
+        page.wait_for_function('window.verifying && Boolean(live.promotion)')
+        page.evaluate('''async () => {live.pause();await live.play();}''')
+        self.assertFalse(page.evaluate('change'), 'resuming treated a pause-settled waiter as frame proof')
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===outgoing && !outgoing.paused"))
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
+
+    def test_deck_audio_lifecycle_announces_entry_before_commit_and_cleans_failed_entry(self):
+        page = self.open()
+        page.evaluate("document.addEventListener('click',()=>{window.unlocked=live.unlock();live.setSound({enabled:true,volume:.5})},{once:true})")
+        page.mouse.click(10, 10)
+        page.evaluate('unlocked')
+        page.evaluate('''() => {
+          window.deckEvents=[];
+          live.options.onDeckAudio=(deck,context)=>deckEvents.push({type:'entry',name:deck.item.name,
+            entered:deck.enteredAt!==null,bound:Boolean(deck.binding),sameContext:context===live.audio.context,
+            committed:[...live.nodes.values()].some(n=>n.active===deck)});
+          live.options.onDeckUnload=deck=>deckEvents.push({type:'unload',name:deck.item?.name});
+          live.crossfadeSec=.7;window.change=setClips([2,1]);
+        }''')
+        page.wait_for_function('Boolean(live.fade)')
+        entries = page.evaluate("deckEvents.filter(e=>e.type==='entry' && e.name==='clip-2')")
+        self.assertTrue(entries, 'generated audio has no per-deck entry hook during the visible fade')
+        self.assertTrue(all(e['entered'] and e['bound'] and e['sameContext'] for e in entries))
+        self.assertFalse(entries[0]['committed'])
+        page.evaluate('change')
+        self.assertIn(dict(type='unload', name='clip-0'), page.evaluate('deckEvents'))
+        page.evaluate('''() => {
+          deckEvents.length=0;const n=live.nodes.get('loop-1'),next=n.decks.find(d=>d!==n.active).media;
+          const native=next.play.bind(next);next.play=()=>next.dataset.deck==='active'
+            ? Promise.reject(new Error('promotion refused')) : native();
+        }''')
+        self.assertFalse(page.evaluate('setClips([3,1])'))
+        unloaded = page.evaluate("deckEvents.filter(e=>e.type==='unload').map(e=>e.name)")
+        self.assertEqual(unloaded, ['clip-3'])
+        self.assertEqual(page.evaluate("live.nodes.get('loop-1').item.name"), 'clip-2')
+
 
 if __name__ == '__main__':
     unittest.main()

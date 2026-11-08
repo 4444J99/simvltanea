@@ -58,8 +58,32 @@ They are on by default; `fx=0` in the URL bypasses them, and `fx=1` enables them
 The explicit setting survives shuffles. Toggling filters keeps the same video
 elements, playback positions, and audio connections.
 
+The adjacent **☷ Filter settings** button opens adjustable timing, sound, and
+image controls. The field keeps playing while the dialog is open. Escape closes
+the dialog and returns focus to its button. Reset filters restores the defaults;
+it does not change the composition or the separate Filters bypass switch.
+
+| Control | Range | Default |
+| --- | --- | --- |
+| Rise | 0.1–5 seconds | 1.2 seconds |
+| Curve | Linear or smooth | Linear |
+| Waiting presence | 5–50 percent | 12 percent |
+| Volume swell | 0–100 percent | 100 percent |
+| Low-pass filter | 0–100 percent | 100 percent |
+| Brightness swell | 0–100 percent | 100 percent |
+| Color swell | 0–100 percent | 100 percent |
+| Blur | 0–2 CSS pixels | 2 pixels |
+
+Set an effect's strength to zero to bypass it independently. Settings apply to
+the live field while each clip retains its own envelope phase. Nondefault values
+are retained as bounded `fx_attack`, `fx_curve`, `fx_tail`, `fx_gain`,
+`fx_lowpass`, `fx_brightness`, `fx_saturation`, and `fx_blur` URL parameters.
+No local media names, paths, bytes, or tags enter these parameters. The five-second
+rise bound keeps an arriving deck's rise consistent with the scheduler's shortest
+ten-second planned lifespan.
+
 Each evolving resident rises to a peak over 1.2 seconds, then recedes across its
-planned lifetime. The same presence value controls its gain, a low-pass opening,
+planned lifetime. The same presence value controls its selected gain, low-pass opening,
 brightness, saturation, and up to 2 CSS pixels of blur. The picture becomes
 clearer and the sound opens as the clip rises. These are tuning defaults, not
 an artist-approved preset.
@@ -82,8 +106,11 @@ envelope clock. Reduced-motion mode disables these animated filters. Authored
 exports are unchanged; this feature belongs to the interactive Studio session.
 
 Library and uploaded clips use independent incoming and outgoing audio filters.
-The built-in generated pictures receive image filters, but their synthesized
-voices attach after promotion and do not yet overlap as two independent voices.
+Built-in generated loops also attach one synthesized voice to each entering deck,
+so both sounds overlap through their own filters and gains during the visual
+handoff. Retirement or failure disconnects only that deck's voice; other voices
+retain their scheduling position. Sound unlocked during a handoff attaches both
+visible decks to the same existing audio context.
 If recording is unavailable and Studio uses its live canvas preview, the Filters
 control is disabled; that fallback keeps its existing image and sound behavior.
 
@@ -114,6 +141,14 @@ Confirm that untouched panels keep moving and that no transition clears the stag
 Confirm that panel controls stop at four on the phone, including after uploads
 or opening a shared composition that requests more panels.
 Linux WebKit and an emulated phone viewport are separate automated evidence.
+
+The filter integration retains the accepted continuity and progress verification
+from merged [PR #90](https://github.com/4444J99/tool-video-loop-compositor/pull/90).
+PR #92 at `5dc225a87684012a529bad97770e10a8883d3585` passed CI and packaging,
+but its Apple WebKit run recorded a 2,648-millisecond decoded-frame hold across
+all four panels. The integrated revision needs independent native verification.
+See [the current integration status](CLIP_FILTER_VERIFICATION.md#integration-status--november-8-2026)
+for the exact revisions and runs. Physical iPhone acceptance remains pending.
 
 Tracking: [issue #89](https://github.com/4444J99/tool-video-loop-compositor/issues/89)
 and [PR #88](https://github.com/4444J99/tool-video-loop-compositor/pull/88).

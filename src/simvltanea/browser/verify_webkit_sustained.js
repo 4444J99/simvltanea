@@ -1,6 +1,6 @@
 /* Standalone macOS verification. Never loaded by Studio or substituted for its runtime.
  * NODE_PATH must point to an isolated playwright@1.65.0 installation.
- * Usage: node src/simvltanea/browser/verify_webkit_sustained.js SITE OUTPUT
+ * Usage: node src/simvltanea/browser/verify_webkit_sustained.js SITE OUTPUT [--held-source-diagnostic]
  */
 'use strict';
 
@@ -375,12 +375,16 @@ function analyse(result) {
     unexpectedPaused, globalSuspensions, invalidMedia, nativeErrors, resourceErrors};
 }
 
-function staticServer(site) {
+function staticServer(site, manifestOverride = null) {
   const mime = {'.html': 'text/html', '.js': 'application/javascript', '.json': 'application/json', '.mp4': 'video/mp4'};
   return http.createServer((request, response) => {
     let file;
     try {
       const name = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
+      if (name === '/library/manifest.json' && manifestOverride) {
+        response.writeHead(200, {'Content-Type': 'application/json', 'Content-Length': manifestOverride.length});
+        response.end(manifestOverride); return;
+      }
       file = path.resolve(site, '.' + (name === '/' ? '/index.html' : name));
     } catch (_) { response.writeHead(400).end(); return; }
     if (!file.startsWith(site + path.sep)) { response.writeHead(403).end(); return; }
@@ -477,7 +481,7 @@ function proofJournal(out, name, createStream = fs.createWriteStream) {
   };
 }
 
-async function sustained(webkit, device, base, out, name, query) {
+async function sustained(webkit, device, base, out, name, query, diagnostic = null) {
   const result = {name, progressSchema: 1, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
   let browser; const journal = proofJournal(out, name), errorOffsets = {};
   const journalErrors = async () => {
@@ -498,6 +502,12 @@ async function sustained(webkit, device, base, out, name, query) {
     result.initialSeconds = (performance.now() - initialAt) / 1000;
     result.phase = 'sound-unlock'; await click(page, '#speaker');
     await page.waitForFunction(() => compositionRuntime.audio.context?.state === 'running' && SimvltaneaStudio.snapshot().sound === 'on');
+    if (diagnostic) {
+      result.phase = 'controlled-diagnostic-prelude'; result.prelude = {};
+      await diagnostic.prepare(page, {sample, click, ready, pause, journal}, diagnostic.targets, result.prelude);
+      const {samples: preludeSamples, ...preludeMetadata} = result.prelude;
+      await journal.append('diagnostic-prelude', {...preludeMetadata, samples: preludeSamples.length});
+    }
     result.actualUrl = page.url(); result.initialStudio = await page.evaluate(() => SimvltaneaStudio.snapshot());
     result.phase = 'sustained';
     const began = performance.now(); let nextCoarse = 0, nextReport = 20000;
@@ -530,7 +540,12 @@ async function sustained(webkit, device, base, out, name, query) {
     try { await journalErrors(); } catch (error) { result.failure = String(error.stack || error); }
     try { await journal.close(); } catch (error) { result.failure = String(error.stack || error); }
   }
-  result.summary = analyse(result); save(out, name + '.json', result);
+  result.summary = analyse(result);
+  if (diagnostic) {
+    result.summary.sourceCoverage = diagnostic.coverage(result, diagnostic.targets);
+    if (!result.summary.sourceCoverage.pass) { result.summary.pass = false; result.summary.verdict = 'FAIL'; }
+  }
+  save(out, name + '.json', result);
   console.log(JSON.stringify({name, ...result.summary})); return result.summary;
 }
 
@@ -658,15 +673,17 @@ async function controls(webkit, device, base, out) {
 async function main() {
   const site = path.resolve(process.argv[2] || 'var/site/macos-webkit');
   const out = path.resolve(process.argv[3] || 'var/proofs/macos-webkit');
+  const extra = process.argv.slice(4), heldDiagnostic = extra.includes('--held-source-diagnostic');
   fs.mkdirSync(out, {recursive: true});
   const receipt = {startedAtUtc: new Date().toISOString(), platform: process.platform, arch: process.arch,
     scope: 'macOS WebKit with iPhone viewport; Apple desktop media backend, not a physical iPhone or true-peak proof',
     durationPerBaselineMs: DURATION_MS, sampleIntervalMs: SAMPLE_MS, maximumHoldMs: MAX_HOLD_MS,
     observation: 'Sustained phases only read native/app metadata. Controls and audio probes run afterward in separate browsers.',
     budgetScope: 'Sampled session decks and application preparation leases, not measured hardware decoder pipelines'};
-  let server;
+  let server, diagnosticServer;
   try {
     assert(process.platform === 'darwin', 'This verification requires macOS; no alternative backend is allowed');
+    assert(extra.every(arg => arg === '--held-source-diagnostic'), 'Unknown verification argument');
     receipt.head = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
     receipt.gitStatus = execFileSync('git', ['status', '--short'], {encoding: 'utf8'});
     assert(!receipt.gitStatus, 'Checked-out source is dirty');
@@ -692,8 +709,26 @@ async function main() {
     receipt.controls = await controls(webkit, device, base, out);
     receipt.audio = await audioProof(webkit, out);
     receipt.pass = receipt.seeded.pass && receipt.fresh.pass && receipt.regimeCoverage.pass && receipt.controls.pass && receipt.audio.pass;
+    if (heldDiagnostic) {
+      const diagnostic = require('./verify_webkit_held_sources.js');
+      assert(receipt.sha256['library/manifest.json'] === diagnostic.ORIGIN.sourceManifestSha256,
+        'Diagnostic source manifest differs from the archived failing run');
+      const fixture = diagnostic.buildManifest(JSON.parse(fs.readFileSync(path.join(site, 'library/manifest.json'), 'utf8')),
+        file => fs.readFileSync(path.join(site, 'library', file)));
+      save(out, 'held-source-manifest.json', fixture.manifest);
+      save(out, 'held-source-origin.json', {origin: diagnostic.ORIGIN, targets: fixture.targets, query: fixture.query,
+        helperSha256: sha256(path.join(__dirname, 'verify_webkit_held_sources.js')),
+        subsetSha256: sha256(path.join(out, 'held-source-manifest.json'))});
+      diagnosticServer = staticServer(site, fs.readFileSync(path.join(out, 'held-source-manifest.json')));
+      await new Promise(resolve => diagnosticServer.listen(0, '127.0.0.1', resolve));
+      const diagnosticBase = `http://127.0.0.1:${diagnosticServer.address().port}/`;
+      receipt.heldSources = await sustained(webkit, device, diagnosticBase, out, 'held-sources', fixture.query,
+        {...diagnostic, targets: fixture.targets});
+      receipt.pass = receipt.pass && receipt.heldSources.pass;
+    }
   } catch (error) { receipt.pass = false; receipt.failure = String(error.stack || error); }
   finally {
+    if (diagnosticServer) { diagnosticServer.closeAllConnections(); await new Promise(resolve => diagnosticServer.close(resolve)); }
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
     receipt.finishedAtUtc = new Date().toISOString(); save(out, 'receipt.json', receipt);
     console.log(JSON.stringify({pass: receipt.pass, head: receipt.head, receipt: path.join(out, 'receipt.json')}));
@@ -702,4 +737,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = {analyse, classifyResourceErrors, proofJournal};
+module.exports = {analyse, classifyResourceErrors, proofJournal, sample, staticServer, ready, click};
