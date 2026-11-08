@@ -42,7 +42,7 @@ class StudioVoiceSettlementTests(unittest.TestCase):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         self.addCleanup(lambda: self.assertEqual(errors, []))
-        page.goto('https://studio.test/?gen=1&seed=99&mix=s3.2&evolve=0', wait_until='domcontentloaded')
+        page.goto('https://studio.test/watch.html?gen=1&seed=99&mix=s3.2&evolve=0', wait_until='domcontentloaded')
         page.evaluate(generated.VOICE_PROBE)
         page.evaluate('''() => {
           window.live=compositionRuntime;window.exportSettled=false;

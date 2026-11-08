@@ -518,6 +518,12 @@ function staticServer(site, manifestOverride = null) {
   });
 }
 
+function studioPageUrl(base, query = '') {
+  const url = new URL('watch.html', base);
+  url.search = query;
+  return url.href;
+}
+
 async function ready(page) {
   await page.waitForFunction(() => {
     const runtime = globalThis.compositionRuntime, studio = globalThis.SimvltaneaStudio?.snapshot();
@@ -632,7 +638,7 @@ function preludeJournalMetadata(prelude) {
 }
 
 async function sustained(webkit, device, base, out, name, query, diagnostic = null) {
-  const result = {name, progressSchema: 1, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
+  const result = {name, progressSchema: 1, requestedUrl: studioPageUrl(base, query), samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
   let browser, page; const journal = proofJournal(out, name), errorOffsets = {};
   const journalErrors = async () => {
     for (const kind of ['errors', 'consoleErrors', 'httpErrors', 'requestFailures']) {
@@ -749,7 +755,7 @@ async function controls(webkit, device, base, out) {
     const context = await browser.newContext(device); page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
     result.phase = 'navigation';
-    await page.goto(base + '?seed=528316659&mix=s0.1.2.3&evolve=0&proof=1');
+    await page.goto(studioPageUrl(base, '?seed=528316659&mix=s0.1.2.3&evolve=0&proof=1'));
     await documentClock(page, result); await ready(page); result.phase = 'controls';
     stopSampling = sampleControls(page, result);
     await click(page, '#speaker');
@@ -855,7 +861,7 @@ async function main() {
     assert(!receipt.gitStatus, 'Checked-out source is dirty');
     receipt.os = execFileSync('sw_vers', {encoding: 'utf8'}).trim();
     receipt.stage = site;
-    receipt.sha256 = Object.fromEntries(['index.html', 'runtime.js', 'studio.js', 'compiler.js', 'layouts.json',
+    receipt.sha256 = Object.fromEntries(['index.html', 'watch.html', 'runtime.js', 'studio.js', 'compiler.js', 'layouts.json',
       'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js',
       'lab_compiler.js', 'lab_layouts.js', 'library/manifest.json']
       .map(name => [name, sha256(path.join(site, name))]));
@@ -935,4 +941,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = {analyse, classifyResourceErrors, proofJournal, preludeJournalMetadata, sample, staticServer, ready, click};
+module.exports = {analyse, classifyResourceErrors, proofJournal, preludeJournalMetadata, sample, staticServer, studioPageUrl, ready, click};

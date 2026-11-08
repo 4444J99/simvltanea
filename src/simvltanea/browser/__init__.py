@@ -1,5 +1,6 @@
 """Public API for the browser feature."""
 from . import browser_runtime, browser_studio, layout_bundle
+from .browser_iterations import ARCHIVED_ITERATIONS, ENGINEERED_ITERATIONS
 from .browser_runtime import (
     HERE,
     compile_plan,
@@ -20,6 +21,8 @@ __all__ = [
     'browser_runtime',
     'browser_studio',
     'layout_bundle',
+    'ARCHIVED_ITERATIONS',
+    'ENGINEERED_ITERATIONS',
     'HERE',
     'compile_plan',
     'build_preview',

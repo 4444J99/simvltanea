@@ -151,6 +151,27 @@ def path_violation(path: str, layout: Layout = LAYOUT) -> str | None:
             return None
         return ".vscode/ allows JSON configuration files directly inside the folder"
     if area == "archive":
+        if path in policy.get("ENGINEERED_ITERATION_FILES", frozenset()):
+            return None
+        for base, extensions in policy.get("ENGINEERED_ITERATION_SOURCES", {}).items():
+            if not path.startswith(base + "/"):
+                continue
+            archived = PurePosixPath(path[len(base)+1:])
+            if archived.as_posix() in {"manifest.json", "README.md"}:
+                return None
+            if len(archived.parts) >= 2 and archived.parts[0] == "source":
+                source = PurePosixPath(*archived.parts[1:])
+                excluded = {"data", "media", "still", "stills", "build", "dist", "node_modules",
+                            ".git", ".venv", ".pytest_cache", "runtime-proof"}
+                excluded.update(PurePosixPath(layout.relative(role)).name for role in
+                                ("generated", "work", "samples", "renders", "site", "packages",
+                                 "proofs", "artifact_output"))
+                in_source = source.parts[0] == "src" and len(source.parts) >= 2
+                in_layouts = source.parts[:2] == ("examples", "layout-presets") and source.suffix == ".json"
+                if ((in_source or in_layouts or source.as_posix() == "pyproject.toml") and
+                        source.suffix in extensions and not excluded.intersection(source.parts[:-1])):
+                    return None
+            return "engineered iteration archives allow registered source inputs, manifest.json and README.md; outputs and media stay in var/"
         if len(parts) >= 3 and parts[1] == "incubation":
             return None
         if path == layout.relative("archive") + "/PROJECT_MANIFEST.md" or path in policy["RAW_INTAKE_FILES"]:
@@ -159,7 +180,7 @@ def path_violation(path: str, layout: Layout = LAYOUT) -> str | None:
             return None
         if len(parts) >= 4 and parts[1] == "chatgpt" and parts[2] in policy["ARCHIVE_CATEGORIES"]:
             return None
-        return "archive/ material belongs in a documented archive/chatgpt/ category"
+        return "archive/ material belongs in a documented archive/chatgpt/ category or registered engineered iteration"
     if area == "evidence":
         if path in policy["PROOF_FILES"]:
             return None

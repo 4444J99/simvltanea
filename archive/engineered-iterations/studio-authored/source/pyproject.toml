@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simvltanea"
+version = "0.1.0"
+description = "Independent Loop Compositor: simultaneous audiovisual composition and rendering"
+requires-python = ">=3.12"
+
+[project.scripts]
+independent-loop-compositor = "independent_loop_compositor.cli:main"
+
+[project.optional-dependencies]
+verification = ["Pillow==13.0.0", "playwright==1.57.0", "pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/simvltanea", "tools", "tests"]
+python_files = ["test_*.py"]
+addopts = "-p no:asyncio --import-mode=importlib"
+pythonpath = [".", "src"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+simvltanea = ["py.typed", "layout.toml"]
+independent_loop_compositor = ["py.typed"]
+"simvltanea.browser" = ["*.js", "shared_engine_pin.json"]
+
+[tool.simvltanea]
+layout = "src/simvltanea/layout.toml"

@@ -189,6 +189,24 @@ process.stdout.write(JSON.stringify({pass: resourceErrors.unexpected.length === 
 
 
 class WebKitVerifierTests(unittest.TestCase):
+    def test_studio_proofs_target_watch_and_preserve_seeded_controls(self):
+        program = r'''
+const {studioPageUrl} = require(process.argv[1]);
+const urls = [
+  studioPageUrl('http://127.0.0.1:8456/', '?seed=7&mix=s0.1.2.3&evolve=0&proof=1'),
+  studioPageUrl('https://example.invalid/subpath/', '?proof=1'),
+  studioPageUrl('https://example.invalid/subpath/index.html'),
+];
+process.stdout.write(JSON.stringify(urls));
+'''
+        completed = subprocess.run(['node', '-e', program, str(VERIFIER)], check=True,
+                                   capture_output=True, text=True, timeout=15)
+        self.assertEqual(json.loads(completed.stdout), [
+            'http://127.0.0.1:8456/watch.html?seed=7&mix=s0.1.2.3&evolve=0&proof=1',
+            'https://example.invalid/subpath/watch.html?proof=1',
+            'https://example.invalid/subpath/watch.html',
+        ])
+
     def assert_refused(self, mutation: str, check: str) -> dict:
         summary = classify(mutation)
         self.assertFalse(summary['pass'], summary)
