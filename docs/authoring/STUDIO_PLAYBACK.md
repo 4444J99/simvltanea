@@ -50,6 +50,9 @@ variants and local files. A compilation failure can reuse the previous accepted
 snapshot only when it still describes the live residents; otherwise export reports
 unavailable metadata until a later change settles. Generated voices continue
 scheduling independently while export metadata is pending.
+Edits made while built-in clips are recording wait for that preparation. The
+latest requested count, family, shuffle and share link survive the readiness
+retry, while the existing residents keep playing.
 
 ## Rhythm and controls
 

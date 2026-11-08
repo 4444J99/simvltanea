@@ -746,7 +746,7 @@
   const digests = new WeakMap();
   const sound = {unlocked: false, muted: false, volume: 0.7, mixer: null};
   let selection = null, session = null, exportFailure = null, waiting = [], launches = 0, hold = reduced, paused = false;
-  let lastRefusals = [], busy = 0, recordMode = 'pending', previewClock = null;
+  let lastRefusals = [], busy = 0, recordMode = 'pending', builtinRecording = null, previewClock = null;
   const liveVoices = new Map();
   let liveVoiceClock = null;
   let ecosystem = new root.SimvltaneaEcosystem.Engine({seed: parseSeed(search) ?? 1});
@@ -1245,7 +1245,13 @@
     renderPreview();
     if ((!layout.bundle && !layout.own) || !selection) { finish(); return false; }
     if (!itemsReady(items)) {
-      if (usingLibrary() && items.length) {
+      if (sourcePool === builtins && builtinRecording) {
+        // Recording is preparation, not a refused edit. Keep this intent and
+        // its export waiters pending, just as for a library fetch below.
+        await builtinRecording;
+        if (!ownsIntent()) return false;
+        if (itemsReady(items)) return launch({atLoopBoundary, shareMix});
+      } else if (usingLibrary() && items.length) {
         const ok = await loadClips(items);
         if (token !== launches) return false;
         // A local import can change pools while this library fetch is pending.
@@ -1551,7 +1557,6 @@
       }
     }
     recordMode = 'recorded';
-    if (!own.length) launch();
   }
 
   // ---- The visitor's own files ----------------------------------------------------
@@ -1850,7 +1855,8 @@
     renderControls();
     renderPreview();
     sync();
-    recordBuiltins();
+    builtinRecording = recordBuiltins();
+    launch();
   }
 
   /* After a roll plays, the next shuffle's seed is chosen and its clips fetched while the page is
@@ -2041,7 +2047,7 @@
     if (selection) selection = {...selection, retained: new Map()};
     const params = new URLSearchParams(root.location.search); params.set('loop', loopMode);
     history.replaceState(null, '', `${root.location.pathname}?${params}`);
-    renderActivity(); launch();
+    renderActivity(); launch({shareMix: true});
   });
 
   // ---- Controls -------------------------------------------------------------------
@@ -2239,7 +2245,8 @@
     renderControls();
     renderPreview();
     sync();
-    if (library.active) launch(); else recordBuiltins();
+    if (library.active) launch();
+    else { builtinRecording = recordBuiltins(); launch(); }
   });
 
   renderSound();

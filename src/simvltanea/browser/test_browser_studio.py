@@ -66,6 +66,23 @@ MEDIA_BUDGET_PROBE = r'''(() => {
     HTMLMediaElement.prototype[method]=function(...args){const result=native.apply(this,args);sample();return result;};}
   const tick=()=>{sample();requestAnimationFrame(tick)};requestAnimationFrame(tick);
 })();'''
+BUILTIN_RECORDING_GATE = r'''(() => {
+  const NativeRecorder = MediaRecorder;
+  let next = 0;
+  window.heldBuiltinRecordings = new Map();
+  window.MediaRecorder = class extends NativeRecorder {
+    constructor(...args) { super(...args); this.builtinIndex = next++; }
+    set onstop(handler) {
+      super.onstop = event => heldBuiltinRecordings.set(this.builtinIndex, () => handler.call(this, event));
+    }
+  };
+  window.releaseBuiltinRecordings = (indices = null) => {
+    for (const [index, release] of heldBuiltinRecordings) {
+      if (indices && !indices.includes(index)) continue;
+      heldBuiltinRecordings.delete(index); release();
+    }
+  };
+})();'''
 REPOSITORY = HERE.parents[2]
 # Twelve distinct H.264 MP4 loops with AAC audio and pairwise different periods.
 LOOPS = [(f'loop-{index}.mp4', seconds, hue) for index, (seconds, hue) in
@@ -853,6 +870,79 @@ class StudioBrowserTests(unittest.TestCase):
         self.playing(page)
         self.assertEqual(self.allowed(page), [])
 
+    def test_recording_completion_preserves_pending_keyboard_edits_and_share_link(self):
+        # Delay only delivery of real MediaRecorder stop events. The controls,
+        # compiler, recorded bytes, and playback all use the real implementation.
+        page = self.open('?seed=5', init_script=BUILTIN_RECORDING_GATE)
+        page.wait_for_function('() => heldBuiltinRecordings.size === 12')
+        initial = self.snapshot(page)
+        page.locator('body').press('ArrowRight' if initial['panels'] < 7 else 'ArrowLeft')
+        if self.snapshot(page)['family'] == 'authored':
+            self.tap(page, '#families button[data-family="strips"]')
+        while self.snapshot(page)['panels'] < 9:
+            self.tap(page, '#more')
+        self.tap(page, '#families button[data-family="authored"]')
+        self.assertEqual(self.snapshot(page)['panels'], 7)
+        page.locator('body').press('r')
+        requested = self.snapshot(page)
+        self.assertNotEqual(requested['seed'], initial['seed'])
+        self.assertEqual(requested['builtinsReady'], 0)
+        page.evaluate('releaseBuiltinRecordings()')
+        accepted = self.settled(page)
+        self.assertEqual(accepted['seed'], requested['seed'])
+        self.assertEqual(accepted['family'], requested['family'])
+        self.assertEqual(accepted['selection'], requested['selection'])
+        self.assertEqual(accepted['panels'], 7)
+        self.assertRegex(page.evaluate('location.search'), rf'^\?seed={requested["seed"]}&mix=[sa][\d.]+$')
+        self.playing(page, 7)
+
+    def test_pending_builtin_edit_keeps_new_intent_and_export_waiter(self):
+        page = self.open('?seed=5&mix=s0.1&evolve=0', init_script=BUILTIN_RECORDING_GATE)
+        page.wait_for_function('() => heldBuiltinRecordings.size === 12')
+        page.evaluate('releaseBuiltinRecordings([0, 1])')
+        page.wait_for_function('() => SimvltaneaStudio.snapshot().builtinsReady === 2')
+        self.tap(page, '#families button[data-family="authored"]')
+        self.settled(page)
+        self.playing(page, 2)
+        self.tap(page, '#more')
+        pending = page.evaluate('''async () => {
+          window.pendingRecordingExport = null;
+          compositionIO.plan().then(plan => { window.pendingRecordingExport = plan; });
+          await Promise.resolve();
+          return {snapshot:SimvltaneaStudio.snapshot(), exported:pendingRecordingExport !== null};
+        }''')
+        page.evaluate('releaseBuiltinRecordings()')
+        accepted = self.settled(page)
+        self.assertEqual(pending['snapshot']['panels'], 3, 'recording must not discard the requested third panel')
+        self.assertFalse(pending['exported'], 'export must wait for the pending user intent')
+        self.assertEqual(accepted['panels'], 3)
+        self.playing(page, 3)
+        page.wait_for_function('() => pendingRecordingExport !== null')
+        self.assertEqual(page.evaluate('pendingRecordingExport.tracks.length'), 3)
+
+    def test_recording_completion_preserves_initial_explicit_mix(self):
+        page = self.open('?seed=5&mix=s0.1', init_script=BUILTIN_RECORDING_GATE)
+        page.wait_for_function('() => heldBuiltinRecordings.size === 12')
+        page.evaluate('releaseBuiltinRecordings()')
+        accepted = self.settled(page)
+        self.assertEqual(accepted['selection'], ['drift', 'bands'])
+        self.assertEqual(accepted['family'], 'strips')
+        self.assertEqual(page.evaluate('location.search'), '?seed=5&mix=s0.1')
+        self.playing(page, 2)
+
+    def test_recording_completion_preserves_family_only_share_intent(self):
+        page = self.open('?seed=5', init_script=BUILTIN_RECORDING_GATE)
+        page.wait_for_function('() => heldBuiltinRecordings.size === 12')
+        self.tap(page, '#families button[data-family="authored"]')
+        requested = self.snapshot(page)
+        page.evaluate('releaseBuiltinRecordings()')
+        accepted = self.settled(page)
+        self.assertEqual(accepted['selection'], requested['selection'])
+        self.assertEqual(accepted['family'], 'authored')
+        self.assertEqual(accepted['panels'], 7)
+        self.assertRegex(page.evaluate('location.search'), r'^\?seed=5&mix=a[\d.]+$')
+        self.playing(page, 7)
+
     def test_picker_replaces_the_loops_with_the_visitors_own(self):
         page = self.open('?seconds=30')
         self.assertEqual(page.get_attribute('#files', 'accept'), 'video/*,.mov,.mp4,.m4v,.webm,.json,application/json')
@@ -1422,11 +1512,20 @@ class StudioLibraryTests(unittest.TestCase):
         self.assertEqual(self.snapshot(page)['panels'], 4)
         self.assertTrue(page.locator('#more').is_disabled())
         for _ in range(3):
-            before = self.snapshot(page)['seed']
+            before = self.snapshot(page)
             self.tap(page, '#shuffle')
-            page.wait_for_function('seed=>SimvltaneaStudio.snapshot().seed!==seed', arg=before)
-            self.showing(page, self.snapshot(page)['selection'])
-            self.assertEqual(self.snapshot(page)['panels'], 4)
+            page.wait_for_function('seed=>SimvltaneaStudio.snapshot().seed!==seed', arg=before['seed'])
+            requested = self.snapshot(page)['selection']
+            accepted = self.settled(page)
+            # Surviving residents keep their slots even when the requested
+            # shuffle lists those clips in a different order.
+            self.assertCountEqual(accepted['selection'], requested)
+            self.assertEqual(len(set(accepted['selection'])), 4)
+            for slot, clip in enumerate(before['selection']):
+                if clip in requested:
+                    self.assertEqual(accepted['selection'][slot], clip)
+            self.showing(page, accepted['selection'])
+            self.assertEqual(accepted['panels'], 4)
         budget = page.evaluate('mediaBudget')
         self.assertLessEqual(budget['populated'], 5, budget)
         self.assertLessEqual(budget['playing'], 5, budget)
