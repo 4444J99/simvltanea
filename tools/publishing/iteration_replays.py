@@ -222,6 +222,7 @@ REPLAY_JS = r"""'use strict';
   const cache = new Map();
   const sourcePaths = new Map();
   let userError = '';
+  let pauseRequested = false;
   async function digest(buffer) {
     if (!crypto.subtle) throw new Error('A secure context is required to verify public media.');
     const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', buffer));
@@ -265,15 +266,42 @@ REPLAY_JS = r"""'use strict';
   // Exposed for provenance and browser verification, not an alternate renderer.
   window.historicalReplay = {audioEnabled, sourcePaths};
   const showError = error => { userError = String(error.message || error); status.textContent = userError; };
+  function settlePause(engine) {
+    if (!pauseRequested) return;
+    if (!engine || engine.error || engine.finished || typeof engine.pause !== 'function') {
+      pauseRequested = false;
+      return;
+    }
+    // The v1.1 transport rejects pause during an asynchronous source change.
+    // Let that original transition finish, then use its own pause operation.
+    if (!engine.ready || engine.starting || engine.initializing ||
+        [...engine.nodes.values()].some(node => node.busy)) return;
+    if (!engine.running) { pauseRequested = false; return; }
+    try {
+      engine.pause();
+      if (!engine.running) pauseRequested = false;
+    } catch (error) {
+      if (String(error.message || error) !== 'Media transition is still pending') {
+        pauseRequested = false;
+        showError(error);
+      }
+    }
+  }
+  function requestPause() {
+    const engine = window.compositionRuntime;
+    if (!engine || typeof engine.pause !== 'function' || engine.error || engine.finished) return;
+    pauseRequested = true;
+    userError = '';
+    refresh();
+  }
   play.addEventListener('click', async () => {
+    pauseRequested = false;
     const engine = window.compositionRuntime;
     if (!engine?.ready || engine.error || engine.running) return;
     userError = '';
     try { await engine.start(); } catch (error) { showError(error); }
   });
-  if (pause) pause.addEventListener('click', () => {
-    try { window.compositionRuntime.pause(); userError = ''; } catch (error) { showError(error); }
-  });
+  if (pause) pause.addEventListener('click', requestPause);
   document.querySelector('#restart').addEventListener('click', () => location.reload());
   document.querySelector('#orientation').addEventListener('click', event => {
     const portrait = host.classList.toggle('portrait');
@@ -282,22 +310,22 @@ REPLAY_JS = r"""'use strict';
   });
   function refresh() {
     const engine = window.compositionRuntime;
+    settlePause(engine);
     if (!engine) return;
     play.disabled = !engine.ready || Boolean(engine.error) || engine.running || engine.finished || engine.starting;
-    if (pause) pause.disabled = !engine.running || Boolean(engine.error) || engine.starting;
+    if (pause) pause.disabled = (!engine.running && !engine.starting) || Boolean(engine.error) || pauseRequested;
     play.textContent = engine.frame > 0 && !engine.finished && pause ? 'Resume' : 'Play';
     if (engine.error) status.textContent = 'Playback unavailable: ' + engine.error;
     else if (userError) status.textContent = userError;
     else if (engine.finished) status.textContent = 'Replay finished. Restart to play again.';
+    else if (pauseRequested) status.textContent = 'Pausing…';
     else if (engine.running) status.textContent = 'Playing · ' + (audioEnabled ? 'source audio enabled' : 'silent') + ' · ' + (engine.orientation || 'landscape');
     else if (engine.ready) status.textContent = (engine.frame > 0 ? 'Paused' : 'Ready') + ' · ' + (audioEnabled ? 'source audio enabled; press Play' : 'silent replay');
   }
   setInterval(refresh, 200);
   document.addEventListener('visibilitychange', () => {
     const engine = window.compositionRuntime;
-    if (document.hidden && engine?.running && typeof engine.pause === 'function') {
-      try { engine.pause(); } catch (error) { showError(error); }
-    }
+    if (document.hidden && (engine?.running || engine?.starting)) requestPause();
   });
   window.addEventListener('pagehide', () => {
     const engine = window.compositionRuntime;

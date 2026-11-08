@@ -224,6 +224,64 @@ async function load(corrupt){
         result = subprocess.run(["node", "-e", harness], input=json.dumps(payload), text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @unittest.skipUnless(shutil.which("node"), "Node is unavailable for replay transport checks")
+    def test_pause_waits_for_native_transition_and_hidden_tab(self):
+        runtime_source = self.files["iterations/spatial-audio/runtime.js"].decode()
+        native_pause = runtime_source.split("runtime.pause =", 1)[1].split("runtime.resume =", 1)[0]
+        harness = r'''const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const input=JSON.parse(fs.readFileSync(0,'utf8'));
+const elements=new Map(),events=new Map();let refresh,pauseCalls=0,mediaPauses=0;
+const element=()=>({listeners:new Map(),addEventListener(type,fn){this.listeners.set(type,fn);},
+ classList:{toggle(){return false;}}});
+const loop={busy:true,media:{pause(){mediaPauses++;}}};
+const engine={ready:true,running:true,starting:false,finished:false,error:null,frame:75,
+ generation:0,plan:{fps:30,frames:900},nodes:new Map([['loop-1',loop]]),
+ async start(){this.running=true;}};
+// Run the exact archived pause implementation: it throws if called while busy.
+new Function('runtime','compositionTime','scheduleLoopGain','stopSoundtrack','setStatus','record',
+ 'runtime.pause ='+input.nativePause)(engine,()=>2.5,()=>{},()=>{},()=>{},()=>{});
+const nativePause=engine.pause;engine.pause=()=>{pauseCalls++;return nativePause();};
+const document={hidden:false,body:{dataset:{audioPlan:'true',iteration:'spatial-audio'}},
+ addEventListener(type,fn){events.set(type,fn);},
+ querySelector(key){if(!elements.has(key))elements.set(key,element());return elements.get(key);}};
+const context={window:{compositionRuntime:engine,addEventListener(){}},document,
+ location:{href:'https://example.test/iterations/spatial-audio/',origin:'https://example.test',search:'?audio=1'},
+ URL,URLSearchParams,Map,Array,Uint8Array,Error,
+ setInterval(fn,ms){assert.equal(ms,200);refresh=fn;}};
+vm.runInNewContext(input.script,context);
+const clickPause=()=>elements.get('#pause').listeners.get('click')();
+const label=()=>elements.get('#replay-status').textContent;
+(async()=>{
+ clickPause();assert.equal(label(),'Pausing…');assert.equal(pauseCalls,0);assert.equal(engine.running,true);
+ refresh();assert.equal(pauseCalls,0);
+ loop.busy=false;refresh();assert.equal(pauseCalls,1);assert.equal(mediaPauses,1);
+ assert.equal(engine.running,false);assert.match(label(),/^Paused/);
+ refresh();assert.equal(pauseCalls,1);
+
+ engine.running=true;loop.busy=true;document.hidden=true;events.get('visibilitychange')();
+ assert.equal(label(),'Pausing…');assert.equal(pauseCalls,1);
+ loop.busy=false;refresh();assert.equal(pauseCalls,2);assert.equal(engine.running,false);
+ document.hidden=false;events.get('visibilitychange')();assert.equal(engine.running,false);
+
+ engine.starting=true;document.hidden=true;events.get('visibilitychange')();
+ assert.equal(label(),'Pausing…');assert.equal(pauseCalls,2);
+ engine.starting=false;engine.running=true;refresh();assert.equal(pauseCalls,3);assert.equal(engine.running,false);
+
+ for(const terminal of ['finished','error']){
+  engine.running=true;loop.busy=true;clickPause();
+  engine[terminal]=terminal==='error'?'Media decode failed':true;refresh();
+  engine[terminal]=terminal==='error'?null:false;loop.busy=false;refresh();
+  assert.equal(pauseCalls,3,'terminal state must cancel a stale pause request');
+ }
+ engine.running=false;engine.starting=true;clickPause();
+ engine.starting=false;document.hidden=false;
+ await elements.get('#play').listeners.get('click')();refresh();
+ assert.equal(engine.running,true);assert.equal(pauseCalls,3,'explicit Play must cancel the queued pause');
+})().catch(error=>{console.error(error);process.exitCode=1;});'''
+        result = subprocess.run(["node", "-e", harness], input=json.dumps({"script": REPLAY_JS, "nativePause": native_pause}),
+                                text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     @unittest.skipUnless(shutil.which("node"), "Node is unavailable for historical JavaScript validator checks")
     def test_real_historical_validators_accept_adapter_normalized_plans(self):
         # Exercise the archived validator itself.  The same public-path to
