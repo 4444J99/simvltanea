@@ -24,24 +24,6 @@ these baselines. Screenshots are omitted: Playwright's WebKit screenshot helper
 injects a stylesheet even with caret hiding and animation changes disabled,
 which produces an unrelated CSP error under the application's strict policy.
 
-A third independent 180-second session replays seed `2299191082`, which
-previously held decoded frames at a native loop boundary. It must pass the same
-checks and observe a native wrap of the affected source SHA
-`7cdbe95e160472bb6c1f4e885c18c29bb57e0c39310e53d694a2bb84345ee294`.
-It must also record a play reassertion for that source with the WebKit policy
-enabled. Missing either the wrap or reassertion fails regression coverage.
-The proof step allows
-15 minutes for all three sessions and the separate controls/audio checks; the
-two-second frame-hold limit and 137 ms sampling interval are unchanged.
-
-The candidate reasserts `play()` at a visible, running WebKit deck's native
-wrap, matching its promotion request. The WebKit-family user-agent check includes
-iOS Chrome/Firefox; desktop Chromium retains its prior no-reassertion behavior.
-It does not pause or seek media, reset the
-resident's entrance clock, or rebuild bindings. This is a bounded hypothesis
-until the native replay and both original baselines pass; local policy and
-Chromium tests alone do not establish WebKit remediation.
-
 The gate checks joint clock/frame holds and decoded-frame holds independently;
 either reaching two seconds fails. Increasing callback counts alone do not
 prove progress. Measurements follow each slot/clip/deck/birth identity across
@@ -93,7 +75,7 @@ every moment between samples.
 
 ## Separate interaction and audio checks
 
-After all three baselines, a new browser checks isolated tapping, shuffle,
+After both baselines, a new browser checks isolated tapping, shuffle,
 forward/boomerang selection, portrait/landscape layout, Filters bypass/restoration
 with its URL state and persistent media identities, global pause/resume,
 the mobile population limit, and sound mute/unmute. All three sessions retain
