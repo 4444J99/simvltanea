@@ -221,10 +221,15 @@ gesture it presents that same plan as plan v2 `spatial_loops`, with
 
 ## Run it locally
 
-`stage_studio(output)` writes five flat files with relative URLs:
-`index.html`, `runtime.js`, `compiler.js`, `studio.js`, and `layouts.json`. It
+`stage_studio(output)` writes ten flat files with relative URLs:
+`index.html`, `runtime.js`, `compiler.js`, `studio.js`, `layouts.json`,
+`lab.html`, `lab_model.js`, `lab_engine.js`, `lab_ui.js`, and `lab_audio.js`. It
 refuses a directory that holds anything else, and staging twice yields
 identical bytes.
+
+The **Effects Lab** link opens a separate live instrument for overlapping
+visual layers, swept comb and pass filters, and independently evolving sound
+and picture clocks. See [Effects Lab](EFFECTS_LAB.md) for its controls and limits.
 
 ```bash
 PYTHONPATH=src python3 -m simvltanea.browser.browser_studio --output var/site/studio

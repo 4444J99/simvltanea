@@ -24,6 +24,7 @@ import http.server
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -237,7 +238,8 @@ class StageStudioTests(unittest.TestCase):
         output = self.temp / 'nested' / 'studio'
         stage_studio(output)
         self.assertEqual(sorted(path.name for path in output.iterdir()), sorted(STUDIO_FILES))
-        self.assertEqual(set(STUDIO_FILES), {'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json'})
+        self.assertEqual(set(STUDIO_FILES), {'index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json',
+                                           'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js', 'lab_audio.js'})
         self.assertTrue(all(path.is_file() and not path.is_symlink() for path in output.iterdir()))
         runtime_bytes = (output / 'runtime.js').read_bytes()
         self.assertIn(b'SimvltaneaLive', runtime_bytes)
@@ -294,6 +296,25 @@ class StageStudioTests(unittest.TestCase):
     def test_staged_text_is_public_safe_and_relative(self):
         output = self.temp / 'public'
         stage_studio(output)
+        # Only the Lab's fixed public catalog and its CSP may use HTTPS.
+        # Keep exact URLs, rather than permitting arbitrary paths on these hosts.
+        lab_https_urls = {
+            'lab.html': {'https://upload.wikimedia.org'},
+            'lab_ui.js': {
+                'https://upload.wikimedia.org',
+                'https://creativecommons.org/publicdomain/zero/1.0/deed.en',
+                'https://commons.wikimedia.org/wiki/File:Rainy_night_in_Sham_Shui_Po.webm',
+                'https://commons.wikimedia.org/wiki/File:StreamOfFlowingWater.webm',
+                'https://commons.wikimedia.org/wiki/File:Flowing-water-100019.ogg',
+                'https://commons.wikimedia.org/wiki/File:Flowing-water-100019.ogg#Licensing',
+                'https://commons.wikimedia.org/wiki/File:Compressor_motor.ogg',
+                'https://commons.wikimedia.org/wiki/File:Compressor_motor.ogg#Licensing',
+                'https://upload.wikimedia.org/wikipedia/commons/transcoded/3/36/Rainy_night_in_Sham_Shui_Po.webm/Rainy_night_in_Sham_Shui_Po.webm.480p.vp9.webm',
+                'https://upload.wikimedia.org/wikipedia/commons/transcoded/e/e0/StreamOfFlowingWater.webm/StreamOfFlowingWater.webm.480p.vp9.webm',
+                'https://upload.wikimedia.org/wikipedia/commons/transcoded/2/26/Flowing-water-100019.ogg/Flowing-water-100019.ogg.mp3',
+                'https://upload.wikimedia.org/wikipedia/commons/transcoded/d/db/Compressor_motor.ogg/Compressor_motor.ogg.mp3',
+            },
+        }
         for path in output.iterdir():
             text = path.read_text(encoding='utf-8')
             with self.subTest(file=path.name):
@@ -301,7 +322,8 @@ class StageStudioTests(unittest.TestCase):
                 self.assertNotIn(str(Path.home()), text)
                 self.assertNotIn(str(HERE), text)
                 self.assertNotIn('http://', text.replace('http://www.w3.org', ''))
-                self.assertNotIn('https://', text)
+                self.assertEqual(set(re.findall(r'''https://[^\s"'<>;]+''', text)),
+                                 lab_https_urls.get(path.name, set()))
         self.assertFalse([path for path in output.iterdir() if path.name.startswith('.')])
         html = (output / 'index.html').read_text()
         self.assertIn("default-src 'none'", html)
