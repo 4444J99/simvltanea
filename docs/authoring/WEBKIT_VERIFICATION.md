@@ -18,7 +18,13 @@ fresh composition whose resulting seed/URL is retained. Both enable sound by
 clicking the speaker. They read native current time and decoded media time every
 137 ms, with application snapshots each second. Samples also retain the audio
 clock, gain values and targets, each existing deck's source URL and native
-duration, and explicit numeric playback-quality counters. No init script, prototype
+duration, and explicit numeric playback-quality counters. In `?proof=1`, the
+existing native frame callback also maintains distinct-media-time counters,
+source epochs, and a monotonic maximum foreground gap. A preallocated 128-point
+ring retains distinct callback changes; up to 16 retired sources retain their
+final bounded trace and native error. Traces are read once per second, while
+counters and maximum gaps are read on every poll. No additional frame observer
+or playback action is installed. No init script, prototype
 patch, analyser, canvas read, or retained-video registry is installed during
 these baselines. Screenshots are omitted: Playwright's WebKit screenshot helper
 injects a stylesheet even with caret hiding and animation changes disabled,
@@ -26,11 +32,27 @@ which produces an unrelated CSP error under the application's strict policy.
 
 The gate checks joint clock/frame holds and decoded-frame holds independently;
 either reaching two seconds fails. Increasing callback counts alone do not
-prove progress. Measurements follow each slot/clip/deck/birth identity across
-REST transitions, because dimmed residents must keep moving. REST intervals
-also have separate hold and pause measurements. Unexpected pauses and global
-suspension fail separately. Outgoing residents remain measured during
-transitions rather than hiding holds behind the pending state.
+prove progress. Two polling samples can contain the same decoded time after
+one or more complete loops. Distinct native media-time changes and the retained
+maximum gap resolve that ambiguity, including stalls that begin and recover
+entirely between polls. Source retirement and replacement cannot erase a prior
+maximum. Measurements include incoming visible decks and outgoing residents
+throughout their transition.
+
+Current receipts declare `progressSchema: 1`. Every sample must include supported,
+consistent source identities, monotonic counters and maxima, and matching active
+node/deck observations. Missing or malformed coverage fails the gate. Historical
+receipts without this telemetry cannot prove continuity across a polling gap of
+two seconds or more: reanalysis reports `INCONCLUSIVE` with `pass: false`, rather
+than inventing a continuous freeze from matching endpoint phases. A dense,
+observed hold still reports `FAIL`; no threshold has been relaxed. Both verdicts
+block a successful verification receipt.
+
+REST remains visible playback and never resets progress. REST intervals also
+have separate hold and pause measurements. Only explicit global pause time is
+excluded from the tracker; active no-progress time on either side is retained.
+The sustained run itself never pauses, so a monotonic session suspension counter
+also rejects a pause/resume hidden between host samples.
 
 Receipts also require four persistent foreground slots, native wraps, a successor
 in every initial slot, and no native media, runtime, page, HTTP, or unexplained
@@ -52,9 +74,13 @@ Three narrowly evidenced resource outcomes are reported separately:
   Asynchronous delivery can lag disposal by seconds; the receipt records that
   delay without imposing an unrelated timing limit on confirmed disposal.
 - A plain cancelled Blob request is followed within 1,000 ms by two distinct
-  decoded times and increasing callbacks on the same deck and native source
-  URL, with no native media error. This proves that the cancelled read did not
-  terminate that source; callback counts alone are insufficient.
+  decoded times and increasing sequences on the same deck, source epoch and
+  native source URL, with no native media error. Either sampled frames or the
+  bounded native callback trace can supply that evidence. A later host poll may
+  deliver the trace, but both callback timestamps must fall inside the original
+  1,000 ms receipt window. Malformed, ambiguous or cross-epoch traces cannot
+  qualify. This proves that the cancelled read did not terminate that source;
+  callback counts alone are insufficient.
 - A plain cancelled HTTP fetch follows an explicit application abort of that
   exact outstanding asset request by at most 1,000 ms.
 
@@ -105,7 +131,23 @@ node src/simvltanea/browser/verify_webkit_sustained.js var/site/macos-webkit var
 
 The workflow uploads `var/proofs/macos-webkit/` on success or failure, including
 setup/build logs, source identity, raw samples, individual checks, and the final
-receipt. A failure in one sustained run does not skip the other run.
+receipt. During each sustained run, an asynchronous NDJSON journal appends one
+bounded record at a time, honoring stream backpressure. It records run metadata,
+samples, coarse snapshots and raw errors, preserving partial evidence if the
+process terminates. Records over 2 MiB or stream write/flush failures fail the
+run. Full-result JSON is serialized only after measurement finishes; the growing
+result is never synchronously rewritten during playback. A partial journal
+cannot count as a completed passing run. A failure in one sustained run does not
+skip the other run.
+
+Analyzer and journal regressions run without a browser:
+
+```bash
+python3 -m unittest src.simvltanea.browser.test_webkit_verifier
+```
+
+Reanalysis writes a separate derived receipt and retains the original artifact
+and its hash. It does not turn historical missing telemetry into positive proof.
 
 This is an Apple desktop WebKit/media-backend check with an iPhone viewport
 profile. It does not certify physical iPhone Safari, mobile hardware decoder

@@ -9,6 +9,7 @@ const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
+const {once} = require('node:events');
 const DURATION_MS = 180000, SAMPLE_MS = 137, MAX_HOLD_MS = 2000;
 const REGIMES = ['SPARSE_BREATH', 'STEADY_FLOW', 'BURST_CHORUS'];
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -18,8 +19,8 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 
 // Read-only observations: no init scripts, graph probes, pixel reads, retained
 // media references or prototype patches are installed in the sustained runs.
-function sample() {
-  const runtime = globalThis.compositionRuntime;
+function sample(includeTrace = false) {
+  const runtime = globalThis.compositionRuntime, wall = performance.now();
   const decks = [...runtime.slots.values()].flatMap(node => node.decks.map((deck, index) => {
     const media = deck.media, quality = media.getVideoPlaybackQuality?.();
     return {id: node.id, deck: index, active: node.active === deck,
@@ -33,9 +34,10 @@ function sample() {
       quality: quality ? {creationTime: Number(quality.creationTime),
         totalVideoFrames: Number(quality.totalVideoFrames), droppedVideoFrames: Number(quality.droppedVideoFrames),
         corruptedVideoFrames: Number(quality.corruptedVideoFrames)} : null,
-      nativeError: media.error ? {code: media.error.code, message: media.error.message} : null};
+      nativeError: media.error ? {code: media.error.code, message: media.error.message} : null,
+      progress: deck.progress?.snapshot(wall, includeTrace)};
   }));
-  return {wall: performance.now(), epochMs: Date.now(), timeOrigin: performance.timeOrigin, simTime: runtime.clock.simTime,
+  return {wall, progressSummary: runtime.proofProgressSummary?.(wall, includeTrace), epochMs: Date.now(), timeOrigin: performance.timeOrigin, simTime: runtime.clock.simTime,
     running: runtime.running, hidden: document.hidden, draining: runtime.draining,
     lastFailure: runtime.lastFailure,
     foregroundLimit: runtime.maxForeground, standbys: runtime.activeStandbys,
@@ -50,9 +52,79 @@ function sample() {
       phase: node.phase, busy: node.busy, resting: node.resting, targetGain: node.targetGain,
       geometry: node.geometry, rect: node.cell?.rect,
       current: node.media?.currentTime, decoded: node.decoded?.mediaTime,
-      callbacks: node.callbacks, paused: node.media?.paused, seeking: node.media?.seeking,
+      callbacks: node.callbacks, progress: node.active?.progress?.snapshot(wall), paused: node.media?.paused, seeking: node.media?.seeking,
       ready: node.media?.readyState, nativeError: node.media?.error ?
         {code: node.media.error.code, message: node.media.error.message} : null}))};
+}
+
+function validProgress(progress, wall, foreground = false) {
+  if (!Number.isFinite(wall) || wall < 0 || !progress || progress.schema !== 1 || progress.supported !== true || progress.live !== true ||
+      typeof progress.url !== 'string' || !progress.url.startsWith('blob:') ||
+      !Number.isSafeInteger(progress.epoch) || progress.epoch < 1 ||
+      !Number.isSafeInteger(progress.changes) || !Number.isSafeInteger(progress.sourceChanges) ||
+      progress.sourceChanges < 0 || progress.changes < progress.sourceChanges) return false;
+  if (progress.sourceChanges > 0 && (!Number.isFinite(progress.lastChangeWall) || progress.lastChangeWall < 0 ||
+      progress.lastChangeWall > wall || !Number.isFinite(progress.mediaTime) || progress.mediaTime < 0)) return false;
+  if (![progress.maxGapMs, progress.currentGapMs, progress.lifetimeMaxGapMs].every(value => Number.isFinite(value) && value >= 0) ||
+      progress.maxGapMs < progress.currentGapMs || progress.lifetimeMaxGapMs < progress.maxGapMs) return false;
+  if (foreground && (progress.foreground !== true || progress.running !== true ||
+      !Number.isFinite(progress.foregroundSince) || !Number.isFinite(progress.lastForegroundChangeWall) ||
+      progress.foregroundSince < 0 || progress.lastForegroundChangeWall < 0 ||
+      progress.foregroundSince > progress.lastForegroundChangeWall || progress.lastForegroundChangeWall > wall ||
+      Math.abs(progress.currentGapMs - (wall - progress.lastForegroundChangeWall)) > .001)) return false;
+  return true;
+}
+
+function traceFrames(result, url) {
+  const frames = [], owners = new Set(), observedChanges = new Map();
+  let invalid = false, nativeFailure = false;
+  const inspect = (progress, id, deck, capturedAt, nativeError) => {
+    if (progress?.url !== url) return;
+    if (nativeError) nativeFailure = true;
+    if (!Array.isArray(progress.trace)) return;
+    if (progress.schema !== 1 || progress.supported !== true || typeof id !== 'string' ||
+        ![0, 1].includes(deck) || !Number.isSafeInteger(progress.epoch) || progress.epoch < 1 ||
+        !Number.isSafeInteger(progress.changes) || !Number.isSafeInteger(progress.sourceChanges) ||
+        progress.sourceChanges < progress.trace.length || progress.changes < progress.sourceChanges ||
+        progress.trace.length > 128 || !Number.isFinite(capturedAt)) {
+      invalid = true; return;
+    }
+    owners.add(JSON.stringify([id, deck, progress.epoch]));
+    let previous;
+    for (const point of progress.trace) {
+      if (!point || !Number.isFinite(point.wall) || point.wall < 0 || point.wall > capturedAt || !Number.isFinite(point.mediaTime) || point.mediaTime < 0 ||
+          !Number.isSafeInteger(point.changes) || point.changes < 1 || point.changes > progress.changes ||
+          (previous && (point.wall <= previous.wall || point.changes !== previous.changes + 1 || point.mediaTime === previous.mediaTime))) {
+        invalid = true; break;
+      }
+      const identity = JSON.stringify([id, deck, progress.epoch, point.changes]), observed = observedChanges.get(identity);
+      if (observed && (observed.wall !== point.wall || observed.mediaTime !== point.mediaTime)) { invalid = true; break; }
+      observedChanges.set(identity, point);
+      frames.push({wall: point.wall, id, deck, epoch: progress.epoch, decoded: point.mediaTime,
+        changes: point.changes, nativeError: nativeError || null, origin: 'callback-trace'});
+      previous = point;
+    }
+    if (previous && (previous.changes !== progress.changes || previous.wall !== progress.lastChangeWall ||
+        previous.mediaTime !== progress.mediaTime)) invalid = true;
+  };
+  for (const row of result.samples || []) {
+    for (const deck of row.decks || []) {
+      if ((deck.src === url || deck.currentSrc === url) && deck.nativeError) nativeFailure = true;
+      if (deck.progress?.url === url && deck.src === url && deck.currentSrc === url) {
+        if (deck.progress.live !== true) invalid = true;
+        inspect(deck.progress, deck.id, deck.deck, row.wall, deck.nativeError);
+      }
+    }
+    for (const retired of row.progressSummary?.retired || []) {
+      if (!retired) { invalid = true; continue; }
+      if (retired.url !== url) continue;
+      if (retired.live !== false || !Number.isFinite(retired.retiredAt) || retired.retiredAt < 0 || retired.retiredAt > row.wall)
+        invalid = true;
+      inspect(retired, retired.id, retired.deck, Math.min(row.wall, retired.retiredAt), retired.nativeError);
+    }
+  }
+  return {frames: invalid || nativeFailure || owners.size > 1 ? [] : frames,
+    invalid, nativeFailure, ambiguous: owners.size > 1};
 }
 
 function classifyResourceErrors(result) {
@@ -98,17 +170,23 @@ function classifyResourceErrors(result) {
         const frames = [], previous = new Map();
         for (const row of result.samples || []) if (row.wall >= wall && row.wall <= wall + 1000) {
           for (const deck of row.decks || []) if (deck.src === url && deck.currentSrc === url) {
-            frames.push({wall: row.wall, id: deck.id, deck: deck.deck,
+            if (result.progressSchema === 1 && (!validProgress(deck.progress, row.wall) || deck.progress.url !== url)) continue;
+            frames.push({wall: row.wall, id: deck.id, deck: deck.deck, epoch: deck.progress?.epoch,
               decoded: deck.decoded, callbacks: deck.callbacks, nativeError: deck.nativeError});
           }
         }
-        if (frames.length && frames.every(frame => !frame.nativeError)) {
+        const trace = traceFrames(result, url);
+        frames.push(...trace.frames.filter(frame => frame.wall >= wall && frame.wall <= wall + 1000));
+        frames.sort((a, b) => a.wall - b.wall);
+        if (!trace.invalid && !trace.nativeFailure && !trace.ambiguous && frames.length && frames.every(frame => !frame.nativeError)) {
           let proof;
           for (const frame of frames) {
+            const sequence = frame.origin === 'callback-trace' ? frame.changes : frame.callbacks;
             if (typeof frame.id !== 'string' || !Number.isFinite(frame.deck) ||
-                !Number.isFinite(frame.decoded) || !Number.isFinite(frame.callbacks)) continue;
-            const identity = JSON.stringify([frame.id, frame.deck]), old = previous.get(identity);
-            if (old && frame.wall > old.wall && frame.decoded !== old.decoded && frame.callbacks > old.callbacks) {
+                !Number.isFinite(frame.decoded) || !Number.isFinite(sequence)) continue;
+            const identity = JSON.stringify([frame.id, frame.deck, frame.epoch, frame.origin]), old = previous.get(identity);
+            const oldSequence = old?.origin === 'callback-trace' ? old.changes : old?.callbacks;
+            if (old && frame.wall > old.wall && frame.decoded !== old.decoded && sequence > oldSequence) {
               proof = [old, frame]; break;
             }
             previous.set(identity, frame);
@@ -122,14 +200,92 @@ function classifyResourceErrors(result) {
   return classified;
 }
 
+// Progress maxima are recorded by the existing native frame callback, including
+// source retirement. Host polling cannot infer a freeze from equal loop phases
+// across a long observation gap, nor prove that an unseen interval was healthy.
+function progressCoverage(result) {
+  const native = result.progressSchema === 1, issues = [], invalidRows = new Set(), history = new Map();
+  const hasProgress = result.samples.some(row => row.progressSummary != null ||
+    row.nodes.some(node => node.progress != null) || (row.decks || []).some(deck => deck.progress != null));
+  let issueCount = 0, maxSampleGapMs = 0, maxGapMs = 0, previousWall, previousSummary;
+  let nativeErrors = 0, suspensions = 0;
+  const issue = (index, reason) => {
+    issueCount++; invalidRows.add(index);
+    if (issues.length < 32) issues.push({index, wall: result.samples[index]?.wall, reason});
+  };
+  for (const [index, row] of result.samples.entries()) {
+    if (!Number.isFinite(row.wall) || row.wall < 0 || (previousWall !== undefined && row.wall <= previousWall))
+      issue(index, 'invalid sample clock');
+    const gap = previousWall === undefined ? 0 : row.wall - previousWall;
+    maxSampleGapMs = Math.max(maxSampleGapMs, gap); previousWall = row.wall;
+    if (!native) {
+      if (result.progressSchema !== undefined || hasProgress) issue(index, 'missing or unsupported progress schema');
+      if (gap >= MAX_HOLD_MS) issue(index, 'observation gap without native progress coverage');
+      continue;
+    }
+    const summary = row.progressSummary;
+    if (!summary || summary.schema !== 1 || summary.supported !== true ||
+        !Number.isFinite(summary.maxGapMs) || summary.maxGapMs < 0 ||
+        !Number.isSafeInteger(summary.retiredCount) || summary.retiredCount < 0 ||
+        !Number.isSafeInteger(summary.suspensionCount) || summary.suspensionCount < 0 ||
+        !Array.isArray(summary.retired) || summary.retired.length > 16) {
+      issue(index, 'missing or malformed native progress summary'); continue;
+    }
+    if (previousSummary && (summary.maxGapMs < previousSummary.maxGapMs ||
+        summary.retiredCount < previousSummary.retiredCount || summary.suspensionCount < previousSummary.suspensionCount))
+      issue(index, 'native session counters regressed');
+    if (previousSummary) suspensions += Math.max(0, summary.suspensionCount - previousSummary.suspensionCount);
+    previousSummary = summary;
+    maxGapMs = Math.max(maxGapMs, summary.maxGapMs);
+    const decks = new Map();
+    if (!Array.isArray(row.decks) || row.decks.length > 8) issue(index, 'missing or unbounded deck observations');
+    for (const deck of row.decks || []) {
+      const key = JSON.stringify([deck.id, deck.deck]);
+      if (typeof deck.id !== 'string' || ![0, 1].includes(deck.deck) || decks.has(key)) issue(index, 'invalid deck identity');
+      decks.set(key, deck);
+      if (!deck.populated) continue;
+      const p = deck.progress;
+      if (!validProgress(p, row.wall, !!p?.foreground) || p.url !== deck.src ||
+          (p.foreground && (deck.currentSrc !== p.url || deck.paused)) ||
+          summary.maxGapMs < p.lifetimeMaxGapMs) {
+        issue(index, 'missing or inconsistent source progress'); continue;
+      }
+      const old = history.get(key);
+      if (old && (p.epoch < old.epoch || p.changes < old.changes || p.lifetimeMaxGapMs < old.lifetimeMaxGapMs ||
+          (p.epoch === old.epoch && (p.url !== old.url || p.sourceChanges < old.sourceChanges || p.maxGapMs < old.maxGapMs))))
+        issue(index, 'source progress counters regressed or changed identity');
+      history.set(key, p);
+    }
+    for (const node of row.nodes) {
+      const deck = decks.get(JSON.stringify([node.id, node.deck])), p = node.progress;
+      if (!deck?.active || !deck.populated || !validProgress(p, row.wall, true) || p.sourceChanges < 1 ||
+          p.url !== deck.src || p.mediaTime !== node.decoded ||
+          ['epoch', 'changes', 'sourceChanges', 'maxGapMs', 'currentGapMs', 'lifetimeMaxGapMs', 'mediaTime']
+            .some(key => p[key] !== deck.progress?.[key])) issue(index, 'active node lacks matching native progress');
+    }
+    for (const retired of summary.retired) {
+      if (retired?.nativeError) nativeErrors++;
+      if (!retired || retired.schema !== 1 || retired.supported !== true || retired.live !== false ||
+          !Number.isFinite(retired.maxGapMs) || retired.maxGapMs < 0 ||
+          !Number.isFinite(retired.lifetimeMaxGapMs) || retired.lifetimeMaxGapMs < retired.maxGapMs ||
+          summary.maxGapMs < retired.lifetimeMaxGapMs) issue(index, 'invalid retired-source progress');
+    }
+  }
+  return {native, issueCount, issues, invalidRows, maxSampleGapMs, maxGapMs, nativeErrors, suspensions};
+}
+
 function analyse(result) {
   const trackers = new Map(), restTrackers = new Map(), births = new Set(), changedSlots = new Set(), holds = [];
+  const coverage = progressCoverage(result); let previousWall;
   const expectedSlots = (result.samples[0]?.nodes || []).map(node => node.id).sort().join(',');
   let jointMs = 0, decodedMs = 0, wraps = 0, populated = 0, playing = 0, standbys = 0;
   let unexpectedPaused = 0, invalidMedia = 0, nativeErrors = 0, globalSuspensions = 0;
   let restingSamples = 0, restingDecodedMs = 0, restingJointMs = 0, restingPaused = 0, maxResting = 0;
   const runtimeFailures = new Set();
-  for (const row of result.samples) {
+  for (const [index, row] of result.samples.entries()) {
+    const native = coverage.native && !coverage.invalidRows.has(index);
+    const unobserved = previousWall !== undefined && row.wall - previousWall >= MAX_HOLD_MS;
+    previousWall = row.wall;
     populated = Math.max(populated, row.populated); playing = Math.max(playing, row.playing);
     standbys = Math.max(standbys, row.standbys, row.maxStandbys);
     if (!row.running || row.hidden || row.audioState !== 'running') globalSuspensions++;
@@ -146,13 +302,14 @@ function analyse(result) {
         restingSamples++;
         if (node.paused) restingPaused++;
         let rest = restTrackers.get(node.id);
-        if (!rest || rest.identity !== identity)
-          rest = {identity, current: node.current, decoded: node.decoded, jointAt: row.wall, decodedAt: row.wall};
-        if (rest.current !== node.current || rest.decoded !== node.decoded) rest.jointAt = row.wall;
-        if (rest.decoded !== node.decoded) rest.decodedAt = row.wall;
+        if (!rest || rest.identity !== identity || (unobserved && !native))
+          rest = {identity, current: node.current, decoded: node.decoded, changes: node.progress?.changes, jointAt: row.wall, decodedAt: row.wall};
+        const changed = native ? rest.changes !== node.progress.changes : rest.decoded !== node.decoded;
+        if (rest.current !== node.current || changed) rest.jointAt = row.wall;
+        if (changed) rest.decodedAt = row.wall;
         restingJointMs = Math.max(restingJointMs, row.wall - rest.jointAt);
         restingDecodedMs = Math.max(restingDecodedMs, row.wall - rest.decodedAt);
-        Object.assign(rest, {current: node.current, decoded: node.decoded});
+        Object.assign(rest, {current: node.current, decoded: node.decoded, changes: node.progress?.changes});
         restTrackers.set(node.id, rest);
       } else restTrackers.delete(node.id);
       if (node.nativeError) nativeErrors++;
@@ -161,14 +318,15 @@ function analyse(result) {
       const old = trackers.get(node.id);
       if (old && old.identity !== identity) changedSlots.add(node.id);
       const eligible = row.running && !row.hidden && !node.paused;
-      if (!old || old.identity !== identity || !eligible || !old.eligible) {
+      if (!old || old.identity !== identity || !eligible || !old.eligible || (unobserved && !native)) {
         trackers.set(node.id, {identity, eligible, current: node.current, decoded: node.decoded,
-          jointAt: row.wall, decodedAt: row.wall});
+          changes: node.progress?.changes, jointAt: row.wall, decodedAt: row.wall});
         continue;
       }
       if (node.current + .05 < old.current) wraps++;
-      if (node.current !== old.current || node.decoded !== old.decoded) old.jointAt = row.wall;
-      if (node.decoded !== old.decoded) old.decodedAt = row.wall;
+      const changed = native ? node.progress.changes !== old.changes : node.decoded !== old.decoded;
+      if (node.current !== old.current || changed) old.jointAt = row.wall;
+      if (changed) old.decodedAt = row.wall;
       const joint = row.wall - old.jointAt, decoded = row.wall - old.decodedAt;
       jointMs = Math.max(jointMs, joint); decodedMs = Math.max(decodedMs, decoded);
       if ((joint >= MAX_HOLD_MS || decoded >= MAX_HOLD_MS) && !old.reported) {
@@ -177,11 +335,13 @@ function analyse(result) {
           phase: node.phase, ready: node.ready, seeking: node.seeking});
         old.reported = true;
       }
-      Object.assign(old, {current: node.current, decoded: node.decoded});
+      Object.assign(old, {current: node.current, decoded: node.decoded, changes: node.progress?.changes});
     }
     for (const id of trackers.keys()) if (!seen.has(id)) trackers.delete(id);
     for (const id of restTrackers.keys()) if (!seen.has(id)) restTrackers.delete(id);
   }
+  decodedMs = Math.max(decodedMs, coverage.maxGapMs);
+  nativeErrors += coverage.nativeErrors; globalSuspensions += coverage.suspensions;
   const regimes = [...new Set(result.coarse.map(row => row.studio.ecosystem.regime))];
   const initialCount = result.samples[0]?.nodes.length || 0;
   const resourceErrors = classifyResourceErrors(result);
@@ -190,6 +350,7 @@ function analyse(result) {
     noFailure: !result.failure,
     fullDuration: (result.elapsedMs || 0) >= DURATION_MS,
     enoughSamples: result.samples.length >= 600,
+    observationCoverage: coverage.issueCount === 0,
     jointProgress: jointMs < MAX_HOLD_MS,
     decodedProgress: decodedMs < MAX_HOLD_MS,
     restingProgress: restingJointMs < MAX_HOLD_MS && restingDecodedMs < MAX_HOLD_MS && restingPaused === 0,
@@ -201,7 +362,11 @@ function analyse(result) {
     noErrors: result.errors.length === 0 && result.httpErrors.length === 0 && resourceErrors.unexpected.length === 0 &&
       runtimeFailures.size === 0 && !(result.events || []).some(event => ['media-failure', 'observer-failure'].includes(event.type)),
   };
-  return {pass: Object.values(checks).every(Boolean), checks, samples: result.samples.length,
+  const pass = Object.values(checks).every(Boolean);
+  const verdict = pass ? 'PASS' : Object.entries(checks).some(([key, value]) => key !== 'observationCoverage' && !value) ? 'FAIL' : 'INCONCLUSIVE';
+  return {pass, verdict, checks, samples: result.samples.length,
+    progressCoverage: {schema: result.progressSchema ?? null, issues: coverage.issues, issueCount: coverage.issueCount,
+      maxSampleGapMs: coverage.maxSampleGapMs, nativeMaximumGapMs: coverage.maxGapMs},
     longestJointHoldMs: jointMs, longestDecodedHoldMs: decodedMs, holds,
     births: births.size, changedSlots: [...changedSlots], regimes, wraps,
     maxPopulatedDecks: populated, maxPlayingDecks: playing, maxPreparationLeases: standbys,
@@ -276,19 +441,54 @@ async function documentClock(page, result) {
 function sampleControls(page, result) {
   let running = true;
   const task = (async () => {
+    let nextTrace = 0;
     while (running) {
-      try { result.samples.push(await page.evaluate(sample)); }
-      catch (error) { result.errors.push('Control metadata sampling failed: ' + error); break; }
+      try {
+        const includeTrace = performance.now() >= nextTrace;
+        result.samples.push(await page.evaluate(sample, includeTrace));
+        if (includeTrace) nextTrace = performance.now() + 1000;
+      } catch (error) { result.errors.push('Control metadata sampling failed: ' + error); break; }
       await pause(SAMPLE_MS);
     }
   })();
   return async () => { running = false; await task; };
 }
 
+// Append one bounded record asynchronously. Re-serializing the entire growing
+// run on the measurement thread creates observation gaps of its own. This
+// journal preserves partial evidence if the job terminates before final JSON.
+function proofJournal(out, name, createStream = fs.createWriteStream) {
+  const stream = createStream(path.join(out, name + '.ndjson'), {highWaterMark: 1024 * 1024});
+  let failure;
+  stream.on('error', error => { failure = error; });
+  return {
+    async append(type, value) {
+      if (failure) throw failure;
+      const record = JSON.stringify({type, value}) + '\n';
+      if (Buffer.byteLength(record) > 2 * 1024 * 1024) throw new Error('Proof journal record exceeds 2 MiB');
+      if (!stream.write(record)) await once(stream, 'drain');
+      if (failure) throw failure;
+    },
+    async close() {
+      if (failure) throw failure;
+      const finished = once(stream, 'finish'); stream.end(); await finished;
+      if (failure) throw failure;
+    }
+  };
+}
+
 async function sustained(webkit, device, base, out, name, query) {
-  const result = {name, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
-  let browser;
+  const result = {name, progressSchema: 1, requestedUrl: base + query, samples: [], coarse: [], errors: [], consoleErrors: [], httpErrors: [], requestFailures: []};
+  let browser; const journal = proofJournal(out, name), errorOffsets = {};
+  const journalErrors = async () => {
+    for (const kind of ['errors', 'consoleErrors', 'httpErrors', 'requestFailures']) {
+      for (let index = errorOffsets[kind] || 0; index < result[kind].length; index++)
+        await journal.append(kind, {index, error: result[kind][index]});
+      errorOffsets[kind] = result[kind].length;
+    }
+  };
   try {
+    await journal.append('run', {name, progressSchema: result.progressSchema, requestedUrl: result.requestedUrl});
     browser = await webkit.launch({headless: true}); result.browserVersion = browser.version();
     const context = await browser.newContext(device), page = await context.newPage();
     page.setDefaultTimeout(15000); observeErrors(page, result);
@@ -300,27 +500,36 @@ async function sustained(webkit, device, base, out, name, query) {
     await page.waitForFunction(() => compositionRuntime.audio.context?.state === 'running' && SimvltaneaStudio.snapshot().sound === 'on');
     result.actualUrl = page.url(); result.initialStudio = await page.evaluate(() => SimvltaneaStudio.snapshot());
     result.phase = 'sustained';
-    const began = performance.now(); let nextCoarse = 0, nextSave = 20000;
+    const began = performance.now(); let nextCoarse = 0, nextReport = 20000;
     while (performance.now() - began < DURATION_MS) {
-      const row = await page.evaluate(sample); result.samples.push(row);
+      const includeTrace = performance.now() - began >= nextCoarse;
+      const row = await page.evaluate(sample, includeTrace); result.samples.push(row);
+      await journal.append('sample', row); await journalErrors();
       const elapsed = performance.now() - began;
       if (elapsed >= nextCoarse) {
-        result.coarse.push({wall: row.wall, studio: await page.evaluate(() => SimvltaneaStudio.snapshot())});
-        nextCoarse += 1000;
+        const coarse = {wall: row.wall, studio: await page.evaluate(() => SimvltaneaStudio.snapshot())};
+        result.coarse.push(coarse); await journal.append('coarse', coarse);
+        nextCoarse = elapsed + 1000;
       }
-      if (elapsed >= nextSave) {
-        save(out, name + '.json', result);
+      if (elapsed >= nextReport) {
         console.log(`${name}: ${(elapsed / 1000).toFixed(1)}s, simulation ${row.simTime.toFixed(1)}s`);
-        nextSave += 20000;
+        nextReport += 20000;
       }
       await pause(SAMPLE_MS);
     }
     result.elapsedMs = performance.now() - began;
-    result.samples.push(await page.evaluate(sample));
+    const finalSample = await page.evaluate(sample, true); result.samples.push(finalSample);
+    await journal.append('sample', finalSample);
     result.events = await page.evaluate(() => compositionRuntime.events);
+    await journal.append('events', result.events);
     result.completed = true;
   } catch (error) { result.failure = String(error.stack || error); }
-  finally { result.phase = 'closing'; if (browser) await browser.close(); }
+  finally {
+    result.phase = 'closing';
+    try { if (browser) await browser.close(); } catch (error) { result.failure = String(error.stack || error); }
+    try { await journalErrors(); } catch (error) { result.failure = String(error.stack || error); }
+    try { await journal.close(); } catch (error) { result.failure = String(error.stack || error); }
+  }
   result.summary = analyse(result); save(out, name + '.json', result);
   console.log(JSON.stringify({name, ...result.summary})); return result.summary;
 }
@@ -354,7 +563,7 @@ async function audioProof(webkit, out) {
 
 // Intentional interactions and the post-master meter are isolated from both baselines.
 async function controls(webkit, device, base, out) {
-  const result = {errors: [], consoleErrors: [], httpErrors: [], requestFailures: [], samples: [], checks: {}};
+  const result = {progressSchema: 1, errors: [], consoleErrors: [], httpErrors: [], requestFailures: [], samples: [], checks: {}};
   let browser, page, stopSampling = async () => {};
   try {
     browser = await webkit.launch({headless: true});
@@ -426,7 +635,8 @@ async function controls(webkit, device, base, out) {
     await click(page, '#speaker');
     await page.waitForFunction(() => SimvltaneaStudio.snapshot().sound === 'on' && smokeLevel() > .00001);
     result.unmutedPeak = await page.evaluate(() => smokeLevel()); result.checks.sound = true;
-    result.final = await page.evaluate(sample);
+    result.final = await page.evaluate(sample, true);
+    result.samples.push(result.final);
   } catch (error) { result.pass = false; result.failure = String(error.stack || error); }
   finally {
     await stopSampling();
@@ -492,4 +702,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = {analyse};
+module.exports = {analyse, classifyResourceErrors, proofJournal};

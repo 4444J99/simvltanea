@@ -306,6 +306,89 @@ function applySlice(node) {
   placeMedia(node);
 }
 
+  // Proof-only accounting in the existing native frame callback. Comparing two
+  // polled playheads aliases complete loops; counting callbacks alone mistakes
+  // repeated presentation of one frame for progress. Keep both source-specific
+  // changes and the longest foreground gap, including gaps recovered or retired
+  // entirely between verifier polls. The callback writes a preallocated ring.
+  class FrameProgress {
+    constructor(supported, capacity = 128) {
+      this.supported = Boolean(supported); this.capacity = capacity;
+      this.points = new Float64Array(capacity * 3);
+      this.epoch = 0; this.changes = 0; this.lifetimeMaxGapMs = 0;
+      this.url = null; this.live = false; this.foreground = false; this.running = false;
+      this.sourceChanges = 0; this.mediaTime = null; this.lastChangeWall = null;
+      this.foregroundSince = null; this.lastForegroundChangeWall = null; this.pausedAt = null;
+      this.maxGapMs = 0; this.assignedAt = 0; this.writeIndex = 0; this.traceLength = 0;
+    }
+    assign(url, wall) {
+      this.retire(wall);
+      this.url = url; this.epoch++; this.live = true; this.assignedAt = wall;
+      this.sourceChanges = 0; this.mediaTime = null; this.lastChangeWall = null;
+      this.foregroundSince = null; this.lastForegroundChangeWall = null; this.pausedAt = null;
+      this.maxGapMs = 0; this.writeIndex = 0; this.traceLength = 0;
+    }
+    gap(wall) {
+      return this.foreground && this.running ? Math.max(0, wall - this.lastForegroundChangeWall) : 0;
+    }
+    seal(wall) {
+      this.maxGapMs = Math.max(this.maxGapMs, this.gap(wall));
+      this.lifetimeMaxGapMs = Math.max(this.lifetimeMaxGapMs, this.maxGapMs);
+    }
+    observe(wall, mediaTime) {
+      if (!this.live || !this.supported || !Number.isFinite(wall) || !Number.isFinite(mediaTime) ||
+          wall < this.assignedAt || (this.lastChangeWall !== null && wall < this.lastChangeWall) ||
+          mediaTime === this.mediaTime) return;
+      this.seal(wall);
+      this.changes++; this.sourceChanges++; this.mediaTime = mediaTime; this.lastChangeWall = wall;
+      if (this.foreground)
+        this.lastForegroundChangeWall = Math.max(this.lastForegroundChangeWall, this.running ? wall : Math.min(wall, this.pausedAt));
+      const offset = this.writeIndex * 3;
+      this.points[offset] = wall; this.points[offset + 1] = mediaTime; this.points[offset + 2] = this.changes;
+      this.writeIndex = (this.writeIndex + 1) % this.capacity;
+      this.traceLength = Math.min(this.traceLength + 1, this.capacity);
+    }
+    setForeground(value, wall, running = this.running) {
+      if (!this.live || this.foreground === value) return;
+      this.seal(wall); this.foreground = value;
+      if (value) {
+        this.foregroundSince = wall; this.lastForegroundChangeWall = wall; this.running = running;
+        this.pausedAt = running ? null : wall;
+      } else { this.running = false; this.pausedAt = null; }
+    }
+    setRunning(value, wall) {
+      if (!this.foreground || this.running === value) return;
+      this.seal(wall); this.running = value;
+      // Remove exactly the deliberate pause duration, preserving active time
+      // without progress on both sides. A frame delivered during pause records
+      // progress at its frozen active-time boundary. REST never moves the anchor.
+      if (value) {
+        this.lastForegroundChangeWall += wall - this.pausedAt; this.pausedAt = null;
+      } else this.pausedAt = wall;
+    }
+    retire(wall) {
+      this.seal(wall); this.live = false; this.foreground = false; this.running = false;
+    }
+    snapshot(wall, includeTrace = false) {
+      // Seal a polled ongoing gap too: subsequent recovery cannot erase it.
+      this.seal(wall);
+      const result = {schema: 1, supported: this.supported, url: this.url, epoch: this.epoch,
+        live: this.live, changes: this.changes, sourceChanges: this.sourceChanges,
+        lastChangeWall: this.lastChangeWall, mediaTime: this.mediaTime,
+        foreground: this.foreground, running: this.running, foregroundSince: this.foregroundSince,
+        lastForegroundChangeWall: this.lastForegroundChangeWall, maxGapMs: this.maxGapMs,
+        currentGapMs: this.gap(wall), lifetimeMaxGapMs: this.lifetimeMaxGapMs};
+      if (includeTrace) {
+        result.trace = [];
+        for (let i = 0; i < this.traceLength; i++) {
+          const offset = ((this.writeIndex - this.traceLength + i + this.capacity) % this.capacity) * 3;
+          result.trace.push({wall: this.points[offset], mediaTime: this.points[offset + 1], changes: this.points[offset + 2]});
+        }
+      }
+      return result;
+    }
+  }
+
   class MasterSimClock {
     constructor({maxDeltaSec = .1, requestFrame = fn => root.requestAnimationFrame(fn),
       cancelFrame = id => root.cancelAnimationFrame(id), onError = error => console.error(error)} = {}) {
@@ -420,11 +503,26 @@ function applySlice(node) {
         document.body.append(this.proof);
       }
       this.proofAt = -1;
+      this.proofRetired = this.proof ? [] : null;
+      this.proofRetiredCount = 0; this.proofMaxGapMs = 0; this.proofSuspensionCount = 0;
     }
     get origin() { return (this.audio.context?.currentTime ?? 0) - this.clock.simTime; }
     record(type, id = null, detail = {}) {
       this.events.push({type, id, time: this.clock.simTime, wall: performance.now(), ...detail});
       if (this.events.length > 256) this.events.shift();
+    }
+    proofProgressSummary(wall, includeTrace = false) {
+      if (!this.proof) return null;
+      let supported = true;
+      for (const node of this.slots.values()) for (const deck of node.decks) {
+        if (!deck.progress) { supported = false; continue; }
+        const progress = deck.progress.snapshot(wall);
+        supported = supported && progress.supported;
+        this.proofMaxGapMs = Math.max(this.proofMaxGapMs, progress.lifetimeMaxGapMs);
+      }
+      return {schema: 1, supported, maxGapMs: this.proofMaxGapMs,
+        suspensionCount: this.proofSuspensionCount, retiredCount: this.proofRetiredCount,
+        retired: includeTrace ? this.proofRetired.slice() : []};
     }
     report(error, node = null) {
       if (error?.name === 'AbortError') return;
@@ -463,8 +561,18 @@ function applySlice(node) {
           objectFit: 'cover', opacity: '0', pointerEvents: 'none', transition: 'none'});
         const deck = {media, url: null, item: null, binding: null, weight: 0, frameId: null, callbacks: 0, decoded: null,
           presence: 1, presenceTarget: null, enteredAt: null};
+        if (this.proof) {
+          deck.progress = new FrameProgress(typeof media.requestVideoFrameCallback === 'function');
+          deck.proofDeck = i;
+        }
+        let frameEpoch = deck.progress?.epoch;
         const watch = (wall, metadata) => {
           deck.callbacks++; deck.decoded = {mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames, wall};
+          // A callback registered before src changed cannot certify the new
+          // source. The next registration belongs to its current epoch.
+          if (deck.progress && deck.progress.epoch === frameEpoch && media.currentSrc === deck.url)
+            deck.progress?.observe(wall, metadata.mediaTime);
+          frameEpoch = deck.progress?.epoch;
           if (node.active === deck) { node.callbacks++; node.decoded = deck.decoded; }
           if (!this.disposed) deck.frameId = media.requestVideoFrameCallback(watch);
         };
@@ -660,6 +768,7 @@ function applySlice(node) {
         incoming.presenceTarget = null; incoming.enteredAt = null;
         this.applyDeckEffects(incoming, true);
         incoming.url = URL.createObjectURL(item.file);
+        incoming.progress?.assign(incoming.url, performance.now());
         incoming.media.src = incoming.url; incoming.media.load();
         node.box.style.display = '';
         this.applyLayout();
@@ -673,6 +782,9 @@ function applySlice(node) {
           // Priming can run for several native loops. The resident's entrance
           // begins when it is revealed, independently of the media playhead.
           incoming.enteredAt = this.clock.simTime;
+          // Visible incoming frames count throughout the fade and pending
+          // promotion, while outgoing frames remain covered until retirement.
+          incoming.progress?.setForeground(true, performance.now(), this.running);
           incoming.presence = this.effectsEnabled ? 0 : 1;
           incoming.presenceTarget = null;
           this.applyDeckEffects(incoming);
@@ -743,6 +855,16 @@ function applySlice(node) {
       deck.media.style.opacity = '0'; deck.media.dataset.deck = 'standby'; deck.media.muted = true;
       deck.media.style.filter = ''; deck.presence = 1; deck.presenceTarget = null; deck.enteredAt = null;
       if (deck.url) {
+        if (deck.progress) {
+          const wall = performance.now(), nativeError = deck.media.error;
+          deck.progress.retire(wall);
+          const progress = deck.progress.snapshot(wall, true);
+          this.proofMaxGapMs = Math.max(this.proofMaxGapMs, progress.lifetimeMaxGapMs);
+          this.proofRetiredCount++;
+          this.proofRetired.push({id: deck.media.dataset.loopId, deck: deck.proofDeck, ...progress,
+            retiredAt: wall, nativeError: nativeError ? {code: nativeError.code, message: nativeError.message} : null});
+          if (this.proofRetired.length > 16) this.proofRetired.shift();
+        }
         deck.media.pause(); deck.media.removeAttribute('src'); deck.media.load();
         if (this.proof) this.record('resource-retired', deck.media.dataset.loopId, {role: 'deck', url: deck.url,
           currentSrc: deck.media.currentSrc, readyState: deck.media.readyState, paused: deck.media.paused});
@@ -909,6 +1031,11 @@ function applySlice(node) {
     suspend() {
       if (!this.running) return;
       this.running = false; this.generation++; this.clock.pause();
+      if (this.proof) {
+        this.proofSuspensionCount++;
+        const wall = performance.now();
+        for (const node of this.slots.values()) for (const deck of node.decks) deck.progress?.setRunning(false, wall);
+      }
       for (const node of this.nodes.values()) for (const deck of node.decks) if (deck.url && !deck.media.paused) deck.media.pause();
       // A deliberate pause freezes the pictures in their visible blend and
       // settles the handoff; it must not strand a semaphore until another click.
@@ -923,6 +1050,10 @@ function applySlice(node) {
       this.playingIntent = true;
       if (this.running || document.hidden) return;
       this.running = true; this.generation++; this.clock.start();
+      if (this.proof) {
+        const wall = performance.now();
+        for (const node of this.slots.values()) for (const deck of node.decks) deck.progress?.setRunning(true, wall);
+      }
       const jobs = [];
       for (const node of this.nodes.values()) {
         if (node.media && node.media.paused) jobs.push(node.media.play().catch(error => this.report(error, node)));
@@ -1028,7 +1159,7 @@ function applySlice(node) {
       this.master?.dispose?.(); this.audio.context?.close().catch(() => {});
     }
   }
-  const api = {Session, MasterSimClock, foregroundLimit};
+  const api = {Session, MasterSimClock, FrameProgress, foregroundLimit};
   root.SimvltaneaLive = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis === 'object' ? globalThis : this);
