@@ -603,13 +603,7 @@ function applySlice(node) {
           if (deck.progress && deck.progress.epoch === frameEpoch && media.currentSrc === deck.url)
             deck.progress?.observe(wall, metadata.mediaTime);
           if (deck.sourceEpoch === frameSourceEpoch && media.currentSrc === deck.url) {
-            // The host tick can skip the last 2 frames of a slow clock; a
-            // callback cannot. Remember the source's own end frame so a seam
-            // that parks at zero stays provable. Cadence-independent evidence.
-            const endFps = Number(deck.item?.asset?.fps), endDuration = media.duration;
-            if (Number.isFinite(endFps) && endFps > 0 && Number.isFinite(endDuration) && endDuration > .1 &&
-                Number.isFinite(metadata.mediaTime) && metadata.mediaTime >= endDuration - 2 / endFps)
-              deck.endFrame = {url: deck.url, epoch: deck.sourceEpoch, mediaTime: metadata.mediaTime};
+            this.noteEndFrame(deck, metadata.mediaTime);
             const seek = deck.loopSeek;
             // The retained outgoing deck can recover while its slot is busy.
             // Preserve that fact independently of the active guard's eligibility.
@@ -1413,6 +1407,15 @@ function applySlice(node) {
           else this.report(nativePlayFailure(error), node);
         }).finally(() => { if (node.nativeRescue === rescue) node.nativeRescue = null; });
     }
+    noteEndFrame(deck, mediaTime) {
+      // The host tick can skip the last 2 frames of a slow clock; a callback
+      // cannot. Remember the source's own end frame so a seam that parks at
+      // zero stays provable. Cadence-independent evidence for one source epoch.
+      const media = deck.media, fps = Number(deck.item?.asset?.fps), duration = media?.duration;
+      if (deck.url && media.currentSrc === deck.url && Number.isFinite(fps) && fps > 0 &&
+          Number.isFinite(duration) && duration > .1 && Number.isFinite(mediaTime) && mediaTime >= duration - 2 / fps)
+        deck.endFrame = {url: deck.url, epoch: deck.sourceEpoch, mediaTime};
+    }
     recoverNativeLoop(node, time, dt) {
       const deck = node.active, media = deck?.media;
       if (!media || !deck.url || this.options?.nativeLoopSeekRecovery === false) return;
@@ -1467,7 +1470,7 @@ function applySlice(node) {
         // receives the same source-owned protection as an audible resident.
         state.resting = Boolean(node.resting); state.wrapDecoded = null;
         state.generation = this.generation; state.stalled = 0; state.endSeen = false; state.changes = 0;
-        state.recoveryFrames = 0; return;
+        state.recoveryFrames = 0; deck.endFrame = null; return;
       }
       if (state.attempt && media.seeking) state.recoveryFrames = 0;
       if (changed) {
@@ -1494,6 +1497,13 @@ function applySlice(node) {
         if (state.attempt.waited + 1e-9 >= this.nativeLoopRescuePolicy().graceSimSec)
           this.rescueNativeLoop(node, deck, state, state.attempt);
       }
+      // Consume callback end-frame evidence first so the wrap and reset logic
+      // below sees the same seam a tick-polled end window would have armed.
+      const callbackEnd = deck.endFrame && deck.endFrame.url === state.url && deck.endFrame.epoch === state.epoch;
+      if (callbackEnd && !state.endSeen && state.changes >= 2) {
+        state.endSeen = true; state.seamCurrent = deck.endFrame.mediaTime;
+      }
+      if (callbackEnd && state.changes >= 2) deck.endFrame = null;
       // Native currentTime reaches the seam even when the decoded texture is
       // stale mid-clip. Require that source's observed end, never a generic
       // quiet decoder or the first seek of a newly admitted source.
@@ -1504,14 +1514,8 @@ function applySlice(node) {
           current < previousCurrent && !media.seeking && state.decoded >= 0 && state.decoded <= 1 / fps)
         state.wrapDecoded = state.decoded;
       if (!media.seeking && current >= duration - 2 / fps && state.changes >= 2) {
-        state.endSeen = true; state.seamCurrent = current; deck.endFrame = null;
-      } else if (changed && !media.seeking && current > .001) {
-        state.endSeen = false; deck.endFrame = null;
-      } else if (!state.endSeen && state.changes >= 2 && deck.endFrame &&
-          deck.endFrame.url === state.url && deck.endFrame.epoch === state.epoch) {
-        // The decoder delivered the clip's last frames between two ticks.
-        state.endSeen = true; state.seamCurrent = deck.endFrame.mediaTime; deck.endFrame = null;
-      }
+        state.endSeen = true; state.seamCurrent = current;
+      } else if (changed && !media.seeking && current > .001) state.endSeen = false;
       const provenSeam = current <= .001 && state.endSeen && state.changes >= 2;
       const advancingWrap = state.wrapDecoded !== null && current > .001 && !media.seeking &&
         state.decoded === state.wrapDecoded;
