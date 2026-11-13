@@ -53,6 +53,7 @@ engineered_iteration_files = ["{archive}/engineered-iterations/README.md", "{arc
 "{source}" = [".js", ".md", ".py", ".typed"]
 "{package}/lab" = [".css", ".html", ".js", ".md", ".mjs", ".py"]
 "{tools}" = [".md", ".py"]
+"{tools}/mac-app" = [".md", ".plist", ".py", ".sh", ".swift"]
 "{examples}" = [".json", ".md"]
 "{fixtures}" = [".json"]
 
@@ -79,8 +80,8 @@ engineered_iteration_files = ["{archive}/engineered-iterations/README.md", "{arc
 "instructions" = [".md"]
 
 [lint]
-ignore = [".git", "{github}", ".gitignore", "{config}/lint/ls-lint.yml", "{config}/lint/markdownlint.json", "{config}/lint/markdownlintignore", ".pytest_cache", ".venv", ".vscode", "**/*.egg-info", "build", "dist", "**/__pycache__", "{archive}", "{artifact_fixture}/baseline", "{generated}"]
-markdown_ignore = ["/.git/", "/{archive}/", "/{github}/instructions/mermaid.instructions.md", "/{generated}/", "/.pytest_cache/", "/.venv/", "**/__pycache__/"]
+ignore = [".git", "{github}", ".gitignore", "{config}/lint/ls-lint.yml", "{config}/lint/markdownlint.json", "{config}/lint/markdownlintignore", ".pytest_cache", ".venv", ".vscode", "**/*.egg-info", "build", "dist", "**/__pycache__", "{tools}/mac-app/.build", "{tools}/mac-app/Package.swift", "{archive}", "{artifact_fixture}/baseline", "{generated}"]
+markdown_ignore = ["/.git/", "/{archive}/", "/{github}/instructions/mermaid.instructions.md", "/{generated}/", "/.pytest_cache/", "/.venv/", "**/__pycache__/", "/{tools}/mac-app/.build/"]
 
 # Additive draft binding. Existing [contract], [paths], [policy], and [lint]
 # remain effective and unchanged. This profile cannot activate itself.

@@ -9,6 +9,9 @@ __pycache__/
 
 # Raw intake dropzone for unorganized external drops (processed into archive/chatgpt/)
 
+# SwiftPM build products for the Mac app.
+tools/mac-app/.build/
+
 # Python environments, test caches, and packaging metadata.
 .venv/
 .pytest_cache/

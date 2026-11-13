@@ -26,6 +26,11 @@ python -m independent_loop_compositor render --help
 
 On Windows or macOS, see [Windows and macOS](docs/authoring/WINDOWS_AND_MAC.md) for FFmpeg setup, PowerShell commands and what is macOS-only.
 
+## Mac app
+
+`tools/mac-app` is a native Mac app that plays the Studio over your own Photos videos, with sound
+measured per clip. See [its README](tools/mac-app/README.md).
+
 ## Processing responsibility
 
 N independently authored video-loop instances occupy one authored spatial
