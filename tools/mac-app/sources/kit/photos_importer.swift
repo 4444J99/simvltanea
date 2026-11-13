@@ -3,13 +3,6 @@ import AVFoundation
 import Foundation
 import Photos
 
-public struct ImportProgress {
-    public var done: Int
-    public var total: Int
-    public var added: Int
-    public var skipped: Int
-}
-
 /// Reads videos from the user's Photos library with PhotoKit and turns them into library clips.
 /// Nothing is written back to Photos; originals stay where they are.
 public final class PhotosImporter {
@@ -38,39 +31,12 @@ public final class PhotosImporter {
     /// interrupted import keeps what it finished.
     @discardableResult
     public func run(criteria: PhotoCriteria, progress: @escaping (ImportProgress) -> Void) async throws -> ImportProgress {
-        var index = PhotosIndex.load(from: store.photosIndexURL)
-        let plan = ExportPlanner.select(candidates(), criteria: criteria, index: index)
+        let plan = ExportPlanner.select(candidates(), criteria: criteria, index: PhotosIndex.load(from: store.photosIndexURL))
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("simvltanea-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: scratch) }
-        var state = ImportProgress(done: 0, total: plan.count, added: 0, skipped: 0)
-        var pending: [ClipAsset] = []
-        func flush() throws {
-            if !pending.isEmpty { try store.commit(pending); pending = [] }
-            try index.save(to: store.photosIndexURL)
-        }
-        for candidate in plan {
-            try Task.checkCancellation()
-            do {
-                let exported = try await exportVideo(identifier: candidate.localIdentifier, scratch: scratch)
-                let facts = try await MediaProbe.facts(of: exported)
-                let asset = try store.ingest(file: exported, facts: facts)
-                pending.append(asset)
-                index.imported[candidate.localIdentifier] = asset.id
-                state.added += 1
-                try? FileManager.default.removeItem(at: exported)
-            } catch is CancellationError {
-                try flush()
-                throw CancellationError()
-            } catch {
-                index.skipped[candidate.localIdentifier] = String(describing: error)
-                state.skipped += 1
-            }
-            state.done += 1
-            if pending.count >= 8 { try flush() }
-            progress(state)
-        }
-        try flush()
-        return state
+        return try await ImportRunner.run(plan: plan, store: store, export: { [self] candidate in
+            try await exportVideo(identifier: candidate.localIdentifier, scratch: scratch)
+        }, progress: progress)
     }
 
     func exportVideo(identifier: String, scratch: URL) async throws -> URL {

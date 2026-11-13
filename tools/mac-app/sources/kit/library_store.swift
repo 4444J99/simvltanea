@@ -1,5 +1,25 @@
 import Foundation
 
+/// Write-then-rename that also works when the destination does not exist yet, which is the state of
+/// a fresh library's manifest and of a first Photos index.
+public enum AtomicFile {
+    public static func write(_ data: Data, to destination: URL) throws {
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let staging = destination.deletingLastPathComponent().appendingPathComponent(".incoming-\(UUID().uuidString)")
+        try data.write(to: staging)
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                _ = try FileManager.default.replaceItemAt(destination, withItemAt: staging)
+            } else {
+                try FileManager.default.moveItem(at: staging, to: destination)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: staging)
+            throw error
+        }
+    }
+}
+
 /// A private clip library on disk in exactly the shape the Studio and `stage_library_site` accept:
 ///
 ///     <root>/library/manifest.json
@@ -56,9 +76,7 @@ public final class LibraryStore {
         try manifest.validate()
         try verifyClips(manifest)
         try FileManager.default.createDirectory(at: libraryDirectory, withIntermediateDirectories: true)
-        let staging = libraryDirectory.appendingPathComponent(".manifest-\(UUID().uuidString)")
-        try manifest.encoded().write(to: staging)
-        _ = try FileManager.default.replaceItemAt(manifestURL, withItemAt: staging)
+        try AtomicFile.write(try manifest.encoded(), to: manifestURL)
         return manifest
     }
 

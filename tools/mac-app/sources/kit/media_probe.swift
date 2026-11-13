@@ -13,14 +13,20 @@ public enum MediaProbe {
     /// Durations are kept to milliseconds so the manifest, the envelope length and the Studio agree.
     public static func roundedDuration(_ seconds: Double) -> Double { (seconds * 1000).rounded() / 1000 }
 
+    /// Display size in pixels, with the track's rotation applied.
+    public static func displaySize(of url: URL) async throws -> (Int, Int) {
+        let asset = AVURLAsset(url: url)
+        guard let video = try await asset.loadTracks(withMediaType: .video).first else {
+            throw LibraryError("\(url.lastPathComponent) has no video track")
+        }
+        let size = try await video.load(.naturalSize)
+        let shown = size.applying(try await video.load(.preferredTransform))
+        return (Int(abs(shown.width).rounded()), Int(abs(shown.height).rounded()))
+    }
+
     public static func facts(of url: URL) async throws -> MediaFacts {
         let asset = AVURLAsset(url: url)
-        let videos = try await asset.loadTracks(withMediaType: .video)
-        guard let video = videos.first else { throw LibraryError("\(url.lastPathComponent) has no video track") }
-        let size = try await video.load(.naturalSize)
-        let transform = try await video.load(.preferredTransform)
-        let shown = size.applying(transform)
-        let width = Int(abs(shown.width).rounded()), height = Int(abs(shown.height).rounded())
+        let (width, height) = try await displaySize(of: url)
         let duration = roundedDuration(try await asset.load(.duration).seconds)
         guard duration.isFinite, duration > 0 else { throw LibraryError("\(url.lastPathComponent) has no duration") }
         let audio = try await audioProfile(asset: asset, duration: duration)
@@ -44,8 +50,7 @@ public enum MediaProbe {
         guard reader.canAdd(output) else { throw LibraryError("audio track cannot be decoded") }
         reader.add(output)
         guard reader.startReading() else { throw LibraryError("audio read failed: \(reader.error?.localizedDescription ?? "unknown")") }
-        var left: [Float] = [], right: [Float] = []
-        left.reserveCapacity(Int(duration * sampleRate)); right.reserveCapacity(Int(duration * sampleRate))
+        var timeline = AudioTimeline(sampleRate: sampleRate)
         while let buffer = output.copyNextSampleBuffer() {
             guard let block = CMSampleBufferGetDataBuffer(buffer) else { continue }
             let length = CMBlockBufferGetDataLength(block)
@@ -54,11 +59,37 @@ public enum MediaProbe {
                 CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: raw.baseAddress!)
             }
             guard status == kCMBlockBufferNoErr else { throw LibraryError("audio buffer could not be copied") }
-            var index = 0
-            while index + 1 < data.count { left.append(data[index]); right.append(data[index + 1]); index += 2 }
+            let start = CMSampleBufferGetPresentationTimeStamp(buffer).seconds
+            timeline.append(interleaved: data, startSeconds: start.isFinite ? start : nil)
         }
         if reader.status == .failed { throw LibraryError("audio read failed: \(reader.error?.localizedDescription ?? "unknown")") }
-        guard !left.isEmpty else { return .silent(duration: duration) }
-        return AudioAnalysis.profile(channels: [left, right], sampleRate: sampleRate, duration: duration)
+        guard !timeline.left.isEmpty else { return .silent(duration: duration) }
+        return AudioAnalysis.profile(channels: [timeline.left, timeline.right], sampleRate: sampleRate, duration: duration)
+    }
+}
+
+/// Collects decoded stereo audio on the clip's own timeline. The Studio indexes the envelope by
+/// `currentTime`, so audio that starts late or has gaps must keep its silence instead of being
+/// packed against time zero.
+public struct AudioTimeline {
+    public let sampleRate: Double
+    public private(set) var left: [Float] = []
+    public private(set) var right: [Float] = []
+
+    public init(sampleRate: Double) { self.sampleRate = sampleRate }
+
+    /// `interleaved` holds L,R pairs. A start time later than the audio so far is padded with zeros;
+    /// one that overlaps what is already held drops the overlapping frames.
+    public mutating func append(interleaved: [Float], startSeconds: Double?) {
+        var skip = 0
+        if let startSeconds {
+            let wanted = max(0, Int((startSeconds * sampleRate).rounded()))
+            if wanted > left.count {
+                let gap = wanted - left.count
+                left.append(contentsOf: repeatElement(0, count: gap)); right.append(contentsOf: repeatElement(0, count: gap))
+            } else { skip = left.count - wanted }
+        }
+        var index = skip * 2
+        while index + 1 < interleaved.count { left.append(interleaved[index]); right.append(interleaved[index + 1]); index += 2 }
     }
 }

@@ -62,7 +62,7 @@ final class AppModel: ObservableObject {
             do {
                 let result = try await importer.run(criteria: criteria) { state in
                     Task { @MainActor in
-                        self.status = "Importing \(state.done) of \(state.total): \(state.added) added, \(state.skipped) skipped"
+                        self.status = "Importing \(state.done) of \(state.total): \(state.added) added, \(state.skipped) skipped, \(state.failed) to retry"
                     }
                 }
                 refreshCount()
@@ -100,7 +100,7 @@ struct StudioView: NSViewRepresentable {
 }
 
 struct ContentView: View {
-    @StateObject private var model = AppModel()
+    @ObservedObject var model: AppModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -132,7 +132,10 @@ struct ContentView: View {
 
 @main
 struct SimvltaneaApp: App {
+    // One window and one model: imports write a single library, so two windows must not run two imports.
+    @StateObject private var model = AppModel()
+
     var body: some Scene {
-        WindowGroup("Simvltanea") { ContentView() }
+        Window("Simvltanea", id: "main") { ContentView(model: model) }
     }
 }

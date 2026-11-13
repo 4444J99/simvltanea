@@ -42,9 +42,7 @@ public struct PhotosIndex: Codable, Equatable {
     public func save(to url: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        let staging = url.deletingLastPathComponent().appendingPathComponent(".index-\(UUID().uuidString)")
-        try encoder.encode(self).write(to: staging)
-        _ = try FileManager.default.replaceItemAt(url, withItemAt: staging)
+        try AtomicFile.write(try encoder.encode(self), to: url)
     }
 }
 
@@ -70,4 +68,12 @@ public enum ExportPlanner {
         guard let limit = criteria.limit else { return ordered }
         return Array(ordered.prefix(max(0, limit)))
     }
+}
+
+public struct ImportProgress: Equatable {
+    public var done: Int
+    public var total: Int
+    public var added: Int
+    public var skipped: Int
+    public var failed: Int
 }
