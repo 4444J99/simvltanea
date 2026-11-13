@@ -1497,13 +1497,16 @@ function applySlice(node) {
         if (state.attempt.waited + 1e-9 >= this.nativeLoopRescuePolicy().graceSimSec)
           this.rescueNativeLoop(node, deck, state, state.attempt);
       }
-      // Consume callback end-frame evidence first so the wrap and reset logic
-      // below sees the same seam a tick-polled end window would have armed.
+      // The host tick can skip a slow clock's whole end window. Frame-callback evidence of the
+      // source's own end frame then proves the seam, but only once the clock has demonstrably left
+      // the clip's end: an earlier marker must not arm the seam before the wrap has happened, and
+      // ordinary decoded progress discards it below. It is consumed before wrap detection so a
+      // post-skip tick that already reads currentTime>0 on a frozen decoder still sees the seam.
       const callbackEnd = deck.endFrame && deck.endFrame.url === state.url && deck.endFrame.epoch === state.epoch;
-      if (callbackEnd && !state.endSeen && state.changes >= 2) {
-        state.endSeen = true; state.seamCurrent = deck.endFrame.mediaTime;
+      if (callbackEnd && state.changes >= 2 && current + 1 / fps < deck.endFrame.mediaTime) {
+        if (!state.endSeen) { state.endSeen = true; state.seamCurrent = deck.endFrame.mediaTime; }
+        deck.endFrame = null;
       }
-      if (callbackEnd && state.changes >= 2) deck.endFrame = null;
       // Native currentTime reaches the seam even when the decoded texture is
       // stale mid-clip. Require that source's observed end, never a generic
       // quiet decoder or the first seek of a newly admitted source.
@@ -1514,8 +1517,8 @@ function applySlice(node) {
           current < previousCurrent && !media.seeking && state.decoded >= 0 && state.decoded <= 1 / fps)
         state.wrapDecoded = state.decoded;
       if (!media.seeking && current >= duration - 2 / fps && state.changes >= 2) {
-        state.endSeen = true; state.seamCurrent = current;
-      } else if (changed && !media.seeking && current > .001) state.endSeen = false;
+        state.endSeen = true; state.seamCurrent = current; deck.endFrame = null;
+      } else if (changed && !media.seeking && current > .001) { state.endSeen = false; deck.endFrame = null; }
       const provenSeam = current <= .001 && state.endSeen && state.changes >= 2;
       const advancingWrap = state.wrapDecoded !== null && current > .001 && !media.seeking &&
         state.decoded === state.wrapDecoded;
