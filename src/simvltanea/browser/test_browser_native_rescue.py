@@ -43,10 +43,10 @@ class NativeRescueTests(unittest.TestCase):
         }''')
         return page
 
-    def freeze(self, page, *, delayed=False):
+    def freeze(self, page, *, delayed=False, heal=False):
         # Fault in the same task that observes the real end. A separate browser
         # protocol call can arrive after a healthy wrap has cleared endSeen.
-        seam = page.evaluate('''delayed => new Promise((resolve,reject) => {
+        seam = page.evaluate('''({delayed,heal}) => new Promise((resolve,reject) => {
           let done=false;
           const timer=setTimeout(()=>{done=true;reject(Error('No observed native seam within 7000ms'))},7000);
           const check=()=>{
@@ -62,13 +62,41 @@ class NativeRescueTests(unittest.TestCase):
               get:()=>delayed && performance.now()-faultAt<450 ? media.duration-.001 : current,set:v=>{current=v}});
             Object.defineProperty(media,'paused',{configurable:true,get:()=>false});
             Object.defineProperty(media,'seeking',{configurable:true,get:()=>!delayed || performance.now()-faultAt>=450});
-            media.play=()=>Promise.resolve();resolve(faultSeam);
+            media.play=heal ? ()=>{
+              // Test the native operation itself, without spending its 200 ms
+              // recovery budget on a later browser-protocol round trip.
+              window.repairCallWall=performance.now();window.repairFrames=[];window.repairSeekStates=[];
+              window.repairCallSim=live.clock.simTime;
+              window.repairMaxDeltaSec=live.clock.maxDeltaSec;
+              // Control only the simulation budget for this conditional test.
+              // Real media and rVFC keep running; native acceptance separately
+              // enforces its unchanged wall-time continuity threshold.
+              live.clock.maxDeltaSec=0;
+              media.addEventListener('seeking',()=>{
+                const before={ready:media.readyState,seeking:media.seeking,wall:performance.now()};
+                live.recoverNativeLoop(node,live.clock.simTime,0);
+                repairSeekStates.push({...before,interrupted:Boolean(outgoing.loopSeek?.attempt?.interrupted)});
+              },{once:true});
+              for(const name of ['currentTime','paused','seeking','play'])delete media[name];
+              media.currentTime=current;
+              let previous=null;
+              const frame=(wall,metadata)=>{
+                if(!media.seeking && metadata.mediaTime>0 && metadata.mediaTime<.3 &&
+                    metadata.mediaTime!==previous){
+                  repairFrames.push({wall,mediaTime:metadata.mediaTime,simTime:live.clock.simTime});previous=metadata.mediaTime;
+                }
+                if(repairFrames.length<2)media.requestVideoFrameCallback(frame);
+                else live.clock.maxDeltaSec=repairMaxDeltaSec;
+              };
+              media.requestVideoFrameCallback(frame);
+              return HTMLMediaElement.prototype.play.call(media);
+            } : ()=>Promise.resolve();resolve(faultSeam);
           };
           check();
-        })''', delayed)
+        })''', dict(delayed=delayed, heal=heal))
         self.assertTrue(seam['endSeen'] and seam['owned'])
         self.assertGreaterEqual(seam['changes'], 2)
-        page.wait_for_function('Boolean(outgoing.loopSeek?.attempt)', timeout=3000)
+        page.wait_for_function('Boolean(outgoing.loopSeek?.attempt) || Boolean(window.repairFrames?.length>=2)', timeout=3000)
 
     def test_failed_seek_automatically_repairs_same_resident_before_two_seconds(self):
         for delayed in (False, True):
@@ -137,17 +165,32 @@ class NativeRescueTests(unittest.TestCase):
 
     def test_native_repair_that_presents_two_frames_does_not_replace_its_decoder(self):
         page = self.open()
-        self.freeze(page)
-        page.evaluate('''async () => {
-          const media=outgoing.media;
-          for(const name of ['currentTime','paused','seeking','play'])delete media[name];
-          media.currentTime=1/30;
-          await media.play();
-        }''')
-        page.wait_for_function('live.events.some(e=>e.type==="native-loop-seek-recovered")')
-        page.wait_for_timeout(300)
-        self.assertTrue(page.evaluate('node.active===outgoing && outgoing.url===before.url && !incoming.url'))
-        self.assertFalse(page.evaluate('live.events.some(e=>e.type==="native-loop-rescue-started")'))
+        try:
+            self.freeze(page, heal=True)
+            page.wait_for_function('live.events.some(e=>e.type==="native-loop-seek-recovered")')
+            page.wait_for_function('window.repairFrames?.length>=2')
+            timing = page.evaluate('({repairCallWall,repairCallSim,repairFrames,repairSeekStates,events:live.events})')
+            self.assertLessEqual(timing['repairFrames'][1]['simTime'] - timing['repairCallSim'], .2,
+                                 'the two real frames must precede the simulated recovery budget')
+            self.assertTrue(any(row['ready'] in (1, 2) and row['seeking'] for row in timing['repairSeekStates']),
+                            'exercise an actual native seek buffering transition')
+            self.assertTrue(all(not row['interrupted'] for row in timing['repairSeekStates']))
+            page.wait_for_timeout(300)
+            self.assertTrue(page.evaluate('node.active===outgoing && outgoing.url===before.url && !incoming.url'))
+            self.assertFalse(page.evaluate('live.events.some(e=>e.type==="native-loop-rescue-started")'))
+        finally:
+            diagnostic = page.evaluate('''() => ({
+              repairCallWall:window.repairCallWall,repairCallSim:window.repairCallSim,
+              repairFrames:window.repairFrames,repairSeekStates:window.repairSeekStates,
+              events:live.events,seek:outgoing.loopSeek,decoded:outgoing.decoded,
+              current:outgoing.media.currentTime,seeking:outgoing.media.seeking,
+              ready:outgoing.media.readyState,paused:outgoing.media.paused,
+              source:outgoing.url,currentSrc:outgoing.media.currentSrc,
+              stillActive:node.active===outgoing,busy:node.busy,phase:node.phase,
+              rescue:node.nativeRescue ? {detail:node.nativeRescue.detail,
+                aborted:node.nativeRescue.controller.signal.aborted} : null})''')
+            PROOFS.mkdir(parents=True, exist_ok=True)
+            (PROOFS / 'inline-healthy-repair.json').write_text(json.dumps(diagnostic, indent=2) + '\n')
 
     def test_queued_source_epoch_change_cancels_without_loading_a_stale_successor(self):
         page = self.open()

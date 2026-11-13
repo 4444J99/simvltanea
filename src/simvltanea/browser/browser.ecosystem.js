@@ -12,6 +12,9 @@
     STEADY_FLOW: [18, 35], SPARSE_BREATH: [8, 15], BURST_CHORUS: [6, 10],
   });
   const STEP = 1 / 60;
+  // Reserve at most one minimum normal lifetime for an overdue resident's
+  // next seam. A long clip must not hold every other retirement for minutes.
+  const MAX_RETIREMENT_RESERVATION_SEC = 10;
 
   // Exact solution of x'' + 2ωx' + ω²(x-target) = 0 for a constant target.
   // Unlike an Euler update, this remains stable at 30, 60 and 120 Hz.
@@ -70,7 +73,7 @@
         const age = Math.max(0, finite(input.age));
         const deadlineAge = Math.ceil(this._range(10, 24) / duration) * duration;
         state = {id, clipKey, index, duration, born: now - age, age,
-          deadlineAge, presenceDeadlineAge: deadlineAge, presence: 0,
+          deadlineAge, retirementAge: deadlineAge, presenceDeadlineAge: deadlineAge, presence: 0,
           lastTransition: now, awaiting: null, resting: Boolean(input.resting),
           restUntil: input.resting ? now + this._range(4, 7) : 0,
           fatigue: 0, prominence: 1 / Math.max(1, count), space: 1, velocity: 0};
@@ -83,6 +86,7 @@
       if (!resting && state.resting) {
         // Waking an old clip gives it one more complete loop. Its age is not falsified.
         state.deadlineAge = (Math.floor(state.age / state.duration) + 1) * state.duration;
+        state.retirementAge = state.deadlineAge;
         state.lastTransition = now;
       }
       state.resting = resting;
@@ -150,7 +154,13 @@
       if (accepted) state.lastTransition = now;
       else {
         this._nextArrival = now + 1.4;
-        if (request.type === 'replace') state.deadlineAge += state.duration;
+        if (request.type === 'replace') {
+          const age = Math.max(state.age, now - state.born);
+          state.deadlineAge += Math.max(1, Math.floor((age - state.deadlineAge) / state.duration) + 1) * state.duration;
+          // A failed candidate rejoins at its next seam rather than retaining
+          // a permanent claim ahead of every other overdue resident.
+          state.retirementAge = state.deadlineAge;
+        }
       }
       return true;
     }
@@ -176,11 +186,15 @@
       let oldest = null;
       for (let index = 0; index < count; index++) {
         const state = this._ordered[index];
-        if (state.resting || residents[index].pending || state.age < 10 || state.age < state.deadlineAge ||
+        if (state.resting || residents[index].pending || state.age < 10 || state.age < state.retirementAge ||
+            state.deadlineAge - state.age > MAX_RETIREMENT_RESERVATION_SEC ||
             now - state.lastTransition < 1.4) continue;
-        if (!oldest || state.deadlineAge - state.age < oldest.deadlineAge - oldest.age) oldest = state;
+        // Whole-loop deferrals move the admission seam, not the obligation's
+        // place in line. Otherwise a small cooling pool can bypass one slot
+        // forever while repeatedly serving younger residents.
+        if (!oldest || state.retirementAge - state.age < oldest.retirementAge - oldest.age) oldest = state;
       }
-      if (!oldest) return;
+      if (!oldest || oldest.age < oldest.deadlineAge) return;
       // Scarcity outranks density: do not retire into an unavailable replacement pool.
       if (options.canReplace === false) oldest.deadlineAge += oldest.duration;
       else if (active > this.output.desiredActive && options.canRest !== false && !options.manualCount) {
@@ -297,6 +311,7 @@
         nextRegime: this._nextRegime, nextArrival: this._nextArrival,
         residents: [...this._states.values()].map(state => ({id: state.id, clipKey: state.clipKey,
           duration: state.duration, born: state.born, age: state.age, deadlineAge: state.deadlineAge,
+          retirementAge: state.retirementAge,
           resting: state.resting, restUntil: state.restUntil, pending: state.awaiting !== null,
           fatigue: state.fatigue, prominence: state.prominence, space: state.space,
           presence: state.presence, presenceDeadlineAge: state.presenceDeadlineAge}))};
