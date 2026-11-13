@@ -1050,18 +1050,21 @@ function applySlice(node) {
           if (outgoing) outgoing.media.style.zIndex = '0';
           if (outgoing && this.running && !node.resting && duration > 0) {
             const seek = outgoing.loopSeek, attempt = seek?.attempt;
+            const rapidFade = rescue?.outgoing === outgoing ? .05 : .2;
             // A native recovery request can fulfill without producing a frame.
             // Once the successor has passed freshness, use the existing rapid
             // fade instead of retaining that known frozen picture for 1.2 s.
+            // An owned rescue gets only 50 ms here after potentially slow
+            // priming; the two fresh promoted frames remain required below.
             if (handoff && attempt && attempt.generation === this.generation &&
                 seek.url === outgoing.url && seek.epoch === outgoing.sourceEpoch &&
                 outgoing.media.currentSrc === outgoing.url && outgoing.media.seeking &&
                 !outgoing.media.paused && !outgoing.media.error && !attempt.progressed &&
-                Number.isFinite(attempt.decoded) && duration > .2) {
+                Number.isFinite(attempt.decoded) && duration > rapidFade) {
               this.record('handoff-expedited', node.id, {reason: 'outgoing-native-seek-stalled',
                 url: outgoing.url, sourceEpoch: outgoing.sourceEpoch, attemptedAt: attempt.time,
-                requestedDuration: duration, duration: .2});
-              duration = .2;
+                requestedDuration: duration, duration: rapidFade});
+              duration = rapidFade;
             }
             node.phase = 'CROSSFADING';
             await new Promise((resolve, reject) => {

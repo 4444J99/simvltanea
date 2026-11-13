@@ -88,7 +88,7 @@ class GeneratedVoiceFilterTests(unittest.TestCase):
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
         self.addCleanup(lambda: self.assertEqual(errors, []))
-        page.goto('https://studio.test/?gen=1&seed=99&mix=s2.3&evolve=0')
+        page.goto('https://studio.test/watch.html?gen=1&seed=99&mix=s2.3&evolve=0')
         self.wait(page, 'compositionRuntime.ready && compositionRuntime.nodes.size===2 && !compositionRuntime.draining',
                   timeout=20000)
         self.assertEqual(page.evaluate('SimvltaneaStudio.snapshot().record'), 'recorded')

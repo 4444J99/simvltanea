@@ -9,8 +9,10 @@ compiles them in the browser. The families and the counts each offers come from
 ``layouts.json``, the ``simvltanea.layout-bundle/2`` that ``layout_bundle_v2()``
 builds. Files never leave the device. ``stage_studio(output)`` writes the flat, relative-URL site::
 
-    index.html  runtime.js  compiler.js  studio.js  layouts.json
-    lab.html  lab_model.js  lab_engine.js  lab_ui.js  lab_audio.js
+    index.html  shell.js  watch.html  iterations.html
+    engineered-iterations.json  iterations.json
+    runtime.js  compiler.js  studio.js  layouts.json
+    workspace.html  lab.html  lab_model.js  lab_engine.js  lab_ui.js  lab_audio.js
     lab_compiler.js  lab_layouts.js
 
 A public clip library (``library/manifest.json`` and ``library/clips/``) is added
@@ -35,7 +37,9 @@ from simvltanea.browser.browser_lab import LAB_FILES, lab_files
 
 HERE = Path(__file__).resolve().parent
 STUDIO_TITLE = 'SIMVLTANEA studio: loops on their own clocks'
-STUDIO_FILES = ('index.html', 'runtime.js', 'compiler.js', 'studio.js', 'layouts.json', *LAB_FILES)
+STUDIO_FILES = ('shell.js', 'watch.html', 'iterations.html', 'engineered-iterations.json',
+                'iterations.json', 'index.html', 'runtime.js', 'compiler.js',
+                'studio.js', 'layouts.json', *LAB_FILES)
 
 STYLE = '''
 :root{color-scheme:dark;--bg:#0a0a0b;--fg:rgba(255,255,255,.88);--dim:rgba(255,255,255,.55);
@@ -207,7 +211,7 @@ INDEX_HTML = '''<!doctype html>
 accept="video/*,.mov,.mp4,.m4v,.webm,.json,application/json">
 </div>
 <div id="corner" role="toolbar" aria-label="Page">
-<a class="lab-link" href="lab.html">Effects Lab</a>
+<a class="lab-link" href="./#compose" target="_top" aria-label="Open Composition Workspace">Compose</a>
 <button id="activity" type="button" aria-label="Hold changes" aria-pressed="false" title="Hold changes">∞</button>
 <button id="effects" type="button" aria-label="Filters" aria-pressed="true" title="Filters on">ƒx</button>
 <button id="filter-tune" type="button" aria-label="Filter settings" aria-haspopup="dialog"
@@ -259,6 +263,11 @@ aria-controls="filter-settings" aria-expanded="false" title="Filter settings">�
 '''
 
 
+from simvltanea.browser.browser_shell import (
+    ENGINEERED_ITERATIONS_JSON, ITERATIONS_HTML, ITERATIONS_JSON, SHELL_HTML, SHELL_JS,
+)
+
+
 class StudioStagingError(ValueError):
     """The output directory cannot safely receive the studio."""
 
@@ -267,7 +276,12 @@ def studio_files() -> dict[str, bytes]:
     """Return the exact bytes of every staged file, keyed by its flat name."""
     layouts = json.dumps(layout_bundle_v2(), indent=2, ensure_ascii=False) + '\n'
     return {
-        'index.html': INDEX_HTML.encode(),
+        'index.html': SHELL_HTML.encode(),
+        'watch.html': INDEX_HTML.encode(),
+        'shell.js': SHELL_JS.encode(),
+        'iterations.html': ITERATIONS_HTML.encode(),
+        'engineered-iterations.json': ENGINEERED_ITERATIONS_JSON.encode(),
+        'iterations.json': ITERATIONS_JSON.encode(),
         'runtime.js': b'\n'.join((HERE / name).read_bytes() for name in
                                 ('browser.audio.js', 'browser.presence.js', 'browser.ecosystem.js', 'browser.live.js')),
         'compiler.js': (HERE / 'browser.compiler.js').read_bytes(),
@@ -280,7 +294,7 @@ def studio_files() -> dict[str, bytes]:
 def stage_studio(output: Path) -> None:
     """Write the flat studio into ``output``, creating it when absent.
 
-    Only the declared Studio and Effects Lab files are ever written. A directory holding anything
+    Only the declared Studio and Composition Workspace files are ever written. A directory holding anything
     else (including hidden files, subdirectories or symlinks) is refused before
     any byte is written, so staging cannot clobber or mix with foreign content.
     """

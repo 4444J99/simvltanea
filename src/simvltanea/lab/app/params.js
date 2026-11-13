@@ -103,6 +103,11 @@ export const PARAMS = [
   I('timing.recency_window', 'timing', 'Recency window', 0, 500, 1, 50, 'clips', 'How many recent clips the recency penalty remembers.'),
   F('timing.novelty', 'timing', 'Novelty', 0, 1, 0.01, 0.3, '', 'Bonus for clips not shown yet.'),
   F('timing.swap_interval', 'timing', 'Swap interval', 0, 60, 0.1, 0, 's', 'If above 0, a single panel (the one on screen longest) changes every interval instead of independent holds.'),
+  B('timing.snap_to_loop', 'timing', 'Snap hold to loop', false, 'Snap each hold to an integer multiple of its clip duration, bounded to the life range.'),
+  F('timing.life_min', 'timing', 'Life min', 1, 60, 0.5, 10, 's', 'Shortest life (seconds) when snapping holds to a clip loop.'),
+  F('timing.life_max', 'timing', 'Life max', 1, 120, 0.5, 24, 's', 'Longest life (seconds) when snapping holds to a clip loop.'),
+  E('timing.macro_regime', 'timing', 'Macro regime', ['off', 'steady_flow', 'sparse_breath', 'burst_chorus', 'markov'], 'off', 'Macro pacing regime: off disables it; the others bias inter-arrival timing and hold lengths.'),
+  F('timing.delta_min', 'timing', 'Min inter-arrival', 0, 60, 0.1, 0, 's', 'Minimum seconds between panel arrivals (inter-arrival guard).'),
   F('timing.speed', 'timing', 'Speed', 0.25, 2, 0.01, 1, 'x', 'Playback rate of every video.'),
 
   // ---- LAYOUT ----
@@ -115,6 +120,7 @@ export const PARAMS = [
   F('layout.radius', 'layout', 'Corner radius', 0, 80, 1, 0, 'px', 'Rounded corners (0 keeps the screen perfectly filled).', { rnd: [0, 0] }),
   F('layout.jitter', 'layout', 'Sideways jitter', 0, 80, 1, 0, 'px', 'Strips sway sideways by up to this much; the video is over-scanned so nothing is left empty.'),
   F('layout.jitter_rate', 'layout', 'Jitter rate', 0.02, 2, 0.01, 0.2, 'Hz', 'Speed of the sideways sway.'),
+  B('layout.prominence', 'layout', 'Prominence-driven widths', false, 'Strip widths react to sustained audio prominence (up to ~2.35x share).'),
 
   // ---- ZOOM ----
   F('zoom.z1', 'zoom', 'Z1 (zoom at one panel)', 1, 40, 0.1, 8, 'x', 'zoom(N) = max(floor, Z1 / N^gamma).', { rnd: [2, 16] }),
@@ -155,6 +161,11 @@ export const PARAMS = [
   F('audio.fade', 'audio', 'Fade length', 0, 3, 0.01, 0.4, 's', 'Cross-fade when a panel changes clip (avoids clicks).'),
   B('audio.limiter', 'audio', 'Limiter', true, 'Compressor/limiter before the output.', NR),
   F('audio.limiter_ceiling', 'audio', 'Limiter ceiling', -24, 0, 0.5, -3, 'dB', 'Threshold of the limiter.', NR),
+  B('audio.ecology', 'audio', 'Bio-acoustic ecology', false, 'Enable energy/age/fatigue/inhibition prominence dynamics.'),
+  F('audio.fatigue_rate', 'audio', 'Fatigue rate', 0, 2, 0.01, 0.15, '', 'How quickly loud panels accumulate fatigue.'),
+  F('audio.inhibition', 'audio', 'Lateral inhibition', 0, 1, 0.01, 0.4, '', 'Suppression of a panel by its neighbours.'),
+  F('audio.vitality_floor', 'audio', 'Vitality floor', 0, 1, 0.01, 0.05, '', 'Quiet panels below this level get a vitality bid.'),
+  F('audio.prominence_tau', 'audio', 'Prominence smoothing', 0.05, 2, 0.01, 0.3, 's', 'Low-pass time constant for prominence.'),
 
   // ---- REVEAL ----
   E('reveal.action', 'reveal', 'Tap action', ['still', 'video', 'both'], 'still', 'What tapping a panel shows: the original still, the full-frame video, or the still with the video inset.'),

@@ -12,6 +12,9 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from simvltanea.browser import ENGINEERED_ITERATIONS, STUDIO_FILES
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,7 +45,14 @@ class BuildStudioSiteTests(unittest.TestCase):
                      'height': 270, 'orientation': 'landscape', 'duration_seconds': 2,
                      'bytes': len(self.data), 'tags': {}}
         (self.library / self.clip['file']).write_bytes(self.data)
-        self.document = {'schema': 'simvltanea.public-demo/1', 'clips': [self.clip]}
+        self.clips = [self.clip]
+        for index in (2, 3):
+            body = self.data + str(index).encode()
+            identity = hashlib.sha256(body).hexdigest()[:12]
+            clip = dict(self.clip, id=identity, file=f'clips/{identity}.mp4', bytes=len(body))
+            (self.library / clip['file']).write_bytes(body)
+            self.clips.append(clip)
+        self.document = {'schema': 'simvltanea.public-demo/1', 'clips': self.clips}
         self.write_manifest()
         # Neither unrelated source files nor repository archives belong in the output.
         (self.library / 'repository.zip').write_bytes(b'not public site content')
@@ -83,13 +93,19 @@ class BuildStudioSiteTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         files = {path.relative_to(self.output).as_posix()
                  for path in self.output.rglob('*') if path.is_file()}
-        self.assertEqual(files, {'index.html', 'runtime.js', 'compiler.js', 'studio.js',
-                                 'layouts.json', 'lab.html', 'lab_model.js', 'lab_engine.js', 'lab_ui.js',
-                                 'lab_audio.js', 'lab_compiler.js', 'lab_layouts.js', 'library/manifest.json',
-                                 'library/' + self.clip['file']})
+        self.assertEqual({name for name in files if '/' not in name}, set(STUDIO_FILES))
+        self.assertEqual({name for name in files if name.startswith('library/')},
+                         {'library/manifest.json'} | {'library/' + clip['file'] for clip in self.clips})
+        self.assertTrue(all('/' not in name or name.startswith(('library/', 'iterations/')) for name in files))
+        self.assertFalse(any(name.endswith(('.py', '.toml', '.zip')) for name in files))
+        catalog = json.loads((self.output / 'engineered-iterations.json').read_text())
+        self.assertEqual(len(catalog), len(ENGINEERED_ITERATIONS))
+        for item in catalog:
+            if item['url'].startswith('iterations/'):
+                self.assertIn(item['url'] + 'index.html', files)
         self.assertEqual((self.output / 'library/manifest.json').read_bytes(), self.manifest)
         self.assertEqual((self.output / 'library' / self.clip['file']).read_bytes(), self.data)
-        self.assertIn('1 library clips', result.stdout)
+        self.assertIn('3 library clips', result.stdout)
 
     def add_boomerang(self):
         data = b'public boomerang bytes'
@@ -165,6 +181,29 @@ class BuildStudioSiteTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual((self.output / 'keep.txt').read_text(), 'preserve me')
         self.assertEqual(list(self.output.iterdir()), [self.output / 'keep.txt'])
+
+    def test_failed_historical_build_does_not_publish_a_partial_site(self):
+        from tools.publishing.build_studio_site import build_studio_site
+        (self.library / 'repository.zip').unlink()
+        with patch('tools.publishing.build_studio_site.historical_replay_files',
+                   side_effect=ValueError('historical source verification failed')):
+            with self.assertRaisesRegex(ValueError, 'historical source'):
+                build_studio_site(self.output, library=self.library)
+        self.assertFalse(self.output.exists())
+
+    def test_failed_final_staging_preserves_an_empty_output_directory(self):
+        from tools.publishing.build_studio_site import build_studio_site
+        (self.library / 'repository.zip').unlink()
+        self.output.mkdir()
+        def fail_after_partial_copy(studio, library, release):
+            release.mkdir()
+            (release / 'index.html').write_text('incomplete')
+            raise OSError('simulated disk failure')
+        with patch('tools.publishing.build_studio_site.stage_library_site', side_effect=fail_after_partial_copy):
+            with self.assertRaisesRegex(OSError, 'disk failure'):
+                build_studio_site(self.output, library=self.library)
+        self.assertTrue(self.output.is_dir())
+        self.assertEqual(list(self.output.iterdir()), [])
 
 
 if __name__ == '__main__':

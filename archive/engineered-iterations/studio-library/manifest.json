@@ -1,0 +1,233 @@
+{
+  "schema": "simvltanea.engineered-source/1",
+  "slug": "studio-library",
+  "kind": "studio",
+  "revision": "9c5ce0ad0c275a23bd8c2014e47cfc8d4bcc7987",
+  "files": [
+    {
+      "path": "examples/layout-presets/strips.json",
+      "sha256": "e7de3db6973c920b976e1d48b0845c919038e6c43411abc252501eabf3b36bbc",
+      "git_blob": "55891d1f157f1492bbf853de60dbfe615a110c36"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "ebdbac8acb9349dbcf8edc719703be085d54de1162f55d541e3303f3fd704cd5",
+      "git_blob": "df6b31651e5a14a30123433c13966298b5386294"
+    },
+    {
+      "path": "src/simvltanea/__init__.py",
+      "sha256": "074f16b255d757df9529f07d4a6e381f4cb910cd69012a242cee5c21f6cee896",
+      "git_blob": "ed84bca9e36b283d637a8f8a1ba4f4ee4318cd9a"
+    },
+    {
+      "path": "src/simvltanea/artifact001_layouts.py",
+      "sha256": "1f02b9cf866fa8df4e252fd09d6f5d4c9381a17327da57158099a5c20000017e",
+      "git_blob": "a90e8028eb75fe78395243b764a67be040199da1"
+    },
+    {
+      "path": "src/simvltanea/authoring/__init__.py",
+      "sha256": "1587ddaf29325e139bfc6c076a86bd6e8bb7718f524b59b9e07b24adb73c5f71",
+      "git_blob": "82f17904e0160c4ce6d99344e8f98d1abedda386"
+    },
+    {
+      "path": "src/simvltanea/authoring/artifact001_layouts.py",
+      "sha256": "8efd417fd214ed52aae1c80c455695156de5130149a0c5de2fb599b91993d2f8",
+      "git_blob": "ad606965ebb05b889f3153450c8e39f301d06dcf"
+    },
+    {
+      "path": "src/simvltanea/authoring/composition.py",
+      "sha256": "301b1ffe4004844482e33e1f6633232fe43cc5e0be33ad9ac6c8c5c735a16771",
+      "git_blob": "f540363804f31dfc071314aa9cb34af673f277a5"
+    },
+    {
+      "path": "src/simvltanea/authoring/composition_model.py",
+      "sha256": "90aba35a8ce8cd27cc0c5fe93b3e91a3ee47e7ef3800cee05358648baaefd3d2",
+      "git_blob": "6ed78fb07bdebe58ef53c492165459dcdc54f0ef"
+    },
+    {
+      "path": "src/simvltanea/authoring/gravity_affinity.py",
+      "sha256": "6c437b848a2ae726aa0918bc493d6f4e7ed92b3b551b5f0e5ae76bc2b84ae244",
+      "git_blob": "aed937fe445017e467688d338fae53dd9da2bcf9"
+    },
+    {
+      "path": "src/simvltanea/authoring/gravity_scheduler.py",
+      "sha256": "e9777aa4dc8550869f07f31821a05372ff7acdce06b2751ed5176a0dc811545f",
+      "git_blob": "c9ccc3ef6d438468f6aafaf65bd0f379cc21f009"
+    },
+    {
+      "path": "src/simvltanea/authoring/layout_presets.py",
+      "sha256": "2ff3ea99640e59ddb7289f0e2688f62f1c8f605bfd8f54aa4fd02b8500515065",
+      "git_blob": "3ea3d6486069e4f467533e92da4864afcf409d3b"
+    },
+    {
+      "path": "src/simvltanea/authoring/play_config.py",
+      "sha256": "1c47d1472c7d2d38baa8bf93ffba11b10af184337496f76ee10bb9b073a81c8e",
+      "git_blob": "26080c29d98e5cd83f8655a422304d8049f1dddd"
+    },
+    {
+      "path": "src/simvltanea/authoring/play_encode.py",
+      "sha256": "c1c75e4eb855bbe3a6b94d9eec7cb2b0fefbefec32bcdd139a9be11055e88dd7",
+      "git_blob": "ef13c9a826bb507ae606492b521c7e86257b2a83"
+    },
+    {
+      "path": "src/simvltanea/authoring/play_engine.py",
+      "sha256": "744c462490560d4a5a3e4db548257c5b5ed0a7b93d94986a18af06f3155682e7",
+      "git_blob": "4dcc1dbe2814c43d88fb18df6e52b8ab2c258ed3"
+    },
+    {
+      "path": "src/simvltanea/authoring/play_order.py",
+      "sha256": "64eb6f9f54a3c5f8fc274827a294faf8b94ab2a952540325f44ba2fe46f63ee3",
+      "git_blob": "1a4adbc8687e206a6a1e1194391bc43480d9a5d3"
+    },
+    {
+      "path": "src/simvltanea/authoring/play_paths.py",
+      "sha256": "becde19234fefff3c5bd4f611c1224ef12bd57e3f04827d37f08bf6bcdc7bc73",
+      "git_blob": "221569ec5477b8c72093cdc0e7e6171b66c4e46e"
+    },
+    {
+      "path": "src/simvltanea/authoring/play_pool.py",
+      "sha256": "95999e5e04dd16cc65f473ab3c48625f7d5d1ea9107c1b264ce403fcbc1438fc",
+      "git_blob": "e73059f75efadf8b688010df3ade359335f24905"
+    },
+    {
+      "path": "src/simvltanea/authoring/play_presets.py",
+      "sha256": "96eb8e8dfd053176a94e159e64729a7458da4c956188d2f2287685bd0836a348",
+      "git_blob": "62a22af26964440a435e48e722b14ec82a601744"
+    },
+    {
+      "path": "src/simvltanea/authoring/play_rng.py",
+      "sha256": "92bea58dda86256248e19fb2daf6c172511cbe1efcc74b8615ea40c444047b26",
+      "git_blob": "5c0d2326453af83cf61badc006445fd30df716d4"
+    },
+    {
+      "path": "src/simvltanea/browser/__init__.py",
+      "sha256": "1b081707eb3692f9b88f838de69130eb3a1a1285f4738cd8a2a343c2f32240df",
+      "git_blob": "6e08a1039106fda1e4811b000bbb3fafc38ae42d"
+    },
+    {
+      "path": "src/simvltanea/browser/browser.compiler.js",
+      "sha256": "bb47d5e31e285c9d114074af33d48a58872d15872ee89db47b4aca1660608708",
+      "git_blob": "d2a99567179d0c897d704ef0d1718734778a8962"
+    },
+    {
+      "path": "src/simvltanea/browser/browser.continuity.js",
+      "sha256": "ec013a101a0471544cf81c1b2614924b0a96d90ddd9a7582f7022338c268f02f",
+      "git_blob": "577ae5cabe660e295f6748ef1d0321050ce52fee"
+    },
+    {
+      "path": "src/simvltanea/browser/browser.runtime.js",
+      "sha256": "33a3ba9c7dc9681601ec709e8318062c5d5b6a1af7b826e8b24ccf32b92769c4",
+      "git_blob": "f91812e4e8ebb3d6c5bd7ad5920ef42e6d7f6b6d"
+    },
+    {
+      "path": "src/simvltanea/browser/browser.studio.js",
+      "sha256": "dfe03896c697a630ba1d57fd045eb1b4137cf3333b35c698ee375f03a5c22ec9",
+      "git_blob": "90884275b787ee850d7b2ee507a4c3b857618b1b"
+    },
+    {
+      "path": "src/simvltanea/browser/browser_runtime.py",
+      "sha256": "7db532050eaa25b7e2bb0f85e13a92f95a35ca1fbf835b616a0dbcbb2929ea29",
+      "git_blob": "170e4bdc56577d838e1553a8c1ceea0a6dd37589"
+    },
+    {
+      "path": "src/simvltanea/browser/browser_studio.py",
+      "sha256": "12c8b111fa56d3288c07c4365ebf463bd29c5a3fceaa9e3fa5ea4bcdeb635733",
+      "git_blob": "75f3f199331ea7f3da633821aae63babd0540611"
+    },
+    {
+      "path": "src/simvltanea/browser/layout_bundle.py",
+      "sha256": "87402642d3800e3a312e41773c8f053a346db5361a66da6ad571a4adde387dc4",
+      "git_blob": "26ce92780426705fdc1ee980159b98636e8a45bd"
+    },
+    {
+      "path": "src/simvltanea/browser/shared_engine.py",
+      "sha256": "02191526e5f9737ae88bd52f6ad940141c76f82584ade553cde53dd7e66abd86",
+      "git_blob": "1528a61413e06771fd6ef4566d7ae9a72cda44b5"
+    },
+    {
+      "path": "src/simvltanea/browser/shared_engine_adapter.js",
+      "sha256": "b219d71cf39ea26ed32a994fb9605171cb50b7d525a407f5d48b482a53795fda",
+      "git_blob": "ac2359b6694a4cc436868bcb65bddcbd379f487a"
+    },
+    {
+      "path": "src/simvltanea/browser/shared_engine_pin.json",
+      "sha256": "4851d45d7d622e05f859479f0b6fcfeed782a143fb8b3435eabbb671382f0b47",
+      "git_blob": "2e519b002dde724f64880d337ec863ca31e263af"
+    },
+    {
+      "path": "src/simvltanea/browser_runtime.py",
+      "sha256": "7bcc55a7bb08f4c96026f0591900df547b5ac5d7762fd45558e173e104a43789",
+      "git_blob": "a1caf7320ce5512aab0efb8d04d1fc0bbbf49d48"
+    },
+    {
+      "path": "src/simvltanea/composition.py",
+      "sha256": "9c1321ecbdb20bb56e1b61b73fc0c8b60870e280931e506ca21a2a2540bf352a",
+      "git_blob": "35f4bfd524bb5567fa5276c9a99f3819c231931e"
+    },
+    {
+      "path": "src/simvltanea/composition_model.py",
+      "sha256": "73a3d8db7bef7fc77c5c4705d281348d7ae0a6dd0014621a225ec4d806dc724c",
+      "git_blob": "cdc11e1c04803b05e264efe72a46a935203d9051"
+    },
+    {
+      "path": "src/simvltanea/generators/__init__.py",
+      "sha256": "142113bc62222e692bbe50e65a0d9427ae2149dd5b417b89a27845c2fbe2b9bc",
+      "git_blob": "30b8cb5f6eaaf8063ffc3057528043505c611045"
+    },
+    {
+      "path": "src/simvltanea/generators/make_artifact_001.py",
+      "sha256": "abb2de7582b406a6bbfbc1ed4ce6998c78ce8c3faaf1fbe95e53049289931621",
+      "git_blob": "1f502e42c5bdc8a7d4bc1ce688a2ebfc1f35ee70"
+    },
+    {
+      "path": "src/simvltanea/generators/make_audio_fixture.py",
+      "sha256": "b16fa7222c02e959bd8e57e1a7c7e583a2ad9a4d3fb4e1afdaaa02980eeab660",
+      "git_blob": "9de5f1e16b9bf2da1c986f9b9d0ebd004884b2fd"
+    },
+    {
+      "path": "src/simvltanea/generators/make_runtime_fixture.py",
+      "sha256": "6a0526e30a5dd8e87d01e14f2156cdaab50cf4641c8b00d90b1577b061f70ad5",
+      "git_blob": "62d91c9057b0e716794e6ad44b1a887f95ca9146"
+    },
+    {
+      "path": "src/simvltanea/layout.toml",
+      "sha256": "c8ea4ffe18fc5f50c8fa2c178512ee8270bc3a703bbd59dda8841fe7e68bbf12",
+      "git_blob": "a8605a8ad4a9c2e2b5dfe53a17e5c07a75c10119"
+    },
+    {
+      "path": "src/simvltanea/make_artifact_001.py",
+      "sha256": "d3a82b3d62550c0d87a20086ef3b8424020f1e183ec7046f3fb34b2205a910b2",
+      "git_blob": "fd8a3b5499b143d3fcd410a3948f2f8144ad0822"
+    },
+    {
+      "path": "src/simvltanea/make_audio_fixture.py",
+      "sha256": "1c8fed7228e6f9e2563a0030a1bc21169f5896f2c3a75828e633aed1156957b2",
+      "git_blob": "c8844883676d400eecff7461ed0baffcd87d3bb8"
+    },
+    {
+      "path": "src/simvltanea/make_runtime_fixture.py",
+      "sha256": "724aeff1e0a54900c4d256fc29c9dbeada30ef3945c38a3557c8232eac417394",
+      "git_blob": "a4abfff590613132a93136535f6b02c3da5e73e8"
+    },
+    {
+      "path": "src/simvltanea/paths.py",
+      "sha256": "ef59d882a3bf874cd6b5309dc419f98899d37db3770e08f4490658efbb53a913",
+      "git_blob": "e39811af824ed7ac658c6063f78daef9e4c86d74"
+    },
+    {
+      "path": "src/simvltanea/render_triptych.py",
+      "sha256": "a18b8d398a44a5d26fe7d55bbcdb913f084d8289a2d515c7d57b3d15d5111792",
+      "git_blob": "a2a62328efbf11c4b944b5d6c2caf4c707cd7dc6"
+    },
+    {
+      "path": "src/simvltanea/rendering/__init__.py",
+      "sha256": "4c88e8c367776c44227f100704704ed79a8948395e2a9abfa08e2f91cabb9577",
+      "git_blob": "a8e9f791c45c3d97fc4359aac2be2cfbdf4bc22d"
+    },
+    {
+      "path": "src/simvltanea/rendering/render_triptych.py",
+      "sha256": "e6ef9aa6599726a7e11cd25c014c4f13192601ddfb444fd2250f709c1c9fb142",
+      "git_blob": "5021f5fcf276d627d4390e54a325b879f1694005"
+    }
+  ]
+}

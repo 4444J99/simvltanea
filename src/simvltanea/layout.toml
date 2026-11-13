@@ -45,6 +45,7 @@ documentation_file_exceptions = ["{docs}/continuations/pr-20/session-closeout.js
 doc_subdirectories = ["continuations", "architecture", "authoring", "governance", "plans", "provenance"]
 archive_categories = ["bundles", "evidence", "extracts", "handoffs", "logs", "media", "prompts", "receipts", "research", "sessions", "threads"]
 proof_files = ["{evidence}/visual-proof/README.md", "{evidence}/visual-proof/ledger.json"]
+engineered_iteration_files = ["{archive}/engineered-iterations/README.md", "{archive}/engineered-iterations/early/source-provenance.json", "{archive}/engineered-iterations/early/authored-loops/browser_runtime.js", "{archive}/engineered-iterations/early/seamed-slices/browser_runtime.js", "{archive}/engineered-iterations/early/spatial-audio/browser_runtime.js", "{archive}/engineered-iterations/early/viewport-composition/browser_runtime.js"]
 
 # The longest matching prefix wins. The playable lab is a static web app (HTML, CSS, ES modules and
 # node --test .mjs files); only its subpackage may carry those extensions (docs/governance/STRUCTURE.md).
@@ -54,6 +55,18 @@ proof_files = ["{evidence}/visual-proof/README.md", "{evidence}/visual-proof/led
 "{tools}" = [".md", ".py"]
 "{examples}" = [".json", ".md"]
 "{fixtures}" = [".json"]
+
+# Named historical inputs, not published output. Each root allows manifest.json/README.md plus
+# original source paths below source/; generated directories and media are rejected by the verifier.
+[policy.engineered_iteration_sources]
+"{archive}/engineered-iterations/studio-authored" = [".py", ".js", ".json", ".toml"]
+"{archive}/engineered-iterations/studio-strips" = [".py", ".js", ".json", ".toml"]
+"{archive}/engineered-iterations/studio-instant" = [".py", ".js", ".json", ".toml"]
+"{archive}/engineered-iterations/studio-library" = [".py", ".js", ".json", ".toml"]
+"{archive}/engineered-iterations/modular-lab" = [".html", ".css", ".js"]
+"{archive}/engineered-iterations/modular-continuous" = [".html", ".css", ".js"]
+"{archive}/engineered-iterations/modular-preload" = [".html", ".css", ".js"]
+"{archive}/engineered-iterations/modular-integrated" = [".html", ".css", ".js"]
 
 # Dataset-looking folders that must never enter Git below these roots (real media and clips.json stay
 # private). The structure verifier rejects them and sync_layout derives matching ignore rules.

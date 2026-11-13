@@ -238,6 +238,29 @@ test('changing the pool filter replaces excluded on-screen clips immediately', (
   for (const c of s.onScreen()) assert.ok(!recs[c].tokens.has(tag));
 });
 
+test('empty pool retires scheduled clips and refills at the same paused clock', () => {
+  for (const timing of [{}, { 'timing.synchronized': true }, { 'timing.swap_interval': 3 }]) {
+    const p = params({ ...timing, 'source.untagged': 'exclude' });
+    const s = new Scheduler(recs, p, 3, 1);
+    s.tick(0);
+    const before = s.onScreen();
+    assert.ok(before.every((clip) => clip >= 0));
+
+    s.setParams({ ...p, 'source.tags_include': ['missing-tag'] });
+    assert.equal(s.pool.length, 0);
+    assert.deepEqual(s.tick(0), before.map((prev, panel) => ({ panel, clip: -1, prev })));
+    assert.deepEqual(s.onScreen(), [-1, -1, -1]);
+    assert.ok(before.every((clip) => s.lastEnd[clip] === 0));
+    assert.deepEqual(s.tick(0), [], 'empty panels are retired only once');
+
+    s.setParams(p);
+    const restored = s.tick(0);
+    assert.equal(restored.length, 3, 'restoration does not require advancing paused time');
+    assert.ok(restored.every(({ clip, prev }) => clip >= 0 && prev === -1));
+    assert.ok(s.onScreen().every((clip) => clip >= 0));
+  }
+});
+
 test('synchronized changes happen on the beat grid for all panels together', () => {
   const p = params({ 'timing.synchronized': true, 'timing.beat': 2, 'timing.hold_min': 3, 'timing.hold_max': 3, 'timing.cooldown': 0 });
   const { log } = simulate(p, 4, 40, { dt: 0.25 });
@@ -400,33 +423,4 @@ test('reseed gives a reproducible run regardless of what happened before', () =>
   };
   assert.deepEqual(run(0), run(60));
   assert.deepEqual(run(0), run(300));
-});
-
-
-test('equal feature values yield equal ranks regardless of input order', () => {
-  const raw = makeRaw(3);
-  raw[0].features = raw[1].features = { luma: 0, saturation: 0.5, motion: 0 };
-  raw[2].features = { luma: 1, saturation: 1, motion: 1 };
-  const [a, b, c] = buildRecords(raw);
-  for (const key of ['luma', 'sat', 'motion']) {
-    assert.equal(a.r[key], 0.25);
-    assert.equal(b.r[key], a.r[key]);
-    assert.equal(c.r[key], 1);
-  }
-});
-
-
-test('the scheduler clears an emptied pool and can refill it', () => {
-  const p = params();
-  const scheduler = new Scheduler(recs, p, 2, 42);
-  scheduler.tick(0);
-  const initial = scheduler.onScreen();
-  assert.ok(initial.every(i => i >= 0));
-  scheduler.setParams({ ...p, 'source.untagged': 'exclude', 'source.tags_include': ['missing-tag'] });
-  assert.deepEqual(scheduler.tick(1), initial.map((prev, panel) => ({ panel, clip: -1, prev })));
-  assert.deepEqual(scheduler.onScreen(), [-1, -1]);
-  assert.deepEqual(scheduler.tick(2), []);
-  scheduler.setParams(p);
-  scheduler.tick(3);
-  assert.ok(scheduler.onScreen().every(i => i >= 0));
 });

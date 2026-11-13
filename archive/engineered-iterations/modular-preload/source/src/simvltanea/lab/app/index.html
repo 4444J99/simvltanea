@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>the lab</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="lab.css">
+</head>
+<body>
+<div id="stage" aria-label="Video panels"></div>
+
+<div id="start"><button id="start-btn" type="button">Start sound</button></div>
+<div id="message" role="alert" hidden></div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<button id="ui-fab" class="fab" type="button" aria-label="Toggle settings" aria-expanded="false">Settings</button>
+<button id="ui-restore" class="restore" type="button" aria-label="Show settings">Show</button>
+
+<aside id="rack" class="rack" data-dock="right" aria-label="Settings">
+  <header class="rack-bar">
+    <strong class="brand">THE LAB</strong>
+    <span class="dock-btns" role="group" aria-label="Dock">
+      <button type="button" data-dock-set="left" aria-pressed="false" aria-label="Dock left" title="Dock left">&#9664;</button>
+      <button type="button" data-dock-set="bottom" aria-pressed="false" aria-label="Dock bottom" title="Dock bottom">&#9660;</button>
+      <button type="button" data-dock-set="right" aria-pressed="true" aria-label="Dock right" title="Dock right">&#9654;</button>
+    </span>
+    <button type="button" id="rack-collapse" class="mini-btn" aria-label="Collapse or expand all modules" title="Collapse / expand all">&#8597;</button>
+    <button type="button" id="rack-hide" class="mini-btn" aria-label="Hide settings (H)" title="Hide (H)">hide</button>
+  </header>
+  <div class="rack-scroll"><div id="rack-modules" class="modules"></div></div>
+</aside>
+
+<div id="reveal-root"></div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

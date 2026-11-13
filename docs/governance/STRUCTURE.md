@@ -64,6 +64,17 @@ Active docs are grouped into `architecture/`, `authoring/`, `governance/`,
 `provenance/`, `plans/`, and `continuations/`. Retained incubation records live in
 `archive/incubation/`, with their original contents preserved.
 
+`archive/engineered-iterations/` retains exact source inputs for the playable
+historical versions. The layout contract explicitly registers four early runtime
+files and their provenance record, plus eight Studio and modular Lab snapshot
+roots. Each snapshot root allows `manifest.json`, `README.md`, and source files
+under `source/src/`, authored JSON under `source/examples/layout-presets/`, or
+`source/pyproject.toml`, restricted to that snapshot's declared extensions.
+The publishing tools verify the recorded source hashes before building a replay.
+Media, datasets, generated site files, caches, and output directories do not belong
+in these snapshots; generated replays remain under `var/`. Existing historical
+archive categories retain their own rules and contents.
+
 Engine implementations are grouped into `authoring/`, `browser/`, `rendering/`,
 and `generators/`. Root package modules retain compatibility with existing
 imports and CLI commands. Browser JavaScript is distributed with its subpackage.

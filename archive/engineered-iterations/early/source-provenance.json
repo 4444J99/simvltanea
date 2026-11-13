@@ -1,0 +1,46 @@
+{
+  "format_version": 1,
+  "note": "Byte-identical historical runtimes. Replay wrappers and replacement public media are generated separately; this does not recreate an original artwork state.",
+  "sources": [
+    {
+      "slug": "authored-loops",
+      "revision": "65510a93c3b9842b6a6b428964681d5a0aacead4",
+      "source_path": "browser_runtime.js",
+      "archive_path": "authored-loops/browser_runtime.js",
+      "sha256": "be1e9a960815839dd623bf154922b7877fee6489ccf3b5857c5e9cf61ed3a0dd",
+      "bytes": 14447,
+      "committed_at": "2026-09-10T15:59:51Z",
+      "date": "2026-09-10"
+    },
+    {
+      "slug": "seamed-slices",
+      "revision": "7577a9ce36052d7f0d966206a02d06eff216f68f",
+      "source_path": "core/browser_runtime.js",
+      "archive_path": "seamed-slices/browser_runtime.js",
+      "sha256": "c2beca5607afe4c9e715473bb0cc882f7683ac0cde8d302aaaa08e687f686314",
+      "bytes": 20207,
+      "committed_at": "2026-09-10T19:58:12-04:00",
+      "date": "2026-09-10"
+    },
+    {
+      "slug": "spatial-audio",
+      "revision": "c638a25d5c863f28b13188a50799ecbc3d723dc7",
+      "source_path": "core/browser_runtime.js",
+      "archive_path": "spatial-audio/browser_runtime.js",
+      "sha256": "010ba703bb6639146440defed14260a26eba835cacac0a1cc4ede1d960c64c10",
+      "bytes": 33989,
+      "committed_at": "2026-09-13T11:22:22-04:00",
+      "date": "2026-09-13"
+    },
+    {
+      "slug": "viewport-composition",
+      "revision": "192ccf23728b1ac8b3848539a27520228f63c9f1",
+      "source_path": "src/simvltanea/browser/browser.runtime.js",
+      "archive_path": "viewport-composition/browser_runtime.js",
+      "sha256": "4e416904ffbe47a63420016d0f484375ad1581b72a35f9a04fbb8eefabba02c1",
+      "bytes": 52398,
+      "committed_at": "2026-10-24T23:26:01-04:00",
+      "date": "2026-10-25"
+    }
+  ]
+}

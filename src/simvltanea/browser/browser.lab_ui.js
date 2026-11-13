@@ -1,4 +1,4 @@
-/* Effects Lab interface. Media and audio clocks belong to the engine. */
+/* Composition Workspace interface. Media and audio clocks belong to the engine. */
 (function (root) {
   'use strict';
   const Model = root.SimvltaneaLabModel || (typeof require === 'function' ? require('./browser.lab_model.js') : null);
@@ -182,7 +182,7 @@
   function parseSession(value) {
     const data = typeof value === 'string' ? JSON.parse(value) : value;
     if (!data || data.format !== FORMAT || data.version !== 1 || !Array.isArray(data.clips))
-      throw new Error('Choose an Effects Lab session JSON (version 1).');
+      throw new Error('Choose a Composition Workspace session JSON (version 1).');
     if (data.clips.length > Model.MAX_CLIPS) throw new Error('A project can contain at most ' + Model.MAX_CLIPS + ' clips.');
     const seenIds = new Set();
     const clips = data.clips.map(c => {
@@ -374,6 +374,10 @@
       engine = new root.SimvltaneaLabEngine.Engine($('lab-stage'), {onChange: render, onError: message => status(String(message), 'error')});
       api.engine = engine;
     }
+    window.addEventListener('message', event => {
+      if (event.source !== window.parent || event.origin !== location.origin || event.data?.type !== 'simvltanea:pause') return;
+      if (engine) engine.pause();
+    });
     function setBusy(value) {
       busy = value; app.classList.toggle('busy', value);
       document.querySelectorAll('[data-async], .settings-actions button').forEach(button => { button.disabled = value; });
