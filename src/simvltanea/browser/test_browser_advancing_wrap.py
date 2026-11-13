@@ -303,3 +303,69 @@ class AdvancingLoopWrapBrowserTests(unittest.TestCase):
                     self.assertEqual(page.evaluate('neighborCalls'), [])
                 finally:
                     page.close()
+
+
+class CallbackEndFrameTests(unittest.TestCase):
+    """Native run 43474710487: a slow host tick skipped the clip's end window."""
+
+    def run_js(self, body):
+        result = subprocess.run(
+            ['node', '-e', FIXTURE + body, str(LIVE)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_callback_end_frame_proves_a_seam_the_tick_never_polled(self):
+        self.run_js('''
+current(n,.1,.1);current(n,.2,.2);current(n,.3,.3);current(n,2.4,2.4);
+// No tick observed currentTime in the final two frames, but the frame
+// callback delivered the source's last frame before the wrap.
+session.noteEndFrame(n.active,4.7666667);
+n.active.decoded={mediaTime:4.7666667,wall};
+n.media.seeking=true;current(n,0,4.7666667);
+for(let i=0;i<5;i++)seek();
+assert.deepEqual(operations,[],'the normal 600 ms stall allowance still applies');
+seek();
+assert.deepEqual(operations,[{id:'one',op:'pause'},{id:'one',op:'seek',value:1/30},{id:'one',op:'play'}]);
+assert.equal(sibling.media.paused,false);assert.equal(n.active.url,'blob:one');
+''')
+
+    def test_end_frame_then_advancing_clock_with_frozen_frames_repairs(self):
+        # The first tick after the skipped window already sees currentTime>0
+        # and a changed decoded frame; the callback evidence must not be
+        # discarded by that tick's progress reset before wrap detection.
+        self.run_js('''
+current(n,.1,.1);current(n,.2,.2);current(n,.3,.3);current(n,2.4,2.4);
+session.noteEndFrame(n.active,4.7666667);n.active.decoded={mediaTime:4.7666667,wall};
+current(n,.018,0);
+for(let i=1;i<=5;i++)current(n,.018+i/10,0);
+assert.deepEqual(operations,[]);
+current(n,.618,0);
+assert.deepEqual(operations,[{id:'one',op:'pause'},{id:'one',op:'seek',value:1/30},{id:'one',op:'play'}]);
+''')
+
+    def test_capture_requires_the_sources_own_end_frame(self):
+        self.run_js('''
+session.noteEndFrame(n.active,2.4);assert.equal(n.active.endFrame,undefined);
+session.noteEndFrame(n.active,Number.NaN);assert.equal(n.active.endFrame,undefined);
+n.media.currentSrc='blob:other';session.noteEndFrame(n.active,4.7666667);
+assert.equal(n.active.endFrame,undefined,'a callback from another native source');
+n.media.currentSrc='blob:one';session.noteEndFrame(n.active,4.7666667);
+assert.deepEqual(n.active.endFrame,{url:'blob:one',epoch:1,mediaTime:4.7666667});
+''')
+
+    def test_stale_early_other_epoch_or_healthy_end_frames_have_no_authority(self):
+        self.run_js('''
+for(const mode of ['none','epoch','early','healthy','suspended']){
+ n.active.sourceEpoch++;operations=[];plays=[];n.media.seeking=false;n.active.endFrame=undefined;
+ if(mode==='early')session.noteEndFrame(n.active,4.7666667);
+ current(n,.1,.1);current(n,.2,.2);current(n,.3,.3);current(n,2.4,2.4);
+ if(mode==='epoch'){session.noteEndFrame(n.active,4.7666667);n.active.endFrame.epoch--;}
+ if(mode==='suspended'){session.noteEndFrame(n.active,4.7666667);session.running=false;current(n,2.5,2.5);session.running=true;
+  assert.equal(n.active.endFrame,null,'reset discards callback evidence');}
+ if(mode==='healthy'){session.noteEndFrame(n.active,4.7666667);current(n,4.7,4.7666667);current(n,.05,.05);
+  for(let i=0;i<30;i++)current(n,.05+i/10,.05+i/30);}
+ else{n.media.seeking=true;current(n,0,mode==='suspended'?2.5:4.7666667);for(let i=0;i<30;i++)seek();}
+ assert.deepEqual(operations,[],mode);
+}
+''')
