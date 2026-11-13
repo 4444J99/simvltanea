@@ -303,3 +303,44 @@ class AdvancingLoopWrapBrowserTests(unittest.TestCase):
                     self.assertEqual(page.evaluate('neighborCalls'), [])
                 finally:
                     page.close()
+
+
+class CallbackEndFrameTests(unittest.TestCase):
+    """Native run 43474710487: a slow host tick skipped the clip's end window."""
+
+    def run_js(self, body):
+        result = subprocess.run(
+            ['node', '-e', FIXTURE + body, str(LIVE)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_callback_end_frame_proves_a_seam_the_tick_never_polled(self):
+        self.run_js('''
+current(n,.1,.1);current(n,.2,.2);current(n,.3,.3);current(n,2.4,2.4);
+// No tick observed currentTime in the final two frames, but the frame
+// callback delivered the source's last frame before the wrap.
+n.active.endFrame={url:'blob:one',epoch:1,mediaTime:4.7666667};
+n.active.decoded={mediaTime:4.7666667,wall};
+n.media.seeking=true;current(n,0,4.7666667);
+for(let i=0;i<5;i++)seek();
+assert.deepEqual(operations,[],'the normal 600 ms stall allowance still applies');
+seek();
+assert.deepEqual(operations,[{id:'one',op:'pause'},{id:'one',op:'seek',value:1/30},{id:'one',op:'play'}]);
+assert.equal(sibling.media.paused,false);assert.equal(n.active.url,'blob:one');
+''')
+
+    def test_missing_stale_or_healthy_end_frames_have_no_authority(self):
+        self.run_js('''
+for(const mode of ['none','epoch','url','healthy','early']){
+ n.active.sourceEpoch++;operations=[];plays=[];n.media.seeking=false;
+ current(n,.1,.1);current(n,.2,.2);current(n,.3,.3);current(n,2.4,2.4);
+ const epoch=mode==='epoch'?n.active.sourceEpoch-1:n.active.sourceEpoch;
+ const url=mode==='url'?'blob:other':'blob:one';
+ if(mode!=='none')n.active.endFrame={url,epoch,mediaTime:4.7666667};
+ if(mode==='early')n.active.endFrame=null;
+ if(mode==='healthy'){current(n,4.7,4.7666667);current(n,.05,.05);for(let i=0;i<30;i++)current(n,.05+i/10,.05+i/30);}
+ else{n.media.seeking=true;current(n,0,4.7666667);for(let i=0;i<30;i++)seek();}
+ assert.deepEqual(operations,[],mode);
+}
+''')
