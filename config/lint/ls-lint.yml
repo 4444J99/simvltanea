@@ -41,6 +41,8 @@ ignore:
   - "build"
   - "dist"
   - "**/__pycache__"
+  - "tools/mac-app/.build"
+  - "tools/mac-app/Package.swift"
   - "archive"
   - "fixtures/artifact-001/baseline"
   - "var"

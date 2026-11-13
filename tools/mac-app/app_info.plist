@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>simvltanea-mac</string>
+  <key>CFBundleIdentifier</key><string>io.github.4444j99.simvltanea</string>
+  <key>CFBundleName</key><string>Simvltanea</string>
+  <key>CFBundleDisplayName</key><string>Simvltanea</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>Simvltanea reads your videos once to build a private loop library on this Mac. Originals are never changed and nothing is uploaded.</string>
+</dict>
+</plist>
