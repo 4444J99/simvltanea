@@ -947,5 +947,98 @@ console.log(JSON.stringify(cases.map(([check, mutate]) => {
         self.assertEqual(result, [{'pass': False, 'gate': False}] * 2)
 
 
+# Production yields a hidden standby to an urgent native-loop rescue and retries
+# the same intent on the same deck: epoch 1 is retired, epoch 2 is promoted.
+YIELDED_STANDBY = r'''
+for (const row of [...replay.prelude.samples, ...replay.samples]) for (const node of row.nodes)
+  if (node.id === 'loop-3' && node.item === targets[5].id) node.progress.epoch = 2;
+for (const row of overlapRows) row.incoming.progress.epoch = 2;
+const abandonedUrl = 'blob:http://studio.test/abandoned-standby';
+const abandonedRow = structuredClone(overlapRows[0]);
+abandonedRow.wall = 1760; abandonedRow.playing = 4;
+Object.assign(abandonedRow.incoming, {src: abandonedUrl, currentSrc: abandonedUrl});
+Object.assign(abandonedRow.incoming.progress, {url: abandonedUrl, epoch: 1, lastChangeWall: 1760});
+replay.prelude.incomingObservations = [abandonedRow, ...overlapRows];
+const residentNode = replay.prelude.afterTarget.nodes.find(node => node.id === 'loop-3');
+replay.events = [
+  {type: 'preparation-yielded', id: 'loop-3', wall: 2905, reason: 'native-loop-rescue',
+    url: residentNode.progress.url, sourceEpoch: 1},
+  {type: 'resource-retired', id: 'loop-3', wall: 2906, role: 'deck', url: abandonedUrl,
+    currentSrc: abandonedUrl, readyState: 0, paused: true}];
+'''
+
+
+class YieldedStandbyTests(unittest.TestCase):
+    def test_standby_yielded_to_an_audited_rescue_keeps_its_raw_priming_evidence(self):
+        result = execute(COHORT + RESCUE + YIELDED_STANDBY + r'''
+const report = api.coverage(replay, targets);
+console.log(JSON.stringify({pass: report.pass, gate: report.checks.siblingIncomingOverlap,
+  incoming: report.incomingObservations}));
+''')
+        self.assertTrue(result['pass'], result)
+        self.assertTrue(result['gate'])
+        self.assertEqual(result['incoming']['observations'], 4)
+
+    def test_other_source_changes_in_the_incoming_slot_stay_rejected(self):
+        result = execute(COHORT + RESCUE + YIELDED_STANDBY + r'''
+const cases = [
+  value => {value.events = [];},
+  value => {value.events[0].reason = 'ordinary';},
+  value => {value.events[0].id = 'loop-2';},
+  value => {value.events[1].role = 'standby';},
+  value => {value.events[1].url = 'blob:http://studio.test/other';},
+  value => {value.events[1].wall = 1700;},
+  value => {value.events[0].wall = 2800;},
+  value => {value.prelude.incomingObservations[0].incoming.progress.epoch = 2;},
+  value => {value.prelude.incomingObservations[0].incoming.progress.epoch = 3;},
+  value => {value.prelude.incomingObservations[0].incoming.deck = 0;},
+  value => {value.prelude.incomingObservations[0].incoming.progress.url = 'blob:http://studio.test/other';},
+];
+console.log(JSON.stringify(cases.map(mutate => {
+  const value = structuredClone(replay); mutate(value);
+  const report = api.coverage(value, targets);
+  return {pass: report.pass, gate: report.checks.siblingIncomingOverlap};
+})));
+''')
+        self.assertEqual(result, [{'pass': False, 'gate': False}] * 11)
+
+    def test_unloaded_src_may_report_only_a_retired_deck_blob_as_current_source(self):
+        setup = r'''
+const staleUrl = 'blob:http://studio.test/retired-standby';
+const priming = structuredClone(overlapRows[0]);
+priming.wall = 1760; priming.playing = 4;
+Object.assign(priming.incoming, {ready: 0, paused: true, currentSrc: staleUrl, decoded: null, callbacks: 0});
+Object.assign(priming.incoming.progress, {sourceChanges: 0, changes: 0, mediaTime: null,
+  lastChangeWall: null, currentGapMs: 0, maxGapMs: 0});
+replay.prelude.incomingObservations = [priming, ...overlapRows];
+replay.events = [{type: 'resource-retired', id: 'loop-3', wall: 1700, role: 'deck', url: staleUrl,
+  currentSrc: staleUrl, readyState: 0, paused: true}];
+'''
+        result = execute(COHORT + setup + r'''
+const cases = [
+  value => {},
+  value => {value.events = [];},
+  value => {value.events[0].wall = 1800;},
+  value => {value.events[0].role = 'standby';},
+  value => {value.events[0].id = 'loop-2';},
+  value => {value.prelude.incomingObservations[0].incoming.ready = 4;},
+  value => {value.prelude.incomingObservations[0].incoming.currentSrc = 'blob:http://studio.test/other';},
+];
+console.log(JSON.stringify(cases.map(mutate => {
+  const value = structuredClone(replay); mutate(value);
+  const report = api.coverage(value, targets);
+  return report.checks.siblingIncomingOverlap;
+})));
+''')
+        self.assertEqual(result, [True] + [False] * 6)
+
+    def test_yield_without_an_audited_rescue_receipt_cannot_excuse_a_source_change(self):
+        result = execute(COHORT + YIELDED_STANDBY + r'''
+const report = api.coverage(replay, targets);
+console.log(JSON.stringify({pass: report.pass, gate: report.checks.siblingIncomingOverlap}));
+''')
+        self.assertEqual(result, {'pass': False, 'gate': False})
+
+
 if __name__ == '__main__':
     unittest.main()

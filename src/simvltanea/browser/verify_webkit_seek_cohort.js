@@ -345,14 +345,46 @@ const cohortOverlapKey = row => {
     p?.url, p?.epoch, p?.sourceChanges, p?.changes, p?.mediaTime]);
 };
 
+// Production yields a hidden standby to an urgent native-loop rescue and then
+// retries the same reconciliation intent on the same deck: the first blob is
+// retired and a later epoch of the same item is primed. Raw priming rows from
+// that abandoned source remain evidence, but only when the yield is source-owned
+// (preparation-yielded + audited rescue receipt) and the source was retired
+// before the promoted successor. Anything else must still be the promoted source.
+function abandonedStandbySources(events, audit, slot, promoted) {
+  const abandoned = new Map();
+  if (!audit?.pass || !Array.isArray(events) || !Array.isArray(audit.receipts)) return abandoned;
+  const timestamp = value => Number.isFinite(value) && value >= 0;
+  for (const yielded of events) {
+    if (yielded?.type !== 'preparation-yielded' || yielded.id !== slot || yielded.reason !== 'native-loop-rescue' ||
+        !timestamp(yielded.wall) ||
+        !audit.receipts.some(receipt => receipt.type === 'native-loop-rescue-queued' && receipt.id !== slot &&
+          receipt.wall <= yielded.wall)) continue;
+    const retired = events.find(event => event?.type === 'resource-retired' && event.id === slot && event.role === 'deck' &&
+      timestamp(event.wall) && event.wall >= yielded.wall && typeof event.url === 'string' && event.url.startsWith('blob:') &&
+      event.url !== yielded.url && event.url !== promoted.progress.url);
+    if (retired && !abandoned.has(retired.url)) abandoned.set(retired.url, retired.wall);
+  }
+  return abandoned;
+}
+
 // Preserve normal priming observations without treating metadata or a single
 // decoded frame as overlap proof. Errors and resource excess cannot be filtered
 // out of the positive-evidence subset.
-function cohortIncomingObservations(rows, qualified, afterTarget, afterSibling, targetCohort, incomingTarget, bridges = []) {
+function cohortIncomingObservations(rows, qualified, afterTarget, afterSibling, targetCohort, incomingTarget, bridges = [],
+  events = [], audit = null) {
   const report = {pass: false, observations: Array.isArray(rows) ? rows.length : 0};
   const promoted = afterSibling?.nodes?.find(node => node.id === incomingTarget.slot);
   if (!Array.isArray(rows) || !rows.length || !Array.isArray(qualified) || !cohortIdentity(promoted)) return report;
-  let previousWall;
+  const abandoned = abandonedStandbySources(events, audit, incomingTarget.slot, promoted);
+  // A just-assigned src can still report the retired blob as currentSrc while
+  // the element has not loaded (ready 0): the retirement event is the proof.
+  const retiredDecks = new Map();
+  for (const event of Array.isArray(events) ? events : []) if (event?.type === 'resource-retired' &&
+      event.id === incomingTarget.slot && event.role === 'deck' && Number.isFinite(event.wall) &&
+      typeof event.url === 'string' && event.url !== promoted.progress.url && !retiredDecks.has(event.url))
+    retiredDecks.set(event.url, event.wall);
+  let previousWall, previousEpoch = 0;
   for (const row of rows) {
     const incoming = row?.incoming, p = incoming?.progress;
     if (!Number.isFinite(row?.wall) || row.wall < afterTarget?.wall || row.wall > afterSibling.wall ||
@@ -364,18 +396,22 @@ function cohortIncomingObservations(rows, qualified, afterTarget, afterSibling, 
           node.progress.live !== true || ![node.progress.currentGapMs, node.progress.maxGapMs]
             .every(gap => Number.isFinite(gap) && gap >= 0 && gap < 2000)) ||
         incoming?.id !== incomingTarget.slot || incoming.item !== incomingTarget.id || incoming.sha !== incomingTarget.sha256 ||
-        incoming.deck !== promoted.deck || incoming.src !== promoted.progress.url ||
-        (incoming.currentSrc !== '' && incoming.currentSrc !== incoming.src) || incoming.nativeError ||
+        incoming.deck !== promoted.deck || !(abandoned.has(incoming.src) ? row.wall < abandoned.get(incoming.src) &&
+          p?.epoch < promoted.progress.epoch : incoming.src === promoted.progress.url) ||
+        (incoming.currentSrc !== '' && incoming.currentSrc !== incoming.src &&
+          !(incoming.ready === 0 && retiredDecks.get(incoming.currentSrc) <= row.wall)) || incoming.nativeError ||
         !Number.isInteger(incoming.ready) || incoming.ready < 0 || incoming.ready > 4 || typeof incoming.paused !== 'boolean' ||
         !Number.isSafeInteger(incoming.callbacks) || incoming.callbacks < 0 ||
-        p?.schema !== 1 || p.supported !== true || p.live !== true || p.url !== incoming.src || p.epoch !== promoted.progress.epoch ||
+        p?.schema !== 1 || p.supported !== true || p.live !== true || p.url !== incoming.src ||
+        !(abandoned.has(incoming.src) ? Number.isSafeInteger(p.epoch) && p.epoch >= 1 : p.epoch === promoted.progress.epoch) ||
+        p.epoch < previousEpoch ||
         !Number.isSafeInteger(p.sourceChanges) || p.sourceChanges < 0 ||
         !Number.isSafeInteger(p.changes) || p.changes < p.sourceChanges ||
         ![p.currentGapMs, p.maxGapMs].every(gap => Number.isFinite(gap) && gap >= 0 && gap < 2000) ||
         p.maxGapMs < p.currentGapMs || (p.sourceChanges > 0 &&
           (!Number.isFinite(incoming.decoded) || incoming.decoded < 0 || p.mediaTime !== incoming.decoded ||
            !Number.isFinite(p.lastChangeWall) || p.lastChangeWall > row.wall || p.lastChangeWall < 0))) return report;
-    previousWall = row.wall;
+    previousWall = row.wall; previousEpoch = p.epoch;
   }
   const recorded = new Set(rows.map(cohortOverlapKey));
   report.pass = qualified.every(row => recorded.has(cohortOverlapKey(row)));
@@ -449,7 +485,8 @@ function coverage(result, targets = TARGETS) {
   const overlap = overlapEvidence(prelude.siblingOverlap, prelude.afterTarget, prelude.afterSibling,
     targetCohort, targets.find(target => target.role === 'sibling-incoming'), bridges);
   const incomingObservations = cohortIncomingObservations(prelude.incomingObservations, prelude.siblingOverlap,
-    prelude.afterTarget, prelude.afterSibling, targetCohort, targets.find(target => target.role === 'sibling-incoming'), bridges);
+    prelude.afterTarget, prelude.afterSibling, targetCohort, targets.find(target => target.role === 'sibling-incoming'), bridges,
+    result?.events, audit);
   const strategy = result?.cohortOptions?.pauseBeforeSeek, assignedAt = prelude.strategyStart?.assignedAt;
   Object.assign(checks, {
     initialSet: cohortSet(prelude.before, initial),
