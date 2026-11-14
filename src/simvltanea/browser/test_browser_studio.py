@@ -1253,10 +1253,10 @@ ROLL_LIBRARY = r'''
 const S = require(process.argv[1]);
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
-  const {manifest, families, seeds, exclude} = JSON.parse(input);
+  const {manifest, families, seeds, exclude, version} = JSON.parse(input);
   const clips = S.libraryClips(manifest);
   process.stdout.write(JSON.stringify(seeds.map(seed => {
-    const rolled = S.rollLibrary(seed, families, clips, exclude || []);
+    const rolled = S.rollLibrary(seed, families, clips, exclude || [], version || 1);
     return {...rolled, ids: rolled.loops.map(index => clips[index].id)};
   })));
 });
@@ -1553,8 +1553,11 @@ class StudioLibraryTests(unittest.TestCase):
         self.addCleanup(lambda: self.assertEqual(page.errors, []))
         return page
 
-    def roll(self, seed):
-        return node(ROLL_LIBRARY, dict(manifest=self.manifest, families=FAMILIES, seeds=[seed]))[0]
+    def roll(self, seed, version=1):
+        # A ?seed link replays its version 1 roll; the page prefetches the next shuffle as a version 2
+        # roll, which draws from the full authored family.
+        families = FAMILIES if version == 1 else {'authored': list(range(2, 13)), 'strips': FAMILIES['strips']}
+        return node(ROLL_LIBRARY, dict(manifest=self.manifest, families=families, seeds=[seed], version=version))[0]
 
     def clip_requests(self, page):
         return [url.rsplit('/', 1)[1][:-4] for url in page.requests if '/library/clips/' in url]
@@ -1966,7 +1969,7 @@ class StudioLibraryTests(unittest.TestCase):
         self.showing(first, expected['ids'])
         self.showing(second, expected['ids'])
         ready = self.prefetched(first)
-        self.assertEqual(ready['prefetch'], self.roll(ready['next'])['ids'])
+        self.assertEqual(ready['prefetch'], self.roll(ready['next'], version=2)['ids'])
         self.tap(first, '#shuffle')
         first.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=99)
         after = self.settled(first)

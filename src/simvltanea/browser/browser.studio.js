@@ -783,6 +783,9 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
   let liveVoiceClock = null;
   // Which counts a seed's roll draws from: a link without ?rv keeps its original roll (see ROLL_VERSION).
   let rollVersion = parseRollVersion(search);
+  // The version of a roll that has been drawn but not yet accepted: rollVersion (what the URL names) only
+  // changes once that roll is on screen, so a refused shuffle leaves the previous composition's link intact.
+  let pendingRollVersion = null;
   let ecosystem = new root.SimvltaneaEcosystem.Engine({seed: parseSeed(search) ?? 1});
   let succession = createSuccession(parseSeed(search) ?? 1), pendingSelection = false;
   const residentModels = new WeakMap(), residents = [];
@@ -1258,11 +1261,13 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       // A compiler/admission refusal may leave the previous accepted cohort
       // entirely intact. Restore its metadata, never a superseding user intent.
       if (!published && previousCurrent) {
+        pendingRollVersion = null;
         selection = residentSelection(session.selection, [...session.byTrack.values()], sourcePool);
         writeUrl(session.mix);
         renderControls();
       } else if (!published && ownsCohort(settledCohort)) {
         // Even if export compilation fails, describe the actual mixed field.
+        if (pendingRollVersion) { rollVersion = pendingRollVersion; pendingRollVersion = null; }
         selection = residentSelection(requested, settledCohort.cohort.map(({item}) => item), sourcePool);
         writeUrl(formatMix(selection.family, selection.loops));
         renderControls();
@@ -1343,6 +1348,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
         bySha: new Map(actualItems.map(item => [item.sha256, item])),
         byTrack: new Map(cohort.map(({id, item}) => [id, item]))};
       selection = acceptedSelection;
+      if (pendingRollVersion) { rollVersion = pendingRollVersion; pendingRollVersion = null; }
       promoteAudioPlan(); refreshVoiceClock();
       if (shareMix !== undefined || changed || reordered)
         writeUrl(shareMix || changed || reordered ? formatMix(selection.family, selection.loops) : null);
@@ -1392,7 +1398,6 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
   function nextSeed() {
     const seed = library.next ?? freshSeed();
     library.next = null;
-    rollVersion = ROLL_VERSION;
     return seed;
   }
 
@@ -1405,9 +1410,14 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
       random).slice(0, count);
   }
 
-  function roll(seed = nextSeed()) {
-    let rolled = rollFor(seed);
+  // A shuffle (no seed given) is a fresh draw and therefore a current roll; an explicit seed replays
+  // under the version its link named.
+  function roll(seed) {
+    const fresh = seed === undefined, version = fresh ? ROLL_VERSION : rollVersion;
+    if (fresh) seed = nextSeed();
+    let rolled = rollFor(seed, version);
     if (!rolled) { toast('Add one more video to play.'); return; }
+    pendingRollVersion = version;
     if (manualPopulation && selection) {
       const count = selection.loops.length;
       const family = layout.families[rolled.family].counts.includes(count) ? rolled.family : selection.family;
@@ -1737,6 +1747,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
         if (count !== null) {
           selection = {seed: freshSeed(), family, loops: own.map((_, index) => index).slice(-count),
             style: selection ? selection.style : {z1: '2', jitter: '0', reverse: false}};
+          rollVersion = ROLL_VERSION; pendingRollVersion = null;
           writeUrl(null);
           launch();
         }
@@ -1901,6 +1912,7 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     library.prefetch = [];
     library.next = null;
     recordMode = 'pending';
+    rollVersion = ROLL_VERSION; pendingRollVersion = null;
     selection = rollFor(selection ? selection.seed : freshSeed());
     writeUrl(null);
     renderControls();
