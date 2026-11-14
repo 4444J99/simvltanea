@@ -1002,6 +1002,36 @@ console.log(JSON.stringify(cases.map(mutate => {
 ''')
         self.assertEqual(result, [{'pass': False, 'gate': False}] * 11)
 
+    def test_unloaded_src_may_report_only_a_retired_deck_blob_as_current_source(self):
+        setup = r'''
+const staleUrl = 'blob:http://studio.test/retired-standby';
+const priming = structuredClone(overlapRows[0]);
+priming.wall = 1760; priming.playing = 4;
+Object.assign(priming.incoming, {ready: 0, paused: true, currentSrc: staleUrl, decoded: null, callbacks: 0});
+Object.assign(priming.incoming.progress, {sourceChanges: 0, changes: 0, mediaTime: null,
+  lastChangeWall: null, currentGapMs: 0, maxGapMs: 0});
+replay.prelude.incomingObservations = [priming, ...overlapRows];
+replay.events = [{type: 'resource-retired', id: 'loop-3', wall: 1700, role: 'deck', url: staleUrl,
+  currentSrc: staleUrl, readyState: 0, paused: true}];
+'''
+        result = execute(COHORT + setup + r'''
+const cases = [
+  value => {},
+  value => {value.events = [];},
+  value => {value.events[0].wall = 1800;},
+  value => {value.events[0].role = 'standby';},
+  value => {value.events[0].id = 'loop-2';},
+  value => {value.prelude.incomingObservations[0].incoming.ready = 4;},
+  value => {value.prelude.incomingObservations[0].incoming.currentSrc = 'blob:http://studio.test/other';},
+];
+console.log(JSON.stringify(cases.map(mutate => {
+  const value = structuredClone(replay); mutate(value);
+  const report = api.coverage(value, targets);
+  return report.checks.siblingIncomingOverlap;
+})));
+''')
+        self.assertEqual(result, [True] + [False] * 6)
+
     def test_yield_without_an_audited_rescue_receipt_cannot_excuse_a_source_change(self):
         result = execute(COHORT + YIELDED_STANDBY + r'''
 const report = api.coverage(replay, targets);

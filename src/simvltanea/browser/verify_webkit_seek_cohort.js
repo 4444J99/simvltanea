@@ -377,6 +377,13 @@ function cohortIncomingObservations(rows, qualified, afterTarget, afterSibling, 
   const promoted = afterSibling?.nodes?.find(node => node.id === incomingTarget.slot);
   if (!Array.isArray(rows) || !rows.length || !Array.isArray(qualified) || !cohortIdentity(promoted)) return report;
   const abandoned = abandonedStandbySources(events, audit, incomingTarget.slot, promoted);
+  // A just-assigned src can still report the retired blob as currentSrc while
+  // the element has not loaded (ready 0): the retirement event is the proof.
+  const retiredDecks = new Map();
+  for (const event of Array.isArray(events) ? events : []) if (event?.type === 'resource-retired' &&
+      event.id === incomingTarget.slot && event.role === 'deck' && Number.isFinite(event.wall) &&
+      typeof event.url === 'string' && event.url !== promoted.progress.url && !retiredDecks.has(event.url))
+    retiredDecks.set(event.url, event.wall);
   let previousWall, previousEpoch = 0;
   for (const row of rows) {
     const incoming = row?.incoming, p = incoming?.progress;
@@ -391,7 +398,8 @@ function cohortIncomingObservations(rows, qualified, afterTarget, afterSibling, 
         incoming?.id !== incomingTarget.slot || incoming.item !== incomingTarget.id || incoming.sha !== incomingTarget.sha256 ||
         incoming.deck !== promoted.deck || !(abandoned.has(incoming.src) ? row.wall < abandoned.get(incoming.src) &&
           p?.epoch < promoted.progress.epoch : incoming.src === promoted.progress.url) ||
-        (incoming.currentSrc !== '' && incoming.currentSrc !== incoming.src) || incoming.nativeError ||
+        (incoming.currentSrc !== '' && incoming.currentSrc !== incoming.src &&
+          !(incoming.ready === 0 && retiredDecks.get(incoming.currentSrc) <= row.wall)) || incoming.nativeError ||
         !Number.isInteger(incoming.ready) || incoming.ready < 0 || incoming.ready > 4 || typeof incoming.paused !== 'boolean' ||
         !Number.isSafeInteger(incoming.callbacks) || incoming.callbacks < 0 ||
         p?.schema !== 1 || p.supported !== true || p.live !== true || p.url !== incoming.src ||
