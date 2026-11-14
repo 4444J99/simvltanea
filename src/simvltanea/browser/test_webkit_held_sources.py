@@ -293,7 +293,7 @@ function journal(gaps) {
   const base = rowsFor();
   return gaps.map((gap, index) => {
     const row = structuredClone(base[index % 3]);
-    const wall = 1000 + index * 137, decoded = index % 6 < 3 ? [4.8, 4.95, .1][index % 3] : [4.8, 4.95, .1][index % 3];
+    const wall = 1000 + index * 137, decoded = [4.8, 4.95, .1][index % 3];
     row.wall = wall; row.nodes[0].decoded = decoded; row.nodes[0].callbacks = 100 + index;
     const p = row.nodes[0].progress;
     Object.assign(p, {mediaTime: decoded, sourceChanges: 100 + index, changes: 100 + index,
