@@ -55,7 +55,7 @@ from simvltanea.authoring import (
 )
 from simvltanea.authoring.layout_presets import DEFAULT_STRIPS_PRESET
 from simvltanea.browser.browser_runtime import HERE, compile_plan
-from simvltanea.browser.layout_bundle import authored_layout_bundle, layout_bundle_v2, render_bundle, strips_entry
+from simvltanea.browser.layout_bundle import BUNDLE_AUTHORED_COUNTS, authored_layout_bundle, authored_layouts, layout_bundle_v2, render_bundle, strips_entry
 from simvltanea.paths import WORK_DIR
 
 COMPILER = HERE / 'browser.compiler.js'
@@ -286,7 +286,7 @@ def caller_sources(count: int, durations=None) -> list[dict]:
 def caller_input(count: int, **overrides) -> dict:
     data = dict(sources=caller_sources(count),
                 loops=[dict(id=f'loop-{i}', source=f'media-{i}') for i in range(1, count + 1)],
-                layouts=authored_layout_bundle()[str(count)], fps=24, frames=48)
+                layouts=authored_layouts(count), fps=24, frames=48)
     data.update(overrides)
     return data
 
@@ -304,7 +304,6 @@ class CompilerParityTests(unittest.TestCase):
         self.assertEqual(json.dumps(javascript), json.dumps(python))
 
     def test_supported_counts_match_python_state_and_plan(self):
-        bundle = authored_layout_bundle()
         calls, states = [], {}
         for count in sorted(AUTHORED):
             state = states[count] = authored_state(count)
@@ -313,9 +312,9 @@ class CompilerParityTests(unittest.TestCase):
                 sources=state['sources'], seed=state['seed'], fps=24, frames=144,
                 loops=[dict(id=loop['id'], source=loop['bank'][0], offset=loop['offset'], rate=loop['rate'])
                        for loop in state['loops']],
-                layouts=bundle[str(count)])])
+                layouts=authored_layouts(count))])
             calls.append(['compilePlan', state])
-            calls.append(['bindLayouts', bundle[str(count)], ids])
+            calls.append(['bindLayouts', authored_layouts(count), ids])
         results = node(*calls)
         for index, count in enumerate(sorted(AUTHORED)):
             built, plan, bound = results[3 * index:3 * index + 3]
@@ -1124,8 +1123,9 @@ class LayoutFileErrorParityTests(unittest.TestCase):
 class LayoutBundleTests(unittest.TestCase):
     def test_bundle_is_derived_from_authored_geometry(self):
         bundle = authored_layout_bundle()
-        self.assertEqual(list(bundle), [str(count) for count in sorted(AUTHORED)])
+        self.assertEqual(list(bundle), [str(count) for count in BUNDLE_AUTHORED_COUNTS])
         self.assertEqual(list(bundle), ['2', '3', '4', '5', '6', '7'])
+        self.assertEqual(sorted(AUTHORED), list(range(2, 13)), 'authored counts 8..12 exist but are not bundled')
         for count, pair in bundle.items():
             for orientation in c.ORIENTATIONS:
                 with self.subTest(count=count, orientation=orientation):
@@ -1217,7 +1217,7 @@ class LayoutBundleTests(unittest.TestCase):
 
 
 class StagingParityTests(unittest.TestCase):
-    """stagePreview reproduces build_preview's plan for the generated N=2..7 fixtures."""
+    """stagePreview reproduces build_preview's plan for the generated N=2..12 fixtures."""
 
     @classmethod
     def setUpClass(cls):
@@ -1493,7 +1493,6 @@ class RuntimePlaybackTests(unittest.TestCase):
     def test_browser_compiled_plans_play_in_unmodified_runtime(self):
         from simvltanea.generators.make_runtime_fixture import ROOT
         fixtures = json.loads((ROOT / 'sources.json').read_text())['sources']
-        bundle = authored_layout_bundle()
         for count in sorted(AUTHORED):
             with self.subTest(count=count):
                 page = self.browser.new_page(viewport={'width': 390, 'height': 844})
@@ -1517,7 +1516,7 @@ class RuntimePlaybackTests(unittest.TestCase):
                   window.compositionIO = {plan: async () => staged.plan, bytes: async s => bytes[s.sha256],
                     digest: async b => hex(await crypto.subtle.digest('SHA-256', b))};
                   return {state, plan: staged.plan};
-                }''', dict(count=count, pair=bundle[str(count)], fixtures=fixtures))
+                }''', dict(count=count, pair=authored_layouts(count), fixtures=fixtures))
                 expected = compile_plan(compiled['state'])
                 for key in ('tracks', 'layout_keyframes', 'fps', 'frames', 'audio', 'seam', 'slice'):
                     self.assertEqual(compiled['plan'][key], expected[key])

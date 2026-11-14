@@ -53,9 +53,16 @@ def authored_layouts(count: int) -> dict:
     return from_authoring_model(composition, placeholders, frames=1)['layouts']
 
 
+# Counts the Studio and Effects Lab offer from the authored family. Counts 8..12 are authored for
+# build_artifact001 (rendering and state pipelines) but are not offered here: the Studio derives
+# seeded rolls from the authored counts, so widening them would re-roll every existing share link.
+# Exposing them needs a versioned roll first; until then the bundle bytes stay what they were.
+BUNDLE_AUTHORED_COUNTS = tuple(count for count in sorted(AUTHORED) if count <= 7)
+
+
 def authored_layout_bundle() -> dict[str, dict]:
-    """Map every authored loop count (as a JSON string key) to its layout pair."""
-    return {str(count): authored_layouts(count) for count in sorted(AUTHORED)}
+    """Map every bundled authored loop count (as a JSON string key) to its layout pair."""
+    return {str(count): authored_layouts(count) for count in BUNDLE_AUTHORED_COUNTS}
 
 
 def strips_entry(count: int, preset: str = STRIPS_PRESET) -> dict:

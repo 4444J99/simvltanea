@@ -27,7 +27,7 @@ from simvltanea.authoring.composition_model import (
 
 class CompositionModelTests(unittest.TestCase):
     def test_acceptance_matrix_has_authored_pairs(self):
-        self.assertEqual(set(AUTHORED), {2, 3, 4, 5, 6, 7})
+        self.assertEqual(set(AUTHORED), set(range(2, 13)))
         for count in AUTHORED:
             comp = build_artifact001(count)
             self.assertEqual(len(comp.loops), count)
@@ -35,6 +35,26 @@ class CompositionModelTests(unittest.TestCase):
             for layout in comp.layouts:
                 self.assertEqual({p.loop_id for p in layout.placements}, set(comp.loop_ids))
                 self.assertEqual(len(layout.placements), count)
+
+    def test_authored_mosaics_for_large_counts_tile_the_canvas_without_overlap(self):
+        # Eight through twelve loops are hand-placed mosaics: every window sits inside the canvas,
+        # no two overlap, a gutter of at least 0.015 separates neighbours, and the windows are not
+        # one repeated size (hierarchy is authored, not a uniform grid).
+        for count in range(8, 13):
+            comp = build_artifact001(count)
+            for layout in comp.layouts:
+                rects = [(p.x, p.y, p.width, p.height) for p in layout.placements]
+                self.assertEqual(len(rects), count)
+                for i, (x, y, w, h) in enumerate(rects):
+                    self.assertGreaterEqual(min(x, y), 0.02, (count, layout.orientation, i))
+                    self.assertLessEqual(x + w, 0.98 + 1e-9, (count, layout.orientation, i))
+                    self.assertLessEqual(y + h, 0.98 + 1e-9, (count, layout.orientation, i))
+                    for j, (a, b, c, d) in enumerate(rects[:i]):
+                        gap = max(a - (x + w), x - (a + c), b - (y + h), y - (b + d))
+                        self.assertGreaterEqual(gap, 0.015 - 1e-9, (count, layout.orientation, i, j))
+                area = sum(w * h for _, _, w, h in rects)
+                self.assertGreater(area, 0.55, (count, layout.orientation))
+                self.assertGreaterEqual(len({(round(w, 3), round(h, 3)) for _, _, w, h in rects}), 2, (count, layout.orientation))
 
     def test_orientation_selection_does_not_mutate_time(self):
         comp = build_artifact001(6)
@@ -94,7 +114,7 @@ class CompositionModelTests(unittest.TestCase):
 
     def test_unsupported_count_is_explicit(self):
         with self.assertRaisesRegex(ValueError, "no reviewed engineering layout pair"):
-            build_artifact001(8)
+            build_artifact001(13)
 
     def test_amalgamate_viewports_valid_counts_and_invariants(self):
         for count in range(3, 11):

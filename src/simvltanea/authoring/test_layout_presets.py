@@ -48,6 +48,12 @@ AUTHORED_DIGESTS = {
     5: "204414780d9de66f983cac2b603bbbdcf0acca49dc22b99d2fa2f79a4ab49e81",
     6: "9577f7260601afae94927f8ec0c832b6d92d50a97cd9a0b5b210627097081322",
     7: "88aac6693d0bf70f3a1393df78a864ca173182ea311d1a816ecf1c444fc602c2",
+    # Counts 8..12 were authored later; their digests pin the geometry from this change on.
+    8: "7e49fd3a0295e5a80f66574051d5dc52773f563bb8f09e9f0d5a425aff0cae5a",
+    9: "60ef2ecfc324f1b049c7b4395316962edd9dbfb94027378b7e5077a8455f7875",
+    10: "932a1d9e8caf494231f98028c3e1e3b73d51fb311029a176b3ed8815d770474c",
+    11: "438a528ae0432ec7a2da857ae71ce7fdac65bb2bac54cee3337954e362e2cba6",
+    12: "0ac66407c0843bc782d47570ce945af5ac75434ce873bc9634b06cd235833929",
 }
 # SHA-256 of canonical_json(from_authoring_model(build_artifact001(n), sources())), also from before.
 AUTHORED_STATE_DIGESTS = {
@@ -57,6 +63,11 @@ AUTHORED_STATE_DIGESTS = {
     5: "305f8a6c606bdef4a90bc02f6db77e3df477b4b30fe2717dc8df96d1b390e498",
     6: "62743ffa6a6c0243dcfaed48b2dcaa709114a2a476a88f024d3b66dd5565484f",
     7: "3d399b93ce39b61bf74bb4db0e2648e05b0a5d69bb83476599c73b42c2fd45f9",
+    8: "3deebac70caa70d99d3c16745fca091e4e7f6fa5ff09204292f382b6c24435a6",
+    9: "168061f0909fe8b1131f462011ffba65b12f39d1aaac556b4cd0b49e8e1affa7",
+    10: "efc4d0fb3a5f233d81806cc95f7592933051756a0668e653e5cd77608af7806c",
+    11: "5dbe638f61ec07902abcdf496b1486d72fe9c6d83725e98bf3d0be33052eb117",
+    12: "ac0ab6bdef697d569397ad5aa01a70c528bfa2fa07830d389334a556555c3369",
 }
 
 
@@ -392,7 +403,7 @@ class SelectionTests(unittest.TestCase):
 
 class AuthoredRegressionTests(unittest.TestCase):
     def test_authored_output_is_byte_identical(self):
-        self.assertEqual(sorted(artifact001_layouts.AUTHORED), [2, 3, 4, 5, 6, 7])
+        self.assertEqual(sorted(artifact001_layouts.AUTHORED), list(range(2, 13)))
         self.assertEqual(artifact001_layouts.AUTHORED, artifact001_layouts._AUTHORED_DEFAULT)
         for n, digest in AUTHORED_DIGESTS.items():
             self.assertEqual(hashlib.sha256(build_artifact001(n).to_json().encode()).hexdigest(), digest, n)
@@ -401,7 +412,7 @@ class AuthoredRegressionTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(c.canonical_json(state).encode()).hexdigest(), digest, n)
 
     def test_authored_guard_is_unchanged(self):
-        for n in (1, 8, 13):
+        for n in (1, 13):
             with self.assertRaisesRegex(ValueError, "no reviewed engineering layout pair"):
                 build_artifact001(n)
 
@@ -574,7 +585,7 @@ class StrictFileTests(unittest.TestCase):
             result = subprocess.run([sys.executable, "-c", "import simvltanea.authoring as a; print(sorted(a.AUTHORED))"],
                                     cwd=tmp, env=env, capture_output=True, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "[2, 3, 4, 5, 6, 7]")
+            self.assertEqual(result.stdout.strip(), str(list(range(2, 13))))
 
 
 if __name__ == "__main__":

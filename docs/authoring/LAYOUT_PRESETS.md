@@ -2,7 +2,9 @@
 
 Two layout families place exactly one cell per independent loop. **Strips** are
 computed full-bleed partitions for any count from 1 through 12. **Authored**
-engineering pairs (`build_artifact001`) exist for 2 through 7. A count outside the
+engineering pairs (`build_artifact001`) exist for 2 through 12. The Studio and Effects Lab bundle (`layout_bundle.py`) still offers 2 through 7 of them:
+the Studio derives seeded rolls from the authored counts, so offering 8 through 12 would re-roll existing share
+links until a versioned roll exists. A count outside the
 selected family's range fails explicitly. It is never filled, duplicated or moved to
 the other family. Strips and their zoom curve are engineering presets. They are not
 artist-approved designs. The design and its evidence are in

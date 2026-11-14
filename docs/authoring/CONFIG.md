@@ -31,7 +31,7 @@ Deterministic random `slice_rect()` `src/simvltanea/authoring/composition.py:297
   Choose them with `build_strips(count)`, `strips_layouts(count)` and `strips_slice(count)`; the
   preset is data (`examples/layout-presets/strips.json`). See [Layout presets](LAYOUT_PRESETS.md).
 - **Authored pairs** `src/simvltanea/authoring/artifact001_layouts.py` `AUTHORED`: reviewed
-  engineering pairs for N=2..7 through `build_artifact001(count)`. Other counts raise.
+  engineering pairs for N=2..12 through `build_artifact001(count)`. Other counts raise.
 - **Your own layouts** are explicit files given by path: `load_layout_file(path)` reads a
   `simvltanea.layout-preset/1` or `simvltanea.layout-pair/1` file and validates it strictly.
   Nothing is read from inside the package; a `src/simvltanea/layouts.json` makes importing

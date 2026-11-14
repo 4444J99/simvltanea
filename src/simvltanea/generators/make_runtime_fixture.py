@@ -132,7 +132,8 @@ def prepare(root: Path = ROOT, slice_width: float = 0.5, slice_height: float = 0
     font = _get_font('DejaVuSans-Bold.ttf', 32)
     small = _get_font('DejaVuSans.ttf', 22)
     colors = [(170,45,45),(32,125,70),(35,80,170),(120,50,155),
-              (170,110,25),(25,130,145),(145,45,100)]
+              (170,110,25),(25,130,145),(145,45,100),
+              (95,120,40),(60,60,150),(150,80,55),(40,110,110),(125,125,50)]
     for i, color in enumerate(colors, 1):
         target = root / 'media' / f'source-{i}.mp4'
         command = ['ffmpeg','-v','error','-y','-f','rawvideo','-pix_fmt','rgb24',
@@ -160,7 +161,7 @@ def prepare(root: Path = ROOT, slice_width: float = 0.5, slice_height: float = 0
                             sha256=c.sha256_file(target),kind='video',duration='8'))
         commands.append(command[:-1]+[str(target.relative_to(root))])
     states = []
-    for count in (2,3,4,5,6,7):
+    for count in range(2,13):
         authored = build_artifact001(count)
         state = c.from_authoring_model(authored,{f'fixtures/loop-{i+1}.mp4':sources[i] for i in range(count)})
         for layout in state['layouts'].values():
