@@ -709,7 +709,7 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertEqual(len(set(state['sha'])), snapshot['panels'])
         self.assertEqual(self.snapshot(page)['builtinsReady'], 12)
         self.advancing(page)
-        self.assertRegex(page.evaluate('location.search'), r'^\?seed=\d+$')
+        self.assertRegex(page.evaluate('location.search'), r'^\?seed=\d+&rv=2$')
         self.assertEqual(self.allowed(page), [])
         self.assertEqual(page.evaluate("[...document.querySelectorAll('p')].filter(p => p.offsetParent).length"), 0)
 
@@ -1257,8 +1257,65 @@ def fake_manifest(count: int = LIBRARY_CLIPS) -> dict:
                       for number in range(count)]}
 
 
+ROLL_GOLDEN = r'''
+const S = require(process.argv[1]);
+const crypto = require('crypto');
+let input = '';
+process.stdin.on('data', chunk => { input += chunk; }).on('end', () => {
+  const {authored, manifest, version} = JSON.parse(input);
+  const range = (a, b) => Array.from({length: b - a + 1}, (_, i) => a + i);
+  const out = [];
+  for (const cap of [4, 12]) {
+    const families = {authored: authored.filter(count => count <= cap), strips: range(1, 12).filter(count => count <= cap)};
+    for (let step = 1; step <= 300; step++) {
+      const seed = (step * 2654435761) >>> 0;
+      for (const pool of [3, 5, 8, 12]) {
+        const rolled = S.rollComposition(seed, families, pool, version);
+        out.push(rolled && [rolled.seed, rolled.family, rolled.panels, rolled.loops, rolled.style]);
+      }
+      for (const size of [5, 9, 30]) {
+        const clips = S.libraryClips({...manifest, clips: manifest.clips.slice(0, size)});
+        const rolled = S.rollLibrary(seed, families, clips, [], version);
+        out.push(rolled && [rolled.seed, rolled.family, rolled.panels, rolled.loops, rolled.style]);
+      }
+    }
+  }
+  const counts = {};
+  for (const row of out) if (row && row[1] === 'authored') counts[row[2]] = (counts[row[2]] || 0) + 1;
+  process.stdout.write(JSON.stringify({rolls: out.length, authoredCounts: counts,
+    digest: crypto.createHash('sha256').update(JSON.stringify(out)).digest('hex')}));
+});
+'''
+
+# Digest of every roll below, produced by the studio at origin/main 930f3d0 (before roll versions) with the
+# authored family offering 2..7 (the bundle then). A version 1 roll must reproduce it byte for byte.
+ROLL_V1_DIGEST = '129793fa3e40925fb9d750592e8ba0169ad59775673a8e9a8cc3949feaa6f984'
+
+
 class LibrarySelectionTests(unittest.TestCase):
     """The manifest gate and the tag-weighted rolls, as pure functions under Node."""
+
+    def test_version_one_rolls_are_unchanged_when_the_bundle_offers_more_counts(self):
+        manifest = fake_manifest()
+        old = node(ROLL_GOLDEN, dict(authored=list(range(2, 8)), manifest=manifest, version=1))
+        wide = node(ROLL_GOLDEN, dict(authored=list(range(2, 13)), manifest=manifest, version=1))
+        self.assertEqual(old, wide)
+        self.assertEqual(wide['digest'], ROLL_V1_DIGEST)
+        self.assertEqual(sorted(int(count) for count in wide['authoredCounts']), list(range(2, 8)))
+
+    def test_version_two_rolls_reach_the_authored_counts_above_seven(self):
+        manifest = fake_manifest()
+        v2 = node(ROLL_GOLDEN, dict(authored=list(range(2, 13)), manifest=manifest, version=2))
+        self.assertNotEqual(v2['digest'], ROLL_V1_DIGEST)
+        self.assertEqual(sorted(int(count) for count in v2['authoredCounts']), list(range(2, 13)))
+        narrow = node(ROLL_GOLDEN, dict(authored=list(range(2, 8)), manifest=manifest, version=2))
+        self.assertEqual(narrow['digest'], ROLL_V1_DIGEST)  # nothing above seven offered: same draws
+
+    def test_roll_version_comes_from_the_address(self):
+        out = node(r'''const S = require(process.argv[1]);
+          process.stdout.write(JSON.stringify(['', '?seed=7', '?seed=7&rv=2', '?rv=2', '?seed=7&rv=1', '?seed=x', '?rv=3&seed=4']
+            .map(search => S.parseRollVersion(search)).concat([S.ROLL_VERSION])));''', None)
+        self.assertEqual(out, [2, 1, 2, 2, 1, 2, 1, 2])
 
     def test_succession_is_seeded_and_cools_departed_logical_clips(self):
         result = node(r'''const S = require(process.argv[1]);

@@ -13,7 +13,7 @@ permitted under ``src/``::
 
 Without flags the output is the legacy map (count -> authored pair), byte for byte as
 before. ``--format 2`` adds the strips family (N=1..12, the default family) beside the
-authored family (N=2..7), each strips count with its state-wide ``slice`` and the
+authored family (N=2..12), each strips count with its state-wide ``slice`` and the
 exact ``adjacency`` of both orientations.
 """
 from __future__ import annotations
@@ -53,11 +53,11 @@ def authored_layouts(count: int) -> dict:
     return from_authoring_model(composition, placeholders, frames=1)['layouts']
 
 
-# Counts the Studio and Effects Lab offer from the authored family. Counts 8..12 are authored for
-# build_artifact001 (rendering and state pipelines) but are not offered here: the Studio derives
-# seeded rolls from the authored counts, so widening them would re-roll every existing share link.
-# Exposing them needs a versioned roll first; until then the bundle bytes stay what they were.
-BUNDLE_AUTHORED_COUNTS = tuple(count for count in sorted(AUTHORED) if count <= 7)
+# Counts the Studio and Effects Lab offer from the authored family: every authored count (2..12).
+# Seeded rolls stay reproducible because the Studio versions them (browser.studio.js ROLL_VERSION):
+# a link without ?rv draws the authored family from 2..7 only, as it did before 8..12 were offered.
+LEGACY_ROLL_AUTHORED_MAX = 7
+BUNDLE_AUTHORED_COUNTS = tuple(sorted(AUTHORED))
 
 
 def authored_layout_bundle() -> dict[str, dict]:
@@ -78,7 +78,7 @@ def strips_entry(count: int, preset: str = STRIPS_PRESET) -> dict:
 
 
 def layout_bundle_v2() -> dict:
-    """Return the ``simvltanea.layout-bundle/2`` object: authored 2..7 and strips 1..12."""
+    """Return the ``simvltanea.layout-bundle/2`` object: authored 2..12 and strips 1..12."""
     return {
         'format': BUNDLE_FORMAT,
         'default_family': DEFAULT_FAMILY,
