@@ -312,6 +312,12 @@ console.log(JSON.stringify({
   frozen: run([ok, ok, ...frozen.slice(0, 10)]),
   repeated: run([ok, stalled, ok, stalled, ok, stalled, ok, ok, ok, ok, ok, ok]),
   tailSingle: run([ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, stalled]),
+  omitted: (() => {
+    const rows = journal([ok, ok, ok, ok, stalled, ok, ok, ok, ok, ok, ok, ok]);
+    rows[5].nodes = []; rows[5].decks = [];
+    return api.observeSources(rows, [targets[0]])[0];
+  })(),
+  long: run([ok, ok, ok, {current: 0, max: 60000}, {current: 0, max: 60000}, ok, ok, ok, ok, ok, ok, ok]),
 }));
 ''')
         self.assertTrue(result['baseline']['pass'])
@@ -323,6 +329,10 @@ console.log(JSON.stringify({
         self.assertFalse(result['frozen']['pass']); self.assertGreater(result['frozen']['invalid'], 0)
         self.assertFalse(result['repeated']['pass']); self.assertGreater(result['repeated']['invalid'], 0)
         self.assertTrue(result['tailSingle']['pass'])
+        # A tolerated stall does not excuse the resident vanishing from the next observation.
+        self.assertFalse(result['omitted']['pass']); self.assertGreater(result['omitted']['invalid'], 0)
+        # A long stall that recovered before it was sampled is bounded by the cap as well.
+        self.assertFalse(result['long']['pass'])
 
     def test_absent_native_proof_and_nonplaying_samples_cannot_pass(self):
         result = execute(r'''
@@ -425,10 +435,11 @@ const withMax = (value, values) => values.forEach((gap, index) => {
   value.prelude.samples[index].progressSummary.maxGapMs = gap;});
 const single = longPrelude(); withMax(single, [137, 137, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100]);
 const sustained = longPrelude(); withMax(sustained, [137, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3100]);
+const long = longPrelude(); withMax(long, Array(12).fill(60000));
 const repeated = longPrelude(); withMax(repeated, [137, 2100, 137, 2200, 137, 2300, 137, 137, 137, 137, 137, 137]);
-console.log(JSON.stringify([single, sustained, repeated].map(v => api.coverage(v, targets).checks.preludeNativeProgress)));
+console.log(JSON.stringify([single, sustained, repeated, long].map(v => api.coverage(v, targets).checks.preludeNativeProgress)));
 ''')
-        self.assertEqual(result, [True, False, False])
+        self.assertEqual(result, [True, False, False, False])
 
     def test_all_five_assets_and_held_body_wraps_prove_replay_coverage(self):
         result = execute(REPLAY + r'''

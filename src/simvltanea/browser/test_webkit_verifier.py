@@ -560,6 +560,31 @@ result.samples.slice(800, 840).forEach(row => {row.nodes[0].decoded = .5;});
                 self.assertEqual(summary['stalls']['episodes'], episodes)
                 self.assertFalse(summary['stalls']['tolerated'])
 
+    def test_recovered_stalls_on_separate_sources_each_count_below_the_session_maximum(self):
+        def retired(count):
+            entries = ',\n  '.join(
+                "{schema: 1, supported: true, live: false, id: 'loop-1', deck: 0, url: 'blob:gone-%d', epoch: 1, "
+                "changes: 5, sourceChanges: 5, mediaTime: 1, currentGapMs: 0, maxGapMs: 2100, lifetimeMaxGapMs: 2100}" % n
+                for n in range(count))
+            return ('result.samples.slice(800).forEach(row => {row.progressSummary.maxGapMs = 2100; '
+                    'row.progressSummary.retired = [\n  ' + entries + '];});')
+        two = classify(NATIVE_PROGRESS + retired(2))
+        self.assertTrue(two['pass'], two)
+        self.assertEqual(two['stalls']['episodes'], 2)
+        three = self.assert_refused(NATIVE_PROGRESS + retired(3), 'decodedProgress')
+        self.assertEqual(three['stalls']['episodes'], 3)
+
+    def test_each_recovered_host_hold_of_one_resident_is_its_own_episode(self):
+        def freeze(count):
+            return '\n'.join(
+                f'result.samples.slice({start}, {start + 21}).forEach(row => {{row.nodes[0].decoded = .5;}});'
+                for start in (200, 450, 700, 950)[:count])
+        two = classify(freeze(2))
+        self.assertTrue(two['pass'], two)
+        self.assertEqual(two['stalls']['episodes'], 2)
+        three = self.assert_refused(freeze(3), 'decodedProgress')
+        self.assertEqual(three['stalls']['episodes'], 3)
+
     def test_two_recovered_stalls_pass(self):
         two = (
             'result.samples.slice(300).forEach(row => {row.progressSummary.maxGapMs = 2100;});\n'

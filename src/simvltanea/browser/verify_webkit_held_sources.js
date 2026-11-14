@@ -26,9 +26,10 @@ const ORIGIN = Object.freeze({run: '42431559354', artifact: '13597902240',
 // sample when the current gap is at the ceiling or the maximum has just risen to it.
 // A bounded number of short stall runs is tolerated; a decoder that stays frozen
 // (a long run) or stalls repeatedly (many episodes) still fails.
-const GAP_CEILING_MS = 2000, MAX_STALL_RUN = 5, MAX_STALL_EPISODES = 2;
+const GAP_CEILING_MS = 2000, GAP_CAP_MS = 4000, MAX_STALL_RUN = 5, MAX_STALL_EPISODES = 2;
 function stallStep(state, current, max) {
-  if (![current, max].every(gap => Number.isFinite(gap) && gap >= 0) || max < current) return 'fail';
+  // A completed stall is bounded too: a long one that recovered before it was sampled still fails.
+  if (![current, max].every(gap => Number.isFinite(gap) && gap >= 0) || max < current || max >= GAP_CAP_MS) return 'fail';
   const stalled = current >= GAP_CEILING_MS || (max >= GAP_CEILING_MS && max !== state.max);
   state.max = max;
   if (!stalled) { state.run = 0; return 'ok'; }
@@ -96,7 +97,12 @@ function observeSources(samples, targets = TARGETS) {
       const verdict = stallStep(stalls.get(stallKey), p.currentGapMs, p.maxGapMs);
       if (verdict === 'fail') { report.invalid++; previous.delete(node.id); continue; }
       // A tolerated stall sample proves nothing and breaks the wrap chain, but is not a failure.
-      if (verdict === 'stall') { previous.delete(node.id); continue; }
+      // The resident stays present, so a later omission is still an invalid observation.
+      if (verdict === 'stall') {
+        previous.set(node.id, {identity: null, item: node.item, wall: row.wall,
+          changes: p.sourceChanges, callbacks: node.callbacks, decoded: node.decoded});
+        continue;
+      }
       report.observations++; report.firstWall ??= row.wall; report.lastWall = row.wall;
       const identity = JSON.stringify([node.id, node.item, node.sha, node.deck, node.birth, p.url, p.epoch]);
       const old = previous.get(node.id);

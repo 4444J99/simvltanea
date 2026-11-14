@@ -332,8 +332,19 @@ function progressCoverage(result) {
     row.nodes.some(node => node.progress != null) || (row.decks || []).some(deck => deck.progress != null));
   let issueCount = 0, maxSampleGapMs = 0, maxGapMs = 0, previousWall, previousSummary;
   let nativeErrors = 0, suspensions = 0;
-  let summaryEpisodes = 0, deckEpisodes = 0, risingNow = false, nativePeakMs = 0;
-  const deckStalled = new Map();
+  let summaryEpisodes = 0, risingNow = false, nativePeakMs = 0, sourceEpisodes = 0;
+  const sourceStalls = new Map();
+  // One native source (url and epoch) opens an episode when its current gap reaches the hold ceiling or
+  // its own maximum rises to it; the same source seen live and later retired is counted once.
+  const noteSource = (p) => {
+    const key = JSON.stringify([p.url, p.epoch]);
+    if (!sourceStalls.has(key)) sourceStalls.set(key, {max: 0, active: false});
+    const state = sourceStalls.get(key);
+    const stalled = p.currentGapMs >= MAX_HOLD_MS || (p.maxGapMs >= MAX_HOLD_MS && p.maxGapMs > state.max);
+    if (stalled && !state.active) sourceEpisodes++;
+    state.active = stalled; state.max = Math.max(state.max, p.maxGapMs);
+    if (stalled) nativePeakMs = Math.max(nativePeakMs, p.currentGapMs, p.maxGapMs);
+  };
   const issue = (index, reason) => {
     issueCount++; invalidRows.add(index);
     if (issues.length < 32) issues.push({index, wall: result.samples[index]?.wall, reason});
@@ -381,10 +392,7 @@ function progressCoverage(result) {
           summary.maxGapMs < p.lifetimeMaxGapMs) {
         issue(index, 'missing or inconsistent source progress'); continue;
       }
-      const stalledNow = p.currentGapMs >= MAX_HOLD_MS;
-      if (stalledNow && !deckStalled.get(key)) deckEpisodes++;
-      deckStalled.set(key, stalledNow);
-      if (stalledNow) nativePeakMs = Math.max(nativePeakMs, p.currentGapMs);
+      noteSource(p);
       const old = history.get(key);
       if (old && (p.epoch < old.epoch || p.changes < old.changes || p.lifetimeMaxGapMs < old.lifetimeMaxGapMs ||
           (p.epoch === old.epoch && (p.url !== old.url || p.sourceChanges < old.sourceChanges || p.maxGapMs < old.maxGapMs))))
@@ -400,6 +408,7 @@ function progressCoverage(result) {
     }
     for (const retired of summary.retired) {
       if (retired?.nativeError) nativeErrors++;
+      if (retired && Number.isFinite(retired.maxGapMs) && typeof retired.url === 'string') noteSource(retired);
       if (!retired || retired.schema !== 1 || retired.supported !== true || retired.live !== false ||
           !Number.isFinite(retired.maxGapMs) || retired.maxGapMs < 0 ||
           !Number.isFinite(retired.lifetimeMaxGapMs) || retired.lifetimeMaxGapMs < retired.maxGapMs ||
@@ -407,7 +416,7 @@ function progressCoverage(result) {
     }
   }
   return {native, issueCount, issues, invalidRows, maxSampleGapMs, maxGapMs, nativeErrors, suspensions,
-    stallEpisodes: Math.max(summaryEpisodes, deckEpisodes), stallPeakMs: nativePeakMs};
+    stallEpisodes: Math.max(summaryEpisodes, sourceEpisodes), stallPeakMs: nativePeakMs};
 }
 
 function analyse(result) {
@@ -469,6 +478,8 @@ function analyse(result) {
       if (changed) old.decodedAt = row.wall;
       const joint = row.wall - old.jointAt, decoded = row.wall - old.decodedAt;
       jointMs = Math.max(jointMs, joint); decodedMs = Math.max(decodedMs, decoded);
+      // Recovery re-arms the latch so each separate hold of one resident is its own episode.
+      if (joint < MAX_HOLD_MS && decoded < MAX_HOLD_MS) old.reported = false;
       if ((joint >= MAX_HOLD_MS || decoded >= MAX_HOLD_MS) && !old.reported) {
         holds.push({id: node.id, item: node.item, identity, wall: row.wall,
           current: node.current, decoded: node.decoded, jointMs: joint, decodedMs: decoded,
