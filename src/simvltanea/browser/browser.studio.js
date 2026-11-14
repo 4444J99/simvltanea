@@ -1367,11 +1367,17 @@ if (typeof window !== 'undefined' && typeof history !== 'undefined') {
     if (!root.history || !history.replaceState || !selection) return;
     const params = new URLSearchParams(root.location.search);
     params.set('seed', String(selection.seed));
-    if (rollVersion >= 2) params.set('rv', String(rollVersion)); else params.delete('rv');
+    params.delete('rv');
     if (mix && !own.length && selection.loops.every(Number.isInteger) &&
         new Set(selection.loops).size === selection.loops.length) params.set('mix', mix);
     else params.delete('mix');
-    history.replaceState(null, '', `${root.location.pathname}?${params}`);
+    // ?rv sits right after ?seed: the two together name a roll.
+    const ordered = new URLSearchParams();
+    for (const [key, value] of params) {
+      ordered.append(key, value);
+      if (key === 'seed' && rollVersion >= 2) ordered.append('rv', String(rollVersion));
+    }
+    history.replaceState(null, '', `${root.location.pathname}?${ordered}`);
   }
   function freshSeed() {
     const value = new Uint32Array(1);

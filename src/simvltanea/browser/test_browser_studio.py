@@ -740,7 +740,7 @@ class StudioBrowserTests(unittest.TestCase):
             self.tap(first, '#shuffle')
             first.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=before['seed'])
             after = self.settled(first)
-            self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}(?:&mix=[sa][\d.]+)?$')
+            self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}&rv=2(?:&mix=[sa][\d.]+)?$')
             rolls.add((after['family'], tuple(after['selection'])))
             self.assertEqual(len(set(after['selection'])), after['panels'])
         self.assertGreater(len(rolls), 1)
@@ -868,21 +868,25 @@ class StudioBrowserTests(unittest.TestCase):
         if self.snapshot(page)['family'] == 'authored':
             self.tap(page, '#families button[data-family="strips"]')
             page.wait_for_function("() => SimvltaneaStudio.snapshot().family === 'strips'")
-        while self.snapshot(page)['panels'] < 9:
+        # Authored mosaics now exist for 8 to 12, so the count carries across the family toggle.
+        while self.snapshot(page)['panels'] < 8:
             self.tap(page, '#more')
         self.tap(page, '#families button[data-family="authored"]')
         page.wait_for_function("() => SimvltaneaStudio.snapshot().family === 'authored'")
-        self.assertEqual(self.snapshot(page)['panels'], 7)
-        self.assertEqual(self.snapshot(page)['toast'], 'Authored: 7 panels.')
+        self.assertEqual(self.snapshot(page)['panels'], 8)
+        while self.snapshot(page)['panels'] < 12:
+            self.tap(page, '#more')
         self.assertTrue(page.is_disabled('#more'))
+        while self.snapshot(page)['panels'] > 8:
+            self.tap(page, '#fewer')
         page.wait_for_function('() => !SimvltaneaStudio.snapshot().toastShown', timeout=10000)
         seed = self.snapshot(page)['seed']
         page.locator('body').press('r')
         page.wait_for_function('s => SimvltaneaStudio.snapshot().seed !== s', arg=seed)
         self.settled(page)
         # Manual population survives shuffle and is retained in the reproducible URL.
-        self.assertRegex(page.evaluate('location.search'), r'^\?seed=\d+&mix=[sa][\d.]+$')
-        self.assertEqual(self.snapshot(page)['panels'], 7)
+        self.assertRegex(page.evaluate('location.search'), r'^\?seed=\d+&rv=2&mix=[sa][\d.]+$')
+        self.assertEqual(self.snapshot(page)['panels'], 8)
         self.playing(page)
         self.assertEqual(self.allowed(page), [])
 
@@ -895,10 +899,10 @@ class StudioBrowserTests(unittest.TestCase):
         page.locator('body').press('ArrowRight' if initial['panels'] < 7 else 'ArrowLeft')
         if self.snapshot(page)['family'] == 'authored':
             self.tap(page, '#families button[data-family="strips"]')
-        while self.snapshot(page)['panels'] < 9:
+        while self.snapshot(page)['panels'] < 8:
             self.tap(page, '#more')
         self.tap(page, '#families button[data-family="authored"]')
-        self.assertEqual(self.snapshot(page)['panels'], 7)
+        self.assertEqual(self.snapshot(page)['panels'], 8)
         page.locator('body').press('r')
         requested = self.snapshot(page)
         self.assertNotEqual(requested['seed'], initial['seed'])
@@ -908,9 +912,9 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertEqual(accepted['seed'], requested['seed'])
         self.assertEqual(accepted['family'], requested['family'])
         self.assertEqual(accepted['selection'], requested['selection'])
-        self.assertEqual(accepted['panels'], 7)
-        self.assertRegex(page.evaluate('location.search'), rf'^\?seed={requested["seed"]}&mix=[sa][\d.]+$')
-        self.playing(page, 7)
+        self.assertEqual(accepted['panels'], 8)
+        self.assertRegex(page.evaluate('location.search'), rf'^\?seed={requested["seed"]}&rv=2&mix=[sa][\d.]+$')
+        self.playing(page, 8)
 
     def test_pending_builtin_edit_keeps_new_intent_and_export_waiter(self):
         page = self.open('?seed=5&mix=s0.1&evolve=0', init_script=BUILTIN_RECORDING_GATE)
@@ -949,15 +953,16 @@ class StudioBrowserTests(unittest.TestCase):
     def test_recording_completion_preserves_family_only_share_intent(self):
         page = self.open('?seed=5', init_script=BUILTIN_RECORDING_GATE)
         page.wait_for_function('() => heldBuiltinRecordings.size === 12')
+        before = self.snapshot(page)['panels']
         self.tap(page, '#families button[data-family="authored"]')
         requested = self.snapshot(page)
         page.evaluate('releaseBuiltinRecordings()')
         accepted = self.settled(page)
         self.assertEqual(accepted['selection'], requested['selection'])
         self.assertEqual(accepted['family'], 'authored')
-        self.assertEqual(accepted['panels'], 7)
+        self.assertEqual(accepted['panels'], before)  # every count the strips family offered has an authored pair
         self.assertRegex(page.evaluate('location.search'), r'^\?seed=5&mix=a[\d.]+$')
-        self.playing(page, 7)
+        self.playing(page, before)
 
     def test_picker_replaces_the_loops_with_the_visitors_own(self):
         page = self.open('?seconds=30')
@@ -1967,7 +1972,7 @@ class StudioLibraryTests(unittest.TestCase):
         for slot, clip_id in enumerate(expected['ids'][:after['panels']]):
             if clip_id in ready['prefetch']:
                 self.assertEqual(after['selection'][slot], clip_id)
-        self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}(?:&mix=[sa][\d.]+)?$')
+        self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}&rv=2(?:&mix=[sa][\d.]+)?$')
         self.showing(first, after['selection'])
         again = self.open(query=first.evaluate('location.search'))
         self.assertEqual(self.settled(again)['selection'], after['selection'])
@@ -1986,7 +1991,7 @@ class StudioLibraryTests(unittest.TestCase):
         edited = self.settled(first)
         self.showing(first, edited['selection'])
         self.assertTrue(set(self.clip_requests(first)) - before <= set(edited['selection']) | set(later['prefetch']))
-        self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}&mix=[sa]\d')
+        self.assertRegex(first.evaluate('location.search'), rf'^\?seed={after["seed"]}&rv=2&mix=[sa]\d')
         self.private_tags_absent(first)
 
     def test_clips_play_their_own_audio_after_the_first_click(self):
