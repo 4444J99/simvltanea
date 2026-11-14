@@ -389,6 +389,34 @@ function applySlice(node) {
     }
   }
 
+  /* Measures how often the page itself is given animation frames. Video frame callbacks
+   * are delivered on the same compositor cadence, so when that cadence is throttled (a
+   * hidden or unfocused pane, a battery saver) the absence of a callback says nothing
+   * about the decoder. The freshness checks consult this before treating silence as a
+   * stalled clip. It runs only while a check holds it. */
+  class PageCadence {
+    constructor(host) {
+      this.host = host; this.holders = 0; this.id = null; this.heldAt = 0; this.frames = 0;
+      this.minWindowMs = 400; this.minFps = 12;
+    }
+    hold() {
+      if (!this.host.requestAnimationFrame) return () => {};
+      if (this.holders++ === 0) { this.heldAt = performance.now(); this.frames = 0; this.loop(); }
+      let released = false;
+      return () => {
+        if (released) return; released = true;
+        if (--this.holders === 0 && this.id !== null) { this.host.cancelAnimationFrame?.(this.id); this.id = null; }
+      };
+    }
+    loop() { this.id = this.host.requestAnimationFrame(() => { this.frames++; if (this.holders > 0) this.loop(); }); }
+    /* True only after a measured window in which the page received fewer frames than a
+     * working display delivers. An unmeasured or healthy page is never starved. */
+    starved(now = performance.now()) {
+      const elapsed = now - this.heldAt;
+      return this.holders > 0 && elapsed >= this.minWindowMs && this.frames * 1000 / elapsed < this.minFps;
+    }
+  }
+
   class MasterSimClock {
     constructor({maxDeltaSec = .1, requestFrame = fn => root.requestAnimationFrame(fn),
       cancelFrame = id => root.cancelAnimationFrame(id), onError = error => console.error(error)} = {}) {
@@ -771,6 +799,18 @@ function applySlice(node) {
         if (signal.aborted) abort();
       });
     }
+    /* While the page is starved of frames, feed a check from the media clock instead of
+     * video frame callbacks. Playing, unpaused, unseeking media whose clock moves is the
+     * evidence available; at a healthy cadence this feeds nothing and callbacks decide. */
+    watchStarvedProgress(media, feed) {
+      const cadence = this.cadence ??= new PageCadence(root);
+      const release = cadence.hold();
+      const timer = setInterval(() => {
+        if (cadence.starved() && media.readyState >= 3 && !media.paused && !media.seeking && !media.error)
+          feed(performance.now(), media.currentTime);
+      }, 100);
+      return () => { clearInterval(timer); release(); };
+    }
     watchHandoff(node, incoming, outgoing, signal) {
       const media = incoming.media, url = incoming.url, epoch = incoming.sourceEpoch;
       const budget = Math.max(1, Math.min(800, this.progressTimeoutMs));
@@ -783,8 +823,9 @@ function applySlice(node) {
       ready.catch(() => {});
       const owned = () => !this.disposed && this.nodes.get(node.id) === node && node.active === outgoing &&
         incoming.url === url && incoming.sourceEpoch === epoch && incoming.handoff === state;
+      let unwatch = () => {};
       const stop = () => {
-        if (done) return; done = true; clearTimeout(timer); clearTimeout(playTask);
+        if (done) return; done = true; clearTimeout(timer); clearTimeout(playTask); unwatch();
         signal.removeEventListener('abort', abort); media.removeEventListener('error', decodeError);
         media.removeEventListener('timeupdate', fallback);
         if (incoming.handoff === state) incoming.handoff = null;
@@ -869,6 +910,7 @@ function applySlice(node) {
       signal.addEventListener('abort', abort, {once: true});
       media.addEventListener('error', decodeError);
       if (!media.requestVideoFrameCallback) media.addEventListener('timeupdate', fallback);
+      unwatch = this.watchStarvedProgress(media, state.observe);
       check();
       // Let the first frame's native callbacks settle, then reassert playback
       // once while hidden. This owns no new deadline and cannot revive a paused
@@ -894,9 +936,9 @@ function applySlice(node) {
         const url = deck.url, epoch = deck.sourceEpoch, generation = this.generation;
         let done = false, fulfilled = false, frames = 0, frame = null, previous = deck.decoded?.mediaTime;
         const promotionAfterWall = performance.now(), promotionAfterChanges = deck.progress?.sourceChanges ?? null;
-        let promotionLastWall = null;
+        let promotionLastWall = null, unwatch = () => {};
         const finish = (error, verified = false) => {
-          if (done) return; done = true; clearTimeout(timer);
+          if (done) return; done = true; clearTimeout(timer); unwatch();
           signal.removeEventListener('abort', abort);
           media.removeEventListener('timeupdate', fallback);
           if (frame !== null) media.cancelVideoFrameCallback?.(frame);
@@ -943,6 +985,7 @@ function applySlice(node) {
         if (signal.aborted) { abort(); return; }
         if (media.requestVideoFrameCallback) frame = media.requestVideoFrameCallback(decoded);
         else { previous = media.currentTime; media.addEventListener('timeupdate', fallback); }
+        unwatch = this.watchStarvedProgress(media, (wall, current) => progress(current, wall));
         const rejected = error => finish(signal.aborted || this.disposed || this.generation !== generation ||
           deck.url !== url || deck.sourceEpoch !== epoch ? cancelled() : nativePlayFailure(error));
         try { media.play().then(() => { fulfilled = true; verify(); }, rejected); }
@@ -1744,7 +1787,7 @@ function applySlice(node) {
       this.master?.dispose?.(); this.audio.context?.close().catch(() => {});
     }
   }
-  const api = {Session, MasterSimClock, FrameProgress, foregroundLimit};
+  const api = {Session, MasterSimClock, FrameProgress, PageCadence, foregroundLimit};
   root.SimvltaneaLive = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis === 'object' ? globalThis : this);

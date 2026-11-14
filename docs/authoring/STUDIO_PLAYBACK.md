@@ -44,6 +44,17 @@ rolls back to the retained outgoing clip; promotion still requires fulfilled
 playback and two distinct decoded media times before retiring the old deck.
 Browsers without video-frame callbacks use ready media-time progress as a fallback.
 
+Video frame callbacks arrive on the page's animation-frame cadence. A hidden or unfocused
+pane, or a battery saver, can lower that cadence to a few frames per second, and then silence
+from the callbacks says nothing about the decoder. While a freshness check holds it, the session
+measures animation frames; after a 400 ms window below 12 per second it also accepts the media
+clock of a playing, unpaused, unseeking clip as evidence of progress, polled every 100 ms. At a
+healthy cadence nothing is polled and the callbacks alone decide, so a frozen or paused successor
+is refused as before. A starved page cannot tell a frozen decoder whose clock still advances from
+a healthy one; that case is accepted rather than refusing every clip the page cannot confirm.
+This was the cause of one of four decks playing in a hidden Browser pane: in an unthrottled
+headless Chromium all four played from the same staged site.
+
 With an outgoing resident available, transient readiness timeouts record
 `handoff-deferred` and return an unsuccessful handoff. Automatic scheduling retains
 the old resident and extends its deadline
