@@ -816,6 +816,14 @@ class StripsExpansionParityTests(unittest.TestCase):
         self.assertEqual(results[26]['message'], "strips preset 'strips' supports N=1..12; count 13 is refused "
                          '(no filler, no duplication, never moved to another family)')
 
+    def test_authored_preset_name_is_refused_with_pythons_message(self):
+        # build_artifact001 authors 2..12 since #104; the JavaScript refusal must name the same range.
+        result, = node(['stripsLayouts', 3, 'authored'])
+        with self.assertRaises(LayoutError) as caught:
+            strips_layouts(3, 'authored')
+        self.assertFalse(result['ok'], result)
+        self.assertEqual((result['code'], result['message']), (caught.exception.code, str(caught.exception)))
+
     def test_default_preset_data_is_python_data(self):
         script = 'const C = require(process.argv[1]); process.stdout.write(C.canonicalJson(C.DEFAULT_STRIPS_PRESET))'
         completed = subprocess.run([node_executable(), '-e', script, str(COMPILER)], capture_output=True, text=True,
