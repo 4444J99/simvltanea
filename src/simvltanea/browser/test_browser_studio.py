@@ -661,6 +661,18 @@ class StudioBrowserTests(unittest.TestCase):
         page.wait_for_function("() => !document.querySelector('#studio').classList.contains('idle')")
         page.click(selector)
 
+    def step_panels(self, page, target):
+        """Tap #more / #fewer until the panel count equals target, one confirmed step at a time.
+
+        Each tap waits for the count to change before the next, so a slow runner whose snapshot lags the
+        click cannot overshoot an exact target."""
+        while True:
+            current = self.snapshot(page)['panels']
+            if current == target:
+                return
+            self.tap(page, '#more' if current < target else '#fewer')
+            page.wait_for_function('n => SimvltaneaStudio.snapshot().panels !== n', arg=current)
+
     def add(self, page, paths):
         page.set_input_files('#files', [str(path) for path in paths])
         page.wait_for_function('() => !SimvltaneaStudio.snapshot().busy', timeout=60000)
@@ -869,16 +881,13 @@ class StudioBrowserTests(unittest.TestCase):
             self.tap(page, '#families button[data-family="strips"]')
             page.wait_for_function("() => SimvltaneaStudio.snapshot().family === 'strips'")
         # Authored mosaics now exist for 8 to 12, so the count carries across the family toggle.
-        while self.snapshot(page)['panels'] < 8:
-            self.tap(page, '#more')
+        self.step_panels(page, 8)
         self.tap(page, '#families button[data-family="authored"]')
         page.wait_for_function("() => SimvltaneaStudio.snapshot().family === 'authored'")
         self.assertEqual(self.snapshot(page)['panels'], 8)
-        while self.snapshot(page)['panels'] < 12:
-            self.tap(page, '#more')
+        self.step_panels(page, 12)
         self.assertTrue(page.is_disabled('#more'))
-        while self.snapshot(page)['panels'] > 8:
-            self.tap(page, '#fewer')
+        self.step_panels(page, 8)
         page.wait_for_function('() => !SimvltaneaStudio.snapshot().toastShown', timeout=10000)
         seed = self.snapshot(page)['seed']
         page.locator('body').press('r')
@@ -899,8 +908,7 @@ class StudioBrowserTests(unittest.TestCase):
         page.locator('body').press('ArrowRight' if initial['panels'] < 7 else 'ArrowLeft')
         if self.snapshot(page)['family'] == 'authored':
             self.tap(page, '#families button[data-family="strips"]')
-        while self.snapshot(page)['panels'] < 8:
-            self.tap(page, '#more')
+        self.step_panels(page, 8)
         self.tap(page, '#families button[data-family="authored"]')
         self.assertEqual(self.snapshot(page)['panels'], 8)
         page.locator('body').press('r')
