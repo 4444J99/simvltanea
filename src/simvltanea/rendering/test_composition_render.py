@@ -219,7 +219,7 @@ class StateTests(unittest.TestCase):
                 self.assertTrue(all(len(x.panels)==n and len(x.placements)==n for x in segments))
 
     def test_invalid_export_and_unsupported_count(self):
-        with self.assertRaises(ValueError):build_artifact001(8)
+        with self.assertRaises(ValueError):build_artifact001(13)
         s=get_state()
         with self.assertRaisesRegex(c.StateError,'even'):c.compile_segments(s,ROOT,'portrait',361,640)
         with self.assertRaisesRegex(c.StateError,'orientation'):c.compile_segments(s,ROOT,'portrait',640,360)
