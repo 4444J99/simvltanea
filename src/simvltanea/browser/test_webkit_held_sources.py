@@ -317,6 +317,16 @@ console.log(JSON.stringify({
     rows[5].nodes = []; rows[5].decks = [];
     return api.observeSources(rows, [targets[0]])[0];
   })(),
+  hostGap: (() => {
+    const rows = journal(Array(12).fill(ok));
+    rows.slice(6).forEach(row => {row.wall += 3000;});
+    return api.observeSources(rows, [targets[0]])[0];
+  })(),
+  hostSilent: (() => {
+    const rows = journal(Array(12).fill(ok));
+    rows.slice(6).forEach(row => {row.wall += 12000;});
+    return api.observeSources(rows, [targets[0]])[0];
+  })(),
   long: run([ok, ok, ok, {current: 0, max: 60000}, {current: 0, max: 60000}, ok, ok, ok, ok, ok, ok, ok]),
 }));
 ''')
@@ -331,6 +341,10 @@ console.log(JSON.stringify({
         self.assertTrue(result['tailSingle']['pass'])
         # A tolerated stall does not excuse the resident vanishing from the next observation.
         self.assertFalse(result['omitted']['pass']); self.assertGreater(result['omitted']['invalid'], 0)
+        # A host that missed polls for 3 s breaks the wrap chain but is not a decoder failure; 12 s of
+        # silence is not an observation.
+        self.assertEqual(result['hostGap']['invalid'], 0); self.assertTrue(result['hostGap']['pass'])
+        self.assertGreater(result['hostSilent']['invalid'], 0); self.assertFalse(result['hostSilent']['pass'])
         # A long stall that recovered before it was sampled is bounded by the cap as well.
         self.assertFalse(result['long']['pass'])
 

@@ -26,6 +26,7 @@ const ORIGIN = Object.freeze({run: '42431559354', artifact: '13597902240',
 // sample when the current gap is at the ceiling or the maximum has just risen to it.
 // A bounded number of short stall runs is tolerated; a decoder that stays frozen
 // (a long run) or stalls repeatedly (many episodes) still fails.
+const OBSERVATION_LIMIT_MS = 10000;
 const GAP_CEILING_MS = 2000, GAP_CAP_MS = 4000, MAX_STALL_RUN = 5, MAX_STALL_EPISODES = 2;
 function stallStep(state, current, max) {
   // A completed stall is bounded too: a long one that recovered before it was sampled still fails.
@@ -108,7 +109,11 @@ function observeSources(samples, targets = TARGETS) {
       const old = previous.get(node.id);
       if (old?.identity === identity) {
         const gap = row.wall - old.wall;
-        if (gap < 0 || gap >= 2000) report.invalid++;
+        // A host sampler that stalled between two polls proves nothing about the decoder: native progress
+        // (current and maximum gap, judged above) is the evidence, so the gap only breaks the wrap chain.
+        // Time running backwards or a host silent for OBSERVATION_LIMIT_MS is not an observation at all.
+        if (gap < 0 || gap >= OBSERVATION_LIMIT_MS) report.invalid++;
+        else if (gap >= GAP_CEILING_MS) { /* chain broken, nothing invalid */ }
         else if (gap > 0 && p.sourceChanges > old.changes && node.callbacks > old.callbacks && node.decoded !== old.decoded) {
           report.advances++;
           if (node.decoded + .05 < old.decoded) {
