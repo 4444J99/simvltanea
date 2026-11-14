@@ -79,6 +79,36 @@ process.stdout.write(JSON.stringify({before, paused, after: clock.simTime}));
         self.assertAlmostEqual(values['after'], .15)
 
 
+class PageCadenceTests(unittest.TestCase):
+    def run_cadence(self, frame_gap_ms, wait_ms=900):
+        script = r'''
+const {PageCadence} = require(process.argv[1]);
+const [gap, wait] = [Number(process.argv[2]), Number(process.argv[3])];
+let pending = null, timer = null, id = 0;
+const host = {requestAnimationFrame: callback => { pending = callback; timer = setTimeout(() => { const run = pending; pending = null; run(); }, gap); return ++id; },
+  cancelAnimationFrame: () => { clearTimeout(timer); pending = null; }};
+const cadence = new PageCadence(host);
+const before = cadence.starved();
+const release = cadence.hold();
+const early = cadence.starved();
+setTimeout(() => {
+  const during = cadence.starved(); release();
+  process.stdout.write(JSON.stringify({before, early, during, after: cadence.starved(), holders: cadence.holders}));
+}, wait);
+'''
+        result = subprocess.run(['node', '-e', script, str(LIVE), str(frame_gap_ms), str(wait_ms)],
+                                check=True, capture_output=True, text=True)
+        return json.loads(result.stdout)
+
+    def test_a_page_given_few_frames_is_starved_only_after_a_measured_window(self):
+        values = self.run_cadence(frame_gap_ms=300)
+        self.assertEqual(values, dict(before=False, early=False, during=True, after=False, holders=0))
+
+    def test_a_page_given_frames_at_display_rate_is_never_starved(self):
+        values = self.run_cadence(frame_gap_ms=16)
+        self.assertEqual(values, dict(before=False, early=False, during=False, after=False, holders=0))
+
+
 class PersistentSessionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -93,12 +123,34 @@ class PersistentSessionTests(unittest.TestCase):
         cls.browser.close()
         cls.pw.stop()
 
-    def open(self, has_touch=False, effects=False):
+    def open(self, has_touch=False, effects=False, throttled=False):
         self.assertTrue(LIVE.exists(), 'persistent Studio runtime is not implemented')
         context = self.browser.new_context(viewport={'width': 800, 'height': 500}, has_touch=has_touch)
         self.addCleanup(context.close)
         page = context.new_page()
         page.set_content('<style>#stage{position:relative;width:800px;height:500px}.loop{position:absolute;overflow:hidden}</style><main id="stage"></main>')
+        page.evaluate('value => {window.throttledPage=value}', throttled)
+        if throttled:
+            # A hidden or unfocused pane: animation frames arrive about three times a second
+            # and video frame callbacks at most every 700 ms, as in the Browser pane that
+            # showed one of four decks. Media still decodes and its clock still moves.
+            page.evaluate(r'''() => {
+              window.requestAnimationFrame = callback => setTimeout(() => callback(performance.now()), 330);
+              window.cancelAnimationFrame = id => clearTimeout(id);
+              const proto = HTMLVideoElement.prototype, native = proto.requestVideoFrameCallback;
+              const last = new WeakMap();
+              proto.requestVideoFrameCallback = function(callback) {
+                let cancelled = false;
+                const id = native.call(this, (now, metadata) => {
+                  const wait = Math.max(0, 700 - (performance.now() - (last.get(this) ?? -Infinity)));
+                  setTimeout(() => {
+                    if (cancelled) return;
+                    last.set(this, performance.now()); callback(performance.now(), metadata);
+                  }, wait);
+                });
+                return id;
+              };
+            }''')
         if effects:
             page.add_script_tag(path=str(HERE / 'browser.presence.js'))
         page.add_script_tag(path=str(LIVE))
@@ -113,7 +165,7 @@ class PersistentSessionTests(unittest.TestCase):
               tracks:indices.map((_,i)=>({id:`loop-${i+1}`,spans:[{source:`source-${i+1}`}]})),
               layout_keyframes:[{layouts:{portrait:{cells},landscape:{cells}}}]};
           };
-          window.live = new SimvltaneaLive.Session(document.querySelector('#stage'),{crossfadeSec:.1,primeTimeoutMs:1200,effects:presenceEffects});
+          window.live = new SimvltaneaLive.Session(document.querySelector('#stage'),{crossfadeSec:.1,primeTimeoutMs:window.throttledPage?5000:1200,effects:presenceEffects});
           window.setClips = indices => live.reconcile({plan:planFor(indices),items:indices.map(i=>items[i]),playing:true});
         }''', payload)
         page.evaluate('setClips([0,1])')
@@ -651,6 +703,28 @@ class PersistentSessionTests(unittest.TestCase):
           incomingEmpty:node.decks.filter(d=>d!==node.active).every(d=>d.url===null),
           preparing:live.snapshot().activeStandbys};}''')
         self.assertEqual(restored, dict(identity=True, url=True, moving=True, audible=True, phase='ACTIVE', incomingEmpty=True, preparing=0))
+
+    def test_throttled_page_cadence_still_admits_successors_whose_clock_moves(self):
+        page = self.open(throttled=True)
+        self.assertTrue(page.evaluate('setClips([2,1])'), 'a playing successor was refused for want of frame callbacks')
+        self.assertTrue(page.evaluate('setClips([2,3])'))
+        result = page.evaluate('''() => ({failure: live.lastFailure, permits: live.activeStandbys,
+          moving: [...live.nodes.values()].map(n => !n.media.paused && n.media.readyState >= 3),
+          failures: live.events.filter(e => e.type === 'media-failure' || e.type === 'handoff-deferred').length})''')
+        self.assertEqual(result, dict(failure=None, permits=0, moving=[True, True], failures=0))
+
+    def test_throttled_page_cadence_does_not_admit_a_paused_successor(self):
+        page = self.open(throttled=True)
+        page.evaluate('''() => {
+          live.progressTimeoutMs=500;
+          const node=live.nodes.get('loop-1');window.outgoing=node.media;
+          const next=node.decks.find(deck=>deck!==node.active).media, play=next.play.bind(next);
+          next.play=()=>{if(next.dataset.deck!=='active') return play();
+            next.pause();return Promise.resolve();};
+        }''')
+        self.assertFalse(page.evaluate('setClips([2,1])'), 'a paused successor passed on the media clock')
+        self.assertTrue(page.evaluate("live.nodes.get('loop-1').media===outgoing && !outgoing.paused"))
+        self.assertEqual(page.evaluate('live.snapshot().activeStandbys'), 0)
 
     def test_fulfilled_promotion_without_new_decoded_frames_keeps_outgoing(self):
         page = self.open()

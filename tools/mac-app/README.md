@@ -48,11 +48,12 @@ swift run --build-system native simv-tests          # the Swift suite
 
 ## Not done yet
 
-- Playback was checked only in the Chrome-based browser pane, not in WebKit. There the Studio
-  loaded the library (manifest and every clip fetched and hash-checked, 206 range responses)
-  and one of four decks played, while the others showed "That loop could not start". Serving
-  the same staged site with `python3 -m http.server` gave the identical result, so the
-  local server is not the cause. Whether all four decks play in the app's WKWebView is unobserved.
+- Playback was checked in Chromium, not in WebKit. A hidden Browser pane showed one of four
+  decks playing and "That loop could not start" on the rest; the cause was the pane giving the
+  page about 3 animation frames a second, which starved the Studio's two-fresh-frames check
+  (fixed in `browser.live.js`; the same site played all four decks in unthrottled headless
+  Chromium, and in the pane after the fix). Whether all four decks play in the app's WKWebView
+  is unobserved.
 - The app was built and its library and server were exercised, but the Photos permission
   prompt and the web view playing a real Photos import have not been observed in a running
   app window.
