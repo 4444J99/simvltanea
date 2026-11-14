@@ -24,7 +24,7 @@ BASELINE = HERE / 'fixtures' / 'artifact-001'
 
 import simvltanea.authoring.composition as c
 import simvltanea.rendering.render_triptych as r
-from simvltanea.authoring.artifact001_layouts import AUTHORED, build_artifact001
+from simvltanea.authoring.artifact001_layouts import build_artifact001
 from simvltanea.authoring import build_strips, strips_layouts
 from simvltanea.authoring.layout_presets import DEFAULT_STRIPS_PRESET
 from simvltanea.generators.make_artifact_001 import prepare, probe
@@ -219,7 +219,8 @@ class StateTests(unittest.TestCase):
                 self.assertTrue(all(len(x.panels)==n and len(x.placements)==n for x in segments))
 
     def test_invalid_export_and_unsupported_count(self):
-        with self.assertRaises(ValueError):build_artifact001(max(AUTHORED)+1)
+        with self.assertRaises(ValueError):build_artifact001(13)
+        with self.assertRaises(ValueError):build_artifact001(1)
         s=get_state()
         with self.assertRaisesRegex(c.StateError,'even'):c.compile_segments(s,ROOT,'portrait',361,640)
         with self.assertRaisesRegex(c.StateError,'orientation'):c.compile_segments(s,ROOT,'portrait',640,360)

@@ -108,6 +108,25 @@ setTimeout(() => {
         values = self.run_cadence(frame_gap_ms=16)
         self.assertEqual(values, dict(before=False, early=False, during=False, after=False, holders=0))
 
+    def test_a_page_that_was_healthy_and_is_then_hidden_is_detected_within_one_window(self):
+        script = r'''
+const {PageCadence} = require(process.argv[1]);
+let gap = 16, pending = null, timer = null, id = 0;
+const host = {requestAnimationFrame: callback => { pending = callback; timer = setTimeout(() => { const run = pending; pending = null; run(); }, gap); return ++id; },
+  cancelAnimationFrame: () => { clearTimeout(timer); pending = null; }};
+const cadence = new PageCadence(host);
+const release = cadence.hold();
+let healthy = null;
+setTimeout(() => { healthy = cadence.starved(); gap = 330; }, 450);
+setTimeout(() => {
+  const hidden = cadence.starved(); release();
+  process.stdout.write(JSON.stringify({healthy, hidden}));
+}, 1050);
+'''
+        result = subprocess.run(['node', '-e', script, str(LIVE)], check=True, capture_output=True, text=True)
+        # An average since the hold began would still read about 25 frames a second at 1050 ms.
+        self.assertEqual(json.loads(result.stdout), dict(healthy=False, hidden=True))
+
 
 class PersistentSessionTests(unittest.TestCase):
     @classmethod
