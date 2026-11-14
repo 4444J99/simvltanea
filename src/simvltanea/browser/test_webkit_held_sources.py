@@ -327,6 +327,11 @@ console.log(JSON.stringify({
     rows.slice(6).forEach(row => {row.wall += 12000;});
     return api.observeSources(rows, [targets[0]])[0];
   })(),
+  silentThenStalled: (() => {
+    const rows = journal([ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, {current: 0, max: 2100}]);
+    rows[11].wall += 12000;
+    return api.observeSources(rows, [targets[0]])[0];
+  })(),
   long: run([ok, ok, ok, {current: 0, max: 60000}, {current: 0, max: 60000}, ok, ok, ok, ok, ok, ok, ok]),
 }));
 ''')
@@ -345,6 +350,9 @@ console.log(JSON.stringify({
         # silence is not an observation.
         self.assertEqual(result['hostGap']['invalid'], 0); self.assertTrue(result['hostGap']['pass'])
         self.assertGreater(result['hostSilent']['invalid'], 0); self.assertFalse(result['hostSilent']['pass'])
+        # Silence is judged even when the sample after it is a tolerated stall.
+        self.assertGreater(result['silentThenStalled']['invalid'], 0)
+        self.assertFalse(result['silentThenStalled']['pass'])
         # A long stall that recovered before it was sampled is bounded by the cap as well.
         self.assertFalse(result['long']['pass'])
 

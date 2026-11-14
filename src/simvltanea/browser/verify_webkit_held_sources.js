@@ -100,6 +100,9 @@ function observeSources(samples, targets = TARGETS) {
       // A tolerated stall sample proves nothing and breaks the wrap chain, but is not a failure.
       // The resident stays present, so a later omission is still an invalid observation.
       if (verdict === 'stall') {
+        const before = previous.get(node.id);
+        // Wall-time continuity is judged for every observation, stall sample or not.
+        if (before && (row.wall < before.wall || row.wall - before.wall >= OBSERVATION_LIMIT_MS)) report.invalid++;
         previous.set(node.id, {identity: null, item: node.item, wall: row.wall,
           changes: p.sourceChanges, callbacks: node.callbacks, decoded: node.decoded});
         continue;
