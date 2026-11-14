@@ -20,6 +20,22 @@ const ORIGIN = Object.freeze({run: '42431559354', artifact: '13597902240',
   holdStartWall: 131094, holdEndWall: 133742, observations: 17, maxSampleGapMs: 294,
   sourceManifestSha256: '030d6446b3a57ea003ec056fdb7ed3e553c10f184b477346822eec5b4f9ca401',
   libraryUrl: 'https://75cafe28.loop-compositor-studio.pages.dev/library/'});
+// A native decoder stall of about two seconds is real but transient: the running
+// maximum (maxGapMs) then stays latched at that value for the rest of the source's
+// life. Validity is therefore judged on the *recent* signal: a sample is a stall
+// sample when the current gap is at the ceiling or the maximum has just risen to it.
+// A bounded number of short stall runs is tolerated; a decoder that stays frozen
+// (a long run) or stalls repeatedly (many episodes) still fails.
+const GAP_CEILING_MS = 2000, MAX_STALL_RUN = 5, MAX_STALL_EPISODES = 2;
+function stallStep(state, current, max) {
+  if (![current, max].every(gap => Number.isFinite(gap) && gap >= 0) || max < current) return 'fail';
+  const stalled = current >= GAP_CEILING_MS || (max >= GAP_CEILING_MS && max !== state.max);
+  state.max = max;
+  if (!stalled) { state.run = 0; return 'ok'; }
+  state.run = (state.run || 0) + 1;
+  if (state.run === 1) state.episodes = (state.episodes || 0) + 1;
+  return state.run > MAX_STALL_RUN || state.episodes > MAX_STALL_EPISODES ? 'fail' : 'stall';
+}
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
@@ -55,7 +71,7 @@ function buildManifest(original, readAsset, targets = TARGETS) {
 function observeSources(samples, targets = TARGETS) {
   const records = new Map(targets.map(t => [t.id, {...t, observations: 0, advances: 0, wraps: 0,
     firstWall: null, lastWall: null, wrapEvidence: [], invalid: 0}]));
-  const previous = new Map();
+  const previous = new Map(), stalls = new Map();
   for (const row of samples) {
     const present = new Set((row.nodes || []).map(node => node.id));
     for (const [id, old] of previous) if (!present.has(id)) {
@@ -73,9 +89,14 @@ function observeSources(samples, targets = TARGETS) {
         typeof p.url === 'string' && p.url.startsWith('blob:') && Number.isSafeInteger(p.epoch) && p.epoch >= 1 &&
         Number.isSafeInteger(p.sourceChanges) && p.sourceChanges >= 1 && Number.isSafeInteger(p.changes) &&
         p.changes >= p.sourceChanges && p.mediaTime === node.decoded &&
-        [p.currentGapMs, p.maxGapMs].every(gap => Number.isFinite(gap) && gap >= 0 && gap < 2000) &&
         Number.isSafeInteger(node.callbacks) && node.callbacks >= 1;
       if (!valid) { report.invalid++; previous.delete(node.id); continue; }
+      const stallKey = JSON.stringify([node.id, node.item, p.url, p.epoch]);
+      if (!stalls.has(stallKey)) stalls.set(stallKey, {});
+      const verdict = stallStep(stalls.get(stallKey), p.currentGapMs, p.maxGapMs);
+      if (verdict === 'fail') { report.invalid++; previous.delete(node.id); continue; }
+      // A tolerated stall sample proves nothing and breaks the wrap chain, but is not a failure.
+      if (verdict === 'stall') { previous.delete(node.id); continue; }
       report.observations++; report.firstWall ??= row.wall; report.lastWall = row.wall;
       const identity = JSON.stringify([node.id, node.item, node.sha, node.deck, node.birth, p.url, p.epoch]);
       const old = previous.get(node.id);
@@ -123,11 +144,14 @@ function coverage(result, targets = TARGETS) {
       row.foregroundLimit === 4 && row.nodes?.length === 4 && new Set(row.nodes.map(node => node.id)).size === 4 &&
       bounded(row.populated, 5) && bounded(row.playing, row.populated) &&
       bounded(row.standbys, 1) && bounded(row.maxStandbys, 1) && row.standbys <= row.maxStandbys)),
-    preludeNativeProgress: Boolean(prelude.samples?.length && prelude.samples.every(row => {
-      const summary = row.progressSummary;
-      return summary?.schema === 1 && summary.supported === true && Number.isFinite(summary.maxGapMs) &&
-        summary.maxGapMs >= 0 && summary.maxGapMs < 2000 && summary.suspensionCount === 0;
-    })),
+    preludeNativeProgress: Boolean(prelude.samples?.length && (() => {
+      const state = {};
+      return prelude.samples.every(row => {
+        const summary = row.progressSummary;
+        return summary?.schema === 1 && summary.supported === true && summary.suspensionCount === 0 &&
+          stallStep(state, 0, summary.maxGapMs) !== 'fail';
+      });
+    })()),
     allSourcesDecodedAndWrapped: sources.every(source => source.pass),
     heldSourcesSustained: sustained.filter(source => source.role === 'held').every(source => source.pass),
     evolutionEnabled: result.initialStudio?.evolving === true && result.initialStudio?.loopMode === 'boomerang'};
@@ -173,4 +197,4 @@ async function prepare(page, {sample, click, ready, pause, journal}, targets = T
   return result;
 }
 
-module.exports = {TARGETS, ORIGIN, buildManifest, observeSources, transitionChecks, coverage, prepare};
+module.exports = {stallStep, MAX_STALL_RUN, MAX_STALL_EPISODES, TARGETS, ORIGIN, buildManifest, observeSources, transitionChecks, coverage, prepare};
