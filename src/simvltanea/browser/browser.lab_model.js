@@ -54,7 +54,7 @@
     const count = Number.isFinite(patch.count) ? patch.count : Number.isFinite(prior.count) ? prior.count : DEFAULT_LAYOUT.count;
     let framing = choice('framing', ['cover', 'contain', 'slice']);
     if (family === 'authored' && framing === 'slice') framing = 'cover';
-    return {family, count: clamp(Math.round(count), family === 'authored' ? 2 : 1, family === 'authored' ? 7 : 12),
+    return {family, count: clamp(Math.round(count), family === 'authored' ? 2 : 1, 12),
       orientation: choice('orientation', ['landscape', 'portrait']), framing};
   }
 

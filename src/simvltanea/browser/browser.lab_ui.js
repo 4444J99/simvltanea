@@ -496,7 +496,7 @@
       selectedPanel = Math.round(clamp(selectedPanel, 1, layout.count, 1));
       $('panel-count').textContent = String(layout.count);
       $('panel-decrease').disabled = busy || layout.count <= (layout.family === 'authored' ? 2 : 1);
-      $('panel-increase').disabled = busy || layout.count >= (layout.family === 'authored' ? 7 : 12);
+      $('panel-increase').disabled = busy || layout.count >= 12;
       $('layout-family').value = layout.family; $('layout-orientation').value = layout.orientation; $('layout-framing').value = layout.framing;
       $('slice-framing-option').disabled = layout.family !== 'strips'; $('slice-framing-option').hidden = layout.family !== 'strips';
       const panels = snapshot.panels || Model.panelCells(layout, root.SimvltaneaLabLayoutBundle);
