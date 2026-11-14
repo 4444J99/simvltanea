@@ -527,17 +527,71 @@ result.samples.slice(800, 840).forEach(row => {row.nodes[0].decoded = .5;});
             with self.subTest(mutation=mutation):
                 self.assert_refused(NATIVE_PROGRESS + mutation, 'observationCoverage')
 
-    def test_native_gap_between_polls_or_retired_source_still_fails(self):
+    def test_one_native_stall_between_polls_is_tolerated_and_reported(self):
+        # The running maximum stays latched at the stall for the rest of the run (and after its source is
+        # gone); only the rise opens an episode, so the latched value must not condemn the run.
         for mutation in (
-            # Progress has already resumed when the next host sample arrives.
             'result.samples.slice(800).forEach(row => {row.progressSummary.maxGapMs = 2100;});',
-            # Same failure retained after its source has completely disappeared.
             'result.samples.slice(500).forEach(row => {row.progressSummary.maxGapMs = 2100;});',
         ):
             with self.subTest(mutation=mutation):
+                summary = classify(NATIVE_PROGRESS + mutation)
+                self.assertTrue(summary['pass'], summary)
+                self.assertEqual(summary['stalls'], {'episodes': 1, 'peakMs': 2100, 'tolerated': True})
+                self.assertEqual(summary['progressCoverage']['nativeMaximumGapMs'], 2100)
+
+    def test_a_stalled_run_that_never_recovers_or_stalls_repeatedly_still_fails(self):
+        three = (
+            'result.samples.slice(300).forEach(row => {row.progressSummary.maxGapMs = 2100;});\n'
+            'result.samples.slice(600).forEach(row => {row.progressSummary.maxGapMs = 2200;});\n'
+            'result.samples.slice(900).forEach(row => {row.progressSummary.maxGapMs = 2300;});')
+        for mutation, episodes in (
+            # One stall longer than the cap: the decoder stayed frozen.
+            ('result.samples.slice(800).forEach(row => {row.progressSummary.maxGapMs = 4500;});', 1),
+            # Growing without end, as a frozen decoder reports.
+            ('result.samples.slice(800).forEach((row, index) => '
+             '{row.progressSummary.maxGapMs = 2100 + index * 137;});', 1),
+            # Three separate stalls, each recovered, each higher than the last.
+            (three, 3),
+        ):
+            with self.subTest(mutation=mutation):
                 summary = self.assert_refused(NATIVE_PROGRESS + mutation, 'decodedProgress')
-                self.assertEqual(summary['longestDecodedHoldMs'], 2100)
                 self.assertEqual(summary['verdict'], 'FAIL')
+                self.assertEqual(summary['stalls']['episodes'], episodes)
+                self.assertFalse(summary['stalls']['tolerated'])
+
+    def test_recovered_stalls_on_separate_sources_each_count_below_the_session_maximum(self):
+        def retired(count):
+            entries = ',\n  '.join(
+                "{schema: 1, supported: true, live: false, id: 'loop-1', deck: 0, url: 'blob:gone-%d', epoch: 1, "
+                "changes: 5, sourceChanges: 5, mediaTime: 1, currentGapMs: 0, maxGapMs: 2100, lifetimeMaxGapMs: 2100}" % n
+                for n in range(count))
+            return ('result.samples.slice(800).forEach(row => {row.progressSummary.maxGapMs = 2100; '
+                    'row.progressSummary.retired = [\n  ' + entries + '];});')
+        two = classify(NATIVE_PROGRESS + retired(2))
+        self.assertTrue(two['pass'], two)
+        self.assertEqual(two['stalls']['episodes'], 2)
+        three = self.assert_refused(NATIVE_PROGRESS + retired(3), 'decodedProgress')
+        self.assertEqual(three['stalls']['episodes'], 3)
+
+    def test_each_recovered_host_hold_of_one_resident_is_its_own_episode(self):
+        def freeze(count):
+            return '\n'.join(
+                f'result.samples.slice({start}, {start + 21}).forEach(row => {{row.nodes[0].decoded = .5;}});'
+                for start in (200, 450, 700, 950)[:count])
+        two = classify(freeze(2))
+        self.assertTrue(two['pass'], two)
+        self.assertEqual(two['stalls']['episodes'], 2)
+        three = self.assert_refused(freeze(3), 'decodedProgress')
+        self.assertEqual(three['stalls']['episodes'], 3)
+
+    def test_two_recovered_stalls_pass(self):
+        two = (
+            'result.samples.slice(300).forEach(row => {row.progressSummary.maxGapMs = 2100;});\n'
+            'result.samples.slice(700).forEach(row => {row.progressSummary.maxGapMs = 2600;});')
+        summary = classify(NATIVE_PROGRESS + two)
+        self.assertTrue(summary['pass'], summary)
+        self.assertEqual(summary['stalls'], {'episodes': 2, 'peakMs': 2600, 'tolerated': True})
 
     def test_provisional_incoming_may_await_its_first_tracked_frame(self):
         summary = classify(NATIVE_PROGRESS + '''

@@ -286,6 +286,76 @@ console.log(JSON.stringify(['currentGapMs', 'maxGapMs'].map(key => {
 ''')
         self.assertEqual([report['pass'] for report in result], [False, False])
 
+    def test_single_native_stall_is_tolerated_but_frozen_or_repeated_stalls_fail(self):
+        result = execute(r'''
+// Twelve samples of one resident, wrapping once, so a stall can be inserted anywhere.
+function journal(gaps) {
+  const base = rowsFor();
+  return gaps.map((gap, index) => {
+    const row = structuredClone(base[index % 3]);
+    const wall = 1000 + index * 137, decoded = [4.8, 4.95, .1][index % 3];
+    row.wall = wall; row.nodes[0].decoded = decoded; row.nodes[0].callbacks = 100 + index;
+    const p = row.nodes[0].progress;
+    Object.assign(p, {mediaTime: decoded, sourceChanges: 100 + index, changes: 100 + index,
+      lastChangeWall: wall, lastForegroundChangeWall: wall, currentGapMs: gap.current, maxGapMs: gap.max,
+      lifetimeMaxGapMs: gap.max});
+    row.decks[0].decoded = decoded; row.decks[0].callbacks = row.nodes[0].callbacks; row.decks[0].progress = p;
+    return row;
+  });
+}
+const ok = {current: 0, max: 137}, latched = {current: 0, max: 2073}, stalled = {current: 2073, max: 2073};
+const run = gaps => api.observeSources(journal(gaps), [targets[0]])[0];
+const frozen = Array.from({length: 12}, (_, i) => ({current: 2000 + i * 137, max: 2000 + i * 137}));
+console.log(JSON.stringify({
+  baseline: run(Array(12).fill(ok)),
+  single: run([ok, ok, ok, stalled, latched, latched, latched, latched, latched, latched, latched, latched]),
+  frozen: run([ok, ok, ...frozen.slice(0, 10)]),
+  repeated: run([ok, stalled, ok, stalled, ok, stalled, ok, ok, ok, ok, ok, ok]),
+  tailSingle: run([ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, stalled]),
+  omitted: (() => {
+    const rows = journal([ok, ok, ok, ok, stalled, ok, ok, ok, ok, ok, ok, ok]);
+    rows[5].nodes = []; rows[5].decks = [];
+    return api.observeSources(rows, [targets[0]])[0];
+  })(),
+  hostGap: (() => {
+    const rows = journal(Array(12).fill(ok));
+    rows.slice(6).forEach(row => {row.wall += 3000;});
+    return api.observeSources(rows, [targets[0]])[0];
+  })(),
+  hostSilent: (() => {
+    const rows = journal(Array(12).fill(ok));
+    rows.slice(6).forEach(row => {row.wall += 12000;});
+    return api.observeSources(rows, [targets[0]])[0];
+  })(),
+  silentThenStalled: (() => {
+    const rows = journal([ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, ok, {current: 0, max: 2100}]);
+    rows[11].wall += 12000;
+    return api.observeSources(rows, [targets[0]])[0];
+  })(),
+  long: run([ok, ok, ok, {current: 0, max: 60000}, {current: 0, max: 60000}, ok, ok, ok, ok, ok, ok, ok]),
+}));
+''')
+        self.assertTrue(result['baseline']['pass'])
+        # One transient stall: no invalid sample, later latched maxima do not invalidate the source.
+        self.assertEqual(result['single']['invalid'], 0)
+        self.assertTrue(result['single']['pass'])
+        self.assertGreater(result['single']['observations'], result['frozen']['observations'])
+        # A decoder that stays frozen, or stalls again and again, fails.
+        self.assertFalse(result['frozen']['pass']); self.assertGreater(result['frozen']['invalid'], 0)
+        self.assertFalse(result['repeated']['pass']); self.assertGreater(result['repeated']['invalid'], 0)
+        self.assertTrue(result['tailSingle']['pass'])
+        # A tolerated stall does not excuse the resident vanishing from the next observation.
+        self.assertFalse(result['omitted']['pass']); self.assertGreater(result['omitted']['invalid'], 0)
+        # A host that missed polls for 3 s breaks the wrap chain but is not a decoder failure; 12 s of
+        # silence is not an observation.
+        self.assertEqual(result['hostGap']['invalid'], 0); self.assertTrue(result['hostGap']['pass'])
+        self.assertGreater(result['hostSilent']['invalid'], 0); self.assertFalse(result['hostSilent']['pass'])
+        # Silence is judged even when the sample after it is a tolerated stall.
+        self.assertGreater(result['silentThenStalled']['invalid'], 0)
+        self.assertFalse(result['silentThenStalled']['pass'])
+        # A long stall that recovered before it was sampled is bounded by the cap as well.
+        self.assertFalse(result['long']['pass'])
+
     def test_absent_native_proof_and_nonplaying_samples_cannot_pass(self):
         result = execute(r'''
 const mutations = [
@@ -360,7 +430,6 @@ console.log(JSON.stringify(changes.map(change => {
     def test_retired_gap_or_missing_native_summary_cannot_pass_prelude(self):
         result = execute(REPLAY + r'''
 const changes = [
-  row => {row.progressSummary.maxGapMs = 2100;},
   row => {delete row.progressSummary;},
   row => {row.progressSummary.supported = false;},
   row => {row.progressSummary.schema = 2;},
@@ -376,6 +445,23 @@ console.log(JSON.stringify(changes.map(change => {
         for report in result:
             self.assertFalse(report['pass'])
             self.assertFalse(report['checks']['preludeNativeProgress'])
+
+    def test_prelude_single_stall_passes_but_sustained_or_repeated_stalls_fail(self):
+        result = execute(REPLAY + r'''
+const longPrelude = () => {
+  const value = structuredClone(replay);
+  value.prelude.samples = [...value.prelude.samples, ...structuredClone(value.prelude.samples)];
+  return value;
+};
+const withMax = (value, values) => values.forEach((gap, index) => {
+  value.prelude.samples[index].progressSummary.maxGapMs = gap;});
+const single = longPrelude(); withMax(single, [137, 137, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100, 2100]);
+const sustained = longPrelude(); withMax(sustained, [137, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3100]);
+const long = longPrelude(); withMax(long, Array(12).fill(60000));
+const repeated = longPrelude(); withMax(repeated, [137, 2100, 137, 2200, 137, 2300, 137, 137, 137, 137, 137, 137]);
+console.log(JSON.stringify([single, sustained, repeated, long].map(v => api.coverage(v, targets).checks.preludeNativeProgress)));
+''')
+        self.assertEqual(result, [True, False, False, False])
 
     def test_all_five_assets_and_held_body_wraps_prove_replay_coverage(self):
         result = execute(REPLAY + r'''
