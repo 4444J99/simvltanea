@@ -5,10 +5,10 @@
 
 ## Rule
 
-- **N >= 1 under strips; authored 2..7.** The strips family (`src/simvltanea/authoring/layout_presets.py`)
+- **N >= 1 under strips; authored 2..12.** The strips family (`src/simvltanea/authoring/layout_presets.py`)
   computes full-bleed rows (portrait) and columns (landscape) for N=1..12. The authored family
   (`src/simvltanea/authoring/artifact001_layouts.py` `AUTHORED`) has reviewed engineering pairs for
-  N=2..7. A count outside the chosen family fails; it is never filled, duplicated or moved to the
+  N=2..12. A count outside the chosen family fails; it is never filled, duplicated or moved to the
   other family. Both are engineering geometries, not artist-approved designs.
 - **Every panel is a deterministic random crop** of a larger source video: `slice: {enabled, width, height}` at `src/simvltanea/authoring/composition.py:297` `slice_rect()` using the same `sha256-counter-v1` `src/simvltanea/authoring/composition.py:20` RNG as `choose_source()`. Crop is `x = hash%1000/1000 * (1-w)`, `y = hash%1000/1000 * (1-h)`, `w/h` from `slice` config. Invariant `validate_slice()` `src/simvltanea/authoring/composition.py:136` enforces `0<w<1,0<h<1, w*h<1` so at least one dimension is cropped — full-frame reveal is rejected before encoding.
 - **Opposing sides are paired**: video 1 is a random slice sequenced next to video 2 also a random slice cropped from opposing source — each added slice repeats same slice+seam process (`slice_rect` is per-loop per-period, so every `period` the slice location rerolls deterministically, never via wall clock).

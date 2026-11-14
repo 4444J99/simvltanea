@@ -488,7 +488,7 @@ def _checked_preset(raw: Any, source: str | None = None) -> _Preset:
 def _preset(preset: Any) -> _Preset:
     if isinstance(preset, str):
         if preset == FAMILY_AUTHORED:
-            raise LayoutError("preset", "preset 'authored' is the authored family (N=2..7); use build_artifact001")
+            raise LayoutError("preset", "preset 'authored' is the authored family (N=2..12); use build_artifact001")
         if preset not in BUILTIN_PRESETS:
             raise LayoutError("preset", f"unknown preset {preset!r}; built-ins are {sorted(BUILTIN_PRESETS)} "
                                         "(pass your own file by path)")
