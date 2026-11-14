@@ -1166,7 +1166,7 @@
   function presetOf(preset, source) {
     if (typeof preset === 'string') {
       if (preset === 'authored') {
-        fail({}, 'preset', "preset 'authored' is the authored family (N=2..7); use build_artifact001");
+        fail({}, 'preset', "preset 'authored' is the authored family (N=2..12); use build_artifact001");
       }
       if (preset !== 'strips') {
         fail({}, 'preset', `unknown preset ${pyRepr(preset)}; built-ins are ['strips'] (pass your own file by path)`);
