@@ -396,24 +396,29 @@ function applySlice(node) {
    * stalled clip. It runs only while a check holds it. */
   class PageCadence {
     constructor(host) {
-      this.host = host; this.holders = 0; this.id = null; this.heldAt = 0; this.frames = 0;
+      this.host = host; this.holders = 0; this.id = null; this.heldAt = 0; this.stamps = [];
       this.minWindowMs = 400; this.minFps = 12;
     }
     hold() {
       if (!this.host.requestAnimationFrame) return () => {};
-      if (this.holders++ === 0) { this.heldAt = performance.now(); this.frames = 0; this.loop(); }
+      if (this.holders++ === 0) { this.heldAt = performance.now(); this.stamps = []; this.loop(); }
       let released = false;
       return () => {
         if (released) return; released = true;
         if (--this.holders === 0 && this.id !== null) { this.host.cancelAnimationFrame?.(this.id); this.id = null; }
       };
     }
-    loop() { this.id = this.host.requestAnimationFrame(() => { this.frames++; if (this.holders > 0) this.loop(); }); }
+    loop() { this.id = this.host.requestAnimationFrame(() => { this.stamps.push(performance.now()); if (this.stamps.length > 240) this.stamps.shift(); if (this.holders > 0) this.loop(); }); }
     /* True only after a measured window in which the page received fewer frames than a
-     * working display delivers. An unmeasured or healthy page is never starved. */
+     * working display delivers. The rate is that of the most recent window, not an average
+     * since the hold began, so a page that was healthy and is then hidden is detected
+     * within one window instead of coasting on its earlier frames. An unmeasured or
+     * healthy page is never starved. */
     starved(now = performance.now()) {
-      const elapsed = now - this.heldAt;
-      return this.holders > 0 && elapsed >= this.minWindowMs && this.frames * 1000 / elapsed < this.minFps;
+      if (this.holders === 0 || now - this.heldAt < this.minWindowMs) return false;
+      const from = now - this.minWindowMs;
+      while (this.stamps.length && this.stamps[0] < from) this.stamps.shift();
+      return this.stamps.length * 1000 / this.minWindowMs < this.minFps;
     }
   }
 
